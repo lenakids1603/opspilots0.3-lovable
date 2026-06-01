@@ -296,6 +296,27 @@ async function syncWarehouses() {
   return { total, inserted, updated, summary: `仓库 ${total} 条（新增 ${inserted}，更新 ${updated}）` };
 }
 
+// ---------- 店铺映射前置校验 (sales_refund 等真实业务同步前调用) ----------
+async function shopMappingPrecheck() {
+  const { data } = await admin.from("jst_shop_mappings")
+    .select("matched_shop_id, matched_business_entity_id, matched_platform_id, mapping_status");
+  const rows = (data ?? []) as any[];
+  const active = rows.filter(r => r.mapping_status !== "ignored");
+  const unmapped = active.filter(r => r.mapping_status === "unmapped").length;
+  const noEntity = active.filter(r => !r.matched_business_entity_id).length;
+  const noPlatform = active.filter(r => !r.matched_platform_id).length;
+  const shopCount = new Map<string, number>();
+  active.forEach(r => { if (r.matched_shop_id) shopCount.set(r.matched_shop_id, (shopCount.get(r.matched_shop_id) ?? 0) + 1); });
+  const dupCount = Array.from(shopCount.values()).filter(n => n > 1).length;
+  const blocking = unmapped > 0 || noEntity > 0 || noPlatform > 0 || dupCount > 0;
+  return {
+    blocking, unmapped, noEntity, noPlatform, dupCount,
+    summary: `未绑定 ${unmapped} 个,无主体 ${noEntity} 个,无平台 ${noPlatform} 个,重复绑定 ${dupCount} 组`,
+  };
+}
+
+
+
 // ---------- main ----------
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -320,9 +341,24 @@ Deno.serve(async (req) => {
     const triggerType = String(body.trigger_type ?? "manual");
     const scope = body.scope as string[] | undefined; // 可选: ["shops","suppliers","warehouses"]
 
+    // sales_refund 真实同步前的店铺映射质量前置校验
+    if (moduleKey === "sales_refund") {
+      const precheck = await shopMappingPrecheck();
+      if (precheck.blocking) {
+        // 写 warning 错误,不更新正式销售汇总
+        await admin.from("jst_sync_errors").insert({
+          module_key: "sales_refund", error_level: "warn", status: "open",
+          error_message: `店铺映射未完成治理,允许保存原始数据但不更新正式销售汇总:${precheck.summary}`,
+        });
+        return respJson({ ok: false, blocked: true, reason: "shop_mapping_not_ready", detail: precheck }, 200);
+      }
+      return respJson({ error: "sales_refund 真实同步尚未接入,请先完成店铺映射治理" }, 400);
+    }
+
     if (moduleKey !== "base_archive") {
       return respJson({ error: `module_key=${moduleKey} 暂未接入真实同步，目前仅支持 base_archive` }, 400);
     }
+
 
     const targets = scope?.length ? scope : ["shops", "suppliers", "warehouses"];
     const startedAt = new Date().toISOString();
