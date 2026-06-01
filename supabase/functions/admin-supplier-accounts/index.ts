@@ -89,8 +89,9 @@ Deno.serve(async (req) => {
         .order("username", { ascending: true });
       if (error) throw error;
 
+      // 仅暴露人工已确认的有效供应商，用于供应商账号管理。
       const { data: suppliers } = await admin
-        .from("ops_suppliers").select("id, name");
+        .from("ops_suppliers").select("id, name").eq("confirm_status", "confirmed");
       const sMap = new Map((suppliers ?? []).map((s: any) => [s.id, s.name]));
 
       const rows = [];
