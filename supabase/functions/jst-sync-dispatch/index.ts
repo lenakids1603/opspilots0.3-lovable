@@ -541,10 +541,79 @@ Deno.serve(async (req) => {
     if (!isInternal || !isAdmin) return respJson({ error: "需 admin 权限" }, 403);
 
     const body = await req.json().catch(() => ({}));
+    const action = String(body.action ?? "sync");
     const moduleKey = String(body.module_key ?? "");
     const triggerType = String(body.trigger_type ?? "manual");
     const scope = body.scope as string[] | undefined;
     const days = Math.max(1, Math.min(60, Number(body.days ?? 7)));
+
+    // ============ connection_test ============
+    if (action === "connection_test") {
+      const present = {
+        JST_APP_KEY: !!JST_APP_KEY,
+        JST_APP_SECRET: !!JST_APP_SECRET,
+        JST_ACCESS_TOKEN: !!JST_ACCESS_TOKEN_SEED,
+        JST_REFRESH_TOKEN: !!JST_REFRESH_TOKEN_SEED,
+        JST_PROXY_URL: !!JST_PROXY_URL,
+      };
+      const missing = ["JST_APP_KEY", "JST_APP_SECRET"].filter((k) => !(present as any)[k]);
+      const tokRow = await loadToken();
+      const hasTokenSource = !!(JST_ACCESS_TOKEN_SEED || JST_REFRESH_TOKEN_SEED || tokRow?.accessToken);
+      if (missing.length || !hasTokenSource) {
+        const reason = missing.length
+          ? `缺少必要凭证: ${missing.join(", ")}`
+          : "缺少 JST_ACCESS_TOKEN 或 JST_REFRESH_TOKEN（任意其一作为初始种子）";
+        await admin.from("jst_sync_errors").insert({
+          module_key: "connection", error_level: "error", status: "open",
+          error_message: reason,
+        });
+        return respJson({ ok: false, present, checked_at: new Date().toISOString(), error: reason });
+      }
+      const t0 = Date.now();
+      try {
+        const data = await callOpenweb("shops/query", { page_index: 1, page_size: 1 });
+        const shopCount = Array.isArray(data?.shops) ? data.shops.length : (data?.data_count ?? 0);
+        return respJson({
+          ok: true, present, checked_at: new Date().toISOString(),
+          duration_ms: Date.now() - t0,
+          sample_shop_count: shopCount,
+          message: "聚水潭 API 连接正常",
+        });
+      } catch (e: any) {
+        const errMsg = String(e?.message ?? e);
+        await admin.from("jst_sync_errors").insert({
+          module_key: "connection", error_level: "error", status: "open",
+          error_message: `连接检测失败: ${errMsg}`,
+        });
+        return respJson({
+          ok: false, present, checked_at: new Date().toISOString(),
+          duration_ms: Date.now() - t0, error: errMsg,
+          hint: /timeout|abort|fetch|proxy|ECONN|network/i.test(errMsg)
+            ? "可能为网络/代理/IP 白名单问题，请检查 JST_PROXY_URL 与聚水潭白名单"
+            : "请检查凭证是否正确，或 Access Token 是否过期",
+        });
+      }
+    }
+
+    // 凭证前置校验
+    if (moduleKey === "sales_refund" || moduleKey === "base_archive") {
+      let credErr: string | null = null;
+      if (!JST_APP_KEY || !JST_APP_SECRET) {
+        credErr = "缺少聚水潭 API 凭证，请先在 Edge Function Secrets 中配置 JST_APP_KEY / JST_APP_SECRET";
+      } else if (!JST_ACCESS_TOKEN_SEED && !JST_REFRESH_TOKEN_SEED) {
+        const tok = await loadToken();
+        if (!tok?.accessToken) {
+          credErr = "缺少聚水潭 Token 种子，请配置 JST_ACCESS_TOKEN 或 JST_REFRESH_TOKEN";
+        }
+      }
+      if (credErr) {
+        await admin.from("jst_sync_errors").insert({
+          module_key: moduleKey, error_level: "error", status: "open",
+          error_message: credErr,
+        });
+        return respJson({ ok: false, error: credErr }, 400);
+      }
+    }
 
     // ============ sales_refund ============
     if (moduleKey === "sales_refund") {
