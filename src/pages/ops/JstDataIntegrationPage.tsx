@@ -258,42 +258,42 @@ export default function JstDataIntegrationPage() {
   // 触发同步：base_archive / shop / supplier / warehouse 走真实 Edge Function；
   // 其他模块暂为占位（写日志 + 提示未接入）。
   // ------------------------------------------------------------
-  const REAL_BASE_ARCHIVE = new Set(["base_archive", "shop", "supplier", "warehouse"]);
+  // 真实接入的 module_key：
+  //   - base_archive(+scope: shops/suppliers/warehouses)
+  //   - sales_refund(+days)
+  // 其它 module_key 一律按钮禁用，不允许写入 jst_sync_runs 占位记录。
+  const REAL_BASE_KEYS = new Set(["base_archive", "shop", "supplier", "warehouse"]);
+  const isRealModuleKey = (k: string) => REAL_BASE_KEYS.has(k) || k === "sales_refund";
+
+  type TriggerInput =
+    | { kind: "base_archive"; scope?: string[]; trigger_type: string; label: string }
+    | { kind: "sales_refund"; days: number; trigger_type: string; label: string };
 
   const triggerRun = useMutation({
-    mutationFn: async (input: { module_key: string; trigger_type: string; label: string }) => {
+    mutationFn: async (input: TriggerInput) => {
       if (!user) throw new Error("未登录");
-      if (REAL_BASE_ARCHIVE.has(input.module_key)) {
-        // 真实 base_archive 同步
-        const scopeMap: Record<string, string[] | undefined> = {
-          shop: ["shops"], supplier: ["suppliers"], warehouse: ["warehouses"],
-        };
-        const { data, error } = await supabase.functions.invoke("jst-sync-dispatch", {
-          body: {
-            module_key: "base_archive",
-            trigger_type: input.trigger_type,
-            scope: scopeMap[input.module_key],
-          },
-        });
-        if (error) throw new Error(error.message);
-        if (data?.error) throw new Error(data.error);
-        return { real: true, summary: data?.summary ?? "已完成", label: input.label };
-      }
-      // 其余模块：占位写日志（保留原有行为）
-      const { error } = await supabase.from("jst_sync_runs").insert({
-        module_key: input.module_key,
+      const body: Record<string, unknown> = {
         trigger_type: input.trigger_type,
-        status: "running",
-        started_at: new Date().toISOString(),
-        current_total_summary: `手动触发：${input.label}（该模块尚未接入真实聚水潭 API）`,
-        created_by: user.id,
-      });
-      if (error) throw error;
-      return { real: false, summary: "已写入运行日志（未真正调用）", label: input.label };
+      };
+      if (input.kind === "base_archive") {
+        body.module_key = "base_archive";
+        if (input.scope) body.scope = input.scope;
+      } else {
+        body.module_key = "sales_refund";
+        body.days = input.days;
+      }
+      const { data, error } = await supabase.functions.invoke("jst-sync-dispatch", { body });
+      if (error) throw new Error(error.message);
+      if (data?.error) throw new Error(data.error);
+      return {
+        summary: data?.message ?? data?.summary ?? "已完成",
+        label: input.label,
+        summary_updated: data?.summary_updated,
+      };
     },
     onSuccess: (d) => {
       toast({
-        title: d.real ? "同步完成" : "已记录运行",
+        title: d.summary_updated === false ? "已保存原始数据" : "同步完成",
         description: `${d.label} — ${d.summary}`,
       });
       qc.invalidateQueries({ queryKey: ["jst_sync_runs"] });
@@ -303,6 +303,28 @@ export default function JstDataIntegrationPage() {
     },
     onError: (e: any) => toast({ title: "同步失败", description: e.message, variant: "destructive" }),
   });
+
+  // 给未接入按钮统一弹提示
+  const notWired = (label: string) =>
+    toast({
+      title: "暂未接入",
+      description: `${label} 暂未接入真实聚水潭 API，按钮已禁用。`,
+    });
+
+  const baseArchiveScopeOf = (k: string): string[] | undefined => ({
+    shop: ["shops"], supplier: ["suppliers"], warehouse: ["warehouses"],
+    base_archive: undefined as unknown as string[],
+  } as Record<string, string[] | undefined>)[k];
+
+  const retryAbnormalModule = (moduleKey: string, label = "重试异常任务") => {
+    if (REAL_BASE_KEYS.has(moduleKey)) {
+      triggerRun.mutate({ kind: "base_archive", scope: baseArchiveScopeOf(moduleKey), trigger_type: "retry", label });
+    } else if (moduleKey === "sales_refund") {
+      triggerRun.mutate({ kind: "sales_refund", days: 1, trigger_type: "retry", label });
+    } else {
+      notWired(label);
+    }
+  };
 
   // ------------------------------------------------------------
   // Derived state
@@ -365,14 +387,17 @@ export default function JstDataIntegrationPage() {
                 全局控制
               </DropdownMenuLabel>
               <DropdownMenuItem
-                disabled={abnormalModules.length === 0}
-                onClick={() => triggerRun.mutate({
-                  module_key: abnormalModules[0]?.module_key ?? "inventory",
-                  trigger_type: "retry",
-                  label: "重试异常任务",
-                })}
+                disabled={!abnormalModules.some((m) => isRealModuleKey(m.module_key))}
+                onClick={() => {
+                  const target = abnormalModules.find((m) => isRealModuleKey(m.module_key));
+                  if (!target) return notWired("重试异常任务");
+                  retryAbnormalModule(target.module_key, `重试异常任务（${target.module_name}）`);
+                }}
               >
-                重试异常任务{abnormalModules.length > 0 ? `（${abnormalModules.length}）` : ""}
+                重试异常任务{(() => {
+                  const n = abnormalModules.filter((m) => isRealModuleKey(m.module_key)).length;
+                  return n > 0 ? `（${n}）` : "";
+                })()}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => {
                 document.getElementById("jst-sync-logs")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -414,7 +439,7 @@ export default function JstDataIntegrationPage() {
               )}
             </div>
             <Button variant="outline" size="sm">查看异常</Button>
-            <Button size="sm" onClick={() => triggerRun.mutate({ module_key: abnormalModules[0].module_key, trigger_type: "retry", label: "手动重试异常模块" })}>
+            <Button size="sm" onClick={() => retryAbnormalModule(abnormalModules[0].module_key, "手动重试异常模块")}>
               手动重试
             </Button>
           </CardContent>
@@ -654,18 +679,19 @@ export default function JstDataIntegrationPage() {
               {/* —— 基础档案同步 —— */}
               <TabsContent value="base" className="m-0">
                 <div className="px-5 pt-4 pb-3 border-b border-border flex flex-wrap items-center gap-2">
-                  <Button size="sm" onClick={() => triggerRun.mutate({ module_key: "shop", trigger_type: "manual", label: "同步店铺" })}>
+                  <Button size="sm" onClick={() => triggerRun.mutate({ kind: "base_archive", scope: ["shops"], trigger_type: "manual", label: "同步店铺" })}>
                     <Store className="w-3.5 h-3.5 mr-1" /> 同步店铺
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "supplier", trigger_type: "manual", label: "同步供应商" })}>
+                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ kind: "base_archive", scope: ["suppliers"], trigger_type: "manual", label: "同步供应商" })}>
                     <Users className="w-3.5 h-3.5 mr-1" /> 同步供应商
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "warehouse", trigger_type: "manual", label: "同步仓库" })}>
+                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ kind: "base_archive", scope: ["warehouses"], trigger_type: "manual", label: "同步仓库" })}>
                     <Building2 className="w-3.5 h-3.5 mr-1" /> 同步仓库
                   </Button>
-                  <Button size="sm" variant="secondary" onClick={() => triggerRun.mutate({ module_key: "base_archive", trigger_type: "manual", label: "同步基础档案（店铺/供应商/仓库）" })}>
+                  <Button size="sm" variant="secondary" onClick={() => triggerRun.mutate({ kind: "base_archive", trigger_type: "manual", label: "同步基础档案（店铺/供应商/仓库）" })}>
                     <FileText className="w-3.5 h-3.5 mr-1" /> 同步基础档案
                   </Button>
+                  <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 ml-1">已接入真实同步</Badge>
                   <span className="text-xs text-muted-foreground ml-2">基础档案是销售/采购同步的前置条件。</span>
                 </div>
                 <Table>
@@ -698,9 +724,13 @@ export default function JstDataIntegrationPage() {
                             <TableCell><StatusBadge value={s} /></TableCell>
                             <TableCell className="text-xs text-muted-foreground max-w-[260px]">{m.last_result_summary}</TableCell>
                             <TableCell className="text-right space-x-2">
-                              <Button variant="ghost" size="sm" onClick={() => triggerRun.mutate({ module_key: m.module_key, trigger_type: s === "error" ? "retry" : "manual", label: `${s === "error" ? "重试" : "同步"} ${m.module_name}` })}>
-                                {s === "error" ? "重试" : "同步"}
-                              </Button>
+                              {isRealModuleKey(m.module_key) ? (
+                                <Button variant="ghost" size="sm" onClick={() => retryAbnormalModule(m.module_key, `${s === "error" ? "重试" : "同步"} ${m.module_name}`)}>
+                                  {s === "error" ? "重试" : "同步"}
+                                </Button>
+                              ) : (
+                                <Button variant="ghost" size="sm" disabled title="该模块暂未接入真实同步">暂未接入</Button>
+                              )}
                               <Button variant="ghost" size="sm">日志</Button>
                               <Button variant="ghost" size="sm">查看异常</Button>
                             </TableCell>
@@ -714,18 +744,19 @@ export default function JstDataIntegrationPage() {
               {/* —— 销售与退款同步 —— */}
               <TabsContent value="sales" className="m-0 p-5 space-y-4">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button size="sm" onClick={() => triggerRun.mutate({ module_key: "sales_refund", trigger_type: "manual", label: "同步今日销售与退款" })}>
+                  <Button size="sm" onClick={() => triggerRun.mutate({ kind: "sales_refund", days: 1, trigger_type: "manual", label: "同步今日销售与退款" })}>
                     同步今日销售与退款
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "sales_refund", trigger_type: "manual", label: "同步指定店铺" })}>
-                    同步指定店铺
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "sales_refund", trigger_type: "manual_backfill", label: "同步最近 7 天" })}>
+                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ kind: "sales_refund", days: 7, trigger_type: "manual_backfill", label: "同步最近 7 天" })}>
                     同步最近 7 天
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "sales_refund", trigger_type: "manual_backfill", label: "同步最近 30 天" })}>
+                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ kind: "sales_refund", days: 30, trigger_type: "manual_backfill", label: "同步最近 30 天" })}>
                     同步最近 30 天
                   </Button>
+                  <Button size="sm" variant="outline" disabled title="需要先在店铺映射页选择已映射店铺，暂未接入" onClick={() => notWired("按店铺同步销售与退款")}>
+                    按店铺同步（暂未接入）
+                  </Button>
+                  <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 ml-1">已接入真实同步</Badge>
                   <span className="text-xs text-amber-700 ml-2 inline-flex items-center gap-1">
                     <Info className="w-3.5 h-3.5" />
                     店铺映射未完成时，只允许同步 raw 原始数据，不更新正式 GMV / GSV 汇总。
@@ -738,18 +769,20 @@ export default function JstDataIntegrationPage() {
               {/* —— 采购与入库同步 —— */}
               <TabsContent value="purchase" className="m-0">
                 <div className="px-5 pt-4 pb-3 border-b border-border flex flex-wrap items-center gap-2">
-                  <Button size="sm" onClick={() => triggerRun.mutate({ module_key: "purchase", trigger_type: "manual", label: "同步采购单" })}>
+                  <Button size="sm" disabled title="采购与入库真实同步暂未接入" onClick={() => notWired("同步采购单")}>
                     <ShoppingCart className="w-3.5 h-3.5 mr-1" /> 同步采购单
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "purchase_in", trigger_type: "manual", label: "同步采购入库单" })}>
+                  <Button size="sm" variant="outline" disabled title="采购与入库真实同步暂未接入" onClick={() => notWired("同步采购入库单")}>
                     <PackageCheck className="w-3.5 h-3.5 mr-1" /> 同步采购入库单
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "purchase", trigger_type: "manual_backfill", label: "同步最近 7 天采购与入库" })}>
+                  <Button size="sm" variant="outline" disabled title="采购与入库真实同步暂未接入" onClick={() => notWired("同步最近 7 天采购与入库")}>
                     同步最近 7 天采购与入库
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "purchase", trigger_type: "manual_backfill", label: "同步最近 30 天采购与入库" })}>
+                  <Button size="sm" variant="outline" disabled title="采购与入库真实同步暂未接入" onClick={() => notWired("同步最近 30 天采购与入库")}>
                     同步最近 30 天采购与入库
                   </Button>
+                  <Badge variant="secondary" className="bg-muted text-muted-foreground ml-1">暂未接入</Badge>
+                  <span className="text-xs text-muted-foreground ml-2">采购与入库真实同步还未实现，按钮已禁用，不会写入运行日志。</span>
                 </div>
                 <Table>
                   <TableHeader>
@@ -781,9 +814,7 @@ export default function JstDataIntegrationPage() {
                             <TableCell><StatusBadge value={s} /></TableCell>
                             <TableCell className="text-xs text-muted-foreground max-w-[260px]">{m.last_result_summary}</TableCell>
                             <TableCell className="text-right space-x-2">
-                              <Button variant="ghost" size="sm" onClick={() => triggerRun.mutate({ module_key: m.module_key, trigger_type: s === "error" ? "retry" : "manual", label: `${s === "error" ? "重试" : "同步"} ${m.module_name}` })}>
-                                {s === "error" ? "重试" : "同步"}
-                              </Button>
+                              <Button variant="ghost" size="sm" disabled title="采购与入库真实同步暂未接入">暂未接入</Button>
                               <Button variant="ghost" size="sm">日志</Button>
                               <Button variant="ghost" size="sm">查看异常</Button>
                             </TableCell>
@@ -819,54 +850,35 @@ export default function JstDataIntegrationPage() {
           <CollapsibleContent>
             <CardContent className="pt-0 pb-5 px-5 space-y-3 border-t border-border">
               <div className="flex flex-wrap gap-2 pt-4">
-                <Button variant="outline" size="sm" onClick={() => triggerRun.mutate({ module_key: "sales_refund", trigger_type: "manual_backfill", label: "按时间窗补同步" })}>按时间窗补同步</Button>
-                <Button variant="outline" size="sm" onClick={() => triggerRun.mutate({ module_key: "product", trigger_type: "manual_backfill", label: "按款号补同步" })}>按款号补同步</Button>
-                <Button variant="outline" size="sm" onClick={() => triggerRun.mutate({ module_key: "sku", trigger_type: "manual_backfill", label: "按 SKU 补同步" })}>按 SKU 补同步</Button>
-                <Button variant="outline" size="sm" onClick={() => triggerRun.mutate({ module_key: "shop", trigger_type: "manual_backfill", label: "按店铺补同步" })}>按店铺补同步</Button>
+                <Button variant="outline" size="sm" onClick={() => triggerRun.mutate({ kind: "sales_refund", days: 7, trigger_type: "manual_backfill", label: "按时间窗补同步（销售退款最近 7 天）" })}>按时间窗补同步（销售退款 7d）</Button>
+                <Button variant="outline" size="sm" disabled title="按款号补同步暂未接入" onClick={() => notWired("按款号补同步")}>按款号补同步</Button>
+                <Button variant="outline" size="sm" disabled title="按 SKU 补同步暂未接入" onClick={() => notWired("按 SKU 补同步")}>按 SKU 补同步</Button>
+                <Button variant="outline" size="sm" onClick={() => triggerRun.mutate({ kind: "base_archive", scope: ["shops"], trigger_type: "manual_backfill", label: "按店铺补同步（重新拉取店铺资料）" })}>按店铺补同步（基础档案）</Button>
 
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="destructive" size="sm">
-                      <AlertTriangle className="w-3.5 h-3.5 mr-1" />
-                      全量同步商品资料
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>确认全量同步商品资料？</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        全量同步商品资料会重新拉取聚水潭所有商品与 SKU，
-                        耗时较长且占用 API 配额，请确认继续。
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>取消</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => triggerRun.mutate({ module_key: "product", trigger_type: "manual_backfill", label: "全量同步商品资料" })}>
-                        确认执行
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                <Button variant="outline" size="sm" disabled title="商品/SKU 同步还未接入到本调度，按钮已禁用" onClick={() => notWired("全量同步商品资料")}>
+                  <AlertTriangle className="w-3.5 h-3.5 mr-1" />
+                  全量同步商品资料（暂未接入）
+                </Button>
 
 
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button variant="destructive" size="sm">
                       <AlertTriangle className="w-3.5 h-3.5 mr-1" />
-                      全量同步全部数据
+                      全量同步基础档案
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>确认全量同步？</AlertDialogTitle>
+                      <AlertDialogTitle>确认全量重拉店铺 / 供应商 / 仓库？</AlertDialogTitle>
                       <AlertDialogDescription>
-                        全量同步会重新拉取聚水潭所有数据，耗时较长且占用 API 配额，
-                        仅在系统迁移或数据严重错乱时使用。请确认继续。
+                        会重新拉取聚水潭所有店铺、供应商、仓库资料并 upsert 到本系统的主数据表，
+                        不会覆盖已绑定的经营主体。耗时较长且占用 API 配额，仅在异常修复时使用。
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>取消</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => triggerRun.mutate({ module_key: "base_archive", trigger_type: "manual_backfill", label: "全量同步全部数据" })}>
+                      <AlertDialogAction onClick={() => triggerRun.mutate({ kind: "base_archive", trigger_type: "manual_backfill", label: "全量同步基础档案（店铺/供应商/仓库）" })}>
                         确认执行
                       </AlertDialogAction>
                     </AlertDialogFooter>
