@@ -730,6 +730,48 @@ export type Database = {
         }
         Relationships: []
       }
+      jst_suppliers_raw: {
+        Row: {
+          created_at: string
+          id: string
+          jst_supplier_id: string
+          last_sync_at: string | null
+          matched_ops_supplier_id: string | null
+          raw_json: Json | null
+          skip_reason: string
+          status: string
+          supplier_code: string
+          supplier_name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          jst_supplier_id: string
+          last_sync_at?: string | null
+          matched_ops_supplier_id?: string | null
+          raw_json?: Json | null
+          skip_reason?: string
+          status?: string
+          supplier_code?: string
+          supplier_name?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          jst_supplier_id?: string
+          last_sync_at?: string | null
+          matched_ops_supplier_id?: string | null
+          raw_json?: Json | null
+          skip_reason?: string
+          status?: string
+          supplier_code?: string
+          supplier_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       jst_sync_errors: {
         Row: {
           error_level: string
