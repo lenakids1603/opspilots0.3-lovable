@@ -878,7 +878,7 @@ export default function JstDataIntegrationPage() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>取消</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => triggerRun.mutate({ module_key: "base_archive", trigger_type: "manual_backfill", label: "全量同步全部数据" })}>
+                      <AlertDialogAction onClick={() => triggerRun.mutate({ kind: "base_archive", trigger_type: "manual_backfill", label: "全量同步基础档案（店铺/供应商/仓库）" })}>
                         确认执行
                       </AlertDialogAction>
                     </AlertDialogFooter>
