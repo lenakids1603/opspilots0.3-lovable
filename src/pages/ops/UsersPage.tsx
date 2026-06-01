@@ -38,16 +38,11 @@ const DEPARTMENTS = [
 ];
 
 const ROLES: { code: string; name: string }[] = [
-  { code: "super_admin", name: "超级管理员" },
-  { code: "boss_view",   name: "老板 / 经营查看" },
-  { code: "finance",     name: "财务" },
-  { code: "operation",   name: "运营" },
-  { code: "purchase",    name: "商品 / 采购" },
-  { code: "service",     name: "客服" },
-  { code: "wh_in",       name: "仓库入库" },
-  { code: "wh_out",      name: "仓库发货 / 售后" },
-  { code: "hr",          name: "人事" },
-  { code: "readonly",    name: "普通只读" },
+  { code: "admin",     name: "管理员" },
+  { code: "finance",   name: "财务" },
+  { code: "ops",       name: "运营" },
+  { code: "warehouse", name: "仓库" },
+  { code: "supplier",  name: "供应商" },
 ];
 
 const EMPLOYMENT_OPTIONS = [
