@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/ops/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,16 +38,11 @@ const DEPARTMENTS = [
 ];
 
 const ROLES: { code: string; name: string }[] = [
-  { code: "super_admin", name: "超级管理员" },
-  { code: "boss_view",   name: "老板 / 经营查看" },
-  { code: "finance",     name: "财务" },
-  { code: "operation",   name: "运营" },
-  { code: "purchase",    name: "商品 / 采购" },
-  { code: "service",     name: "客服" },
-  { code: "wh_in",       name: "仓库入库" },
-  { code: "wh_out",      name: "仓库发货 / 售后" },
-  { code: "hr",          name: "人事" },
-  { code: "readonly",    name: "普通只读" },
+  { code: "admin",     name: "管理员" },
+  { code: "finance",   name: "财务" },
+  { code: "ops",       name: "运营" },
+  { code: "warehouse", name: "仓库" },
+  { code: "supplier",  name: "供应商" },
 ];
 
 const EMPLOYMENT_OPTIONS = [
@@ -80,19 +76,8 @@ interface InternalUser {
   must_change_password: boolean;
 }
 
-// ============== mock 数据 ==============
-const initialUsers: InternalUser[] = [
-  { id: "u1", username: "admin",       real_name: "系统管理员", phone: "", department: "开发组",  position: "管理员",   roles: ["super_admin"], employment_status: "active", account_status: "active", remark: "", last_login_at: "2026-05-29T20:21:00", must_change_password: false },
-  { id: "u2", username: "finance01",   real_name: "财务01",     phone: "", department: "财务",    position: "财务",     roles: ["finance"],     employment_status: "active", account_status: "active", remark: "", last_login_at: null, must_change_password: true },
-  { id: "u3", username: "operation01", real_name: "运营01",     phone: "", department: "运营组",  position: "运营",     roles: ["operation"],   employment_status: "active", account_status: "active", remark: "", last_login_at: null, must_change_password: true },
-  { id: "u4", username: "purchase01",  real_name: "采购01",     phone: "", department: "采购",    position: "采购",     roles: ["purchase"],    employment_status: "active", account_status: "active", remark: "", last_login_at: null, must_change_password: true },
-  { id: "u5", username: "service01",   real_name: "客服01",     phone: "", department: "客服",    position: "客服",     roles: ["service"],     employment_status: "active", account_status: "active", remark: "", last_login_at: null, must_change_password: true },
-  { id: "u6", username: "warehouse01", real_name: "仓库01",     phone: "", department: "仓库入仓", position: "入库员",   roles: ["wh_in"],       employment_status: "active", account_status: "active", remark: "", last_login_at: null, must_change_password: true },
-  { id: "u7", username: "hr01",        real_name: "人事01",     phone: "", department: "人事",    position: "人事",     roles: ["hr"],          employment_status: "active", account_status: "active", remark: "", last_login_at: null, must_change_password: true },
-];
-
-// 当前登录用户（mock）— 用于"不能停用自己"逻辑
-const CURRENT_USER_ID = "u1";
+// 当前登录用户 id，用于"不能停用自己"逻辑（异步加载）
+let CURRENT_USER_ID = "";
 
 // ============== 工具 ==============
 const usernameRe = /^[a-z0-9_]+$/;
@@ -145,7 +130,52 @@ const emptyForm = {
 
 // ============== 主组件 ==============
 export default function UsersPage() {
-  const [users, setUsers] = useState<InternalUser[]>(initialUsers);
+  const [users, setUsers] = useState<InternalUser[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) CURRENT_USER_ID = user.id;
+
+      const { data: profiles, error } = await supabase
+        .from("profiles")
+        .select("id, username, full_name, phone, department, account_type, user_type, created_at")
+        .eq("user_type", "internal")
+        .order("created_at", { ascending: true });
+      if (error) { toast.error("加载用户失败：" + error.message); setLoading(false); return; }
+
+      const ids = (profiles ?? []).map(p => p.id);
+      const { data: roleRows } = ids.length
+        ? await supabase.from("ops_user_roles").select("user_id, role_code").in("user_id", ids)
+        : { data: [] as { user_id: string; role_code: string }[] };
+
+      const roleMap = new Map<string, string[]>();
+      (roleRows ?? []).forEach((r: any) => {
+        const arr = roleMap.get(r.user_id) ?? [];
+        arr.push(r.role_code);
+        roleMap.set(r.user_id, arr);
+      });
+
+      const list: InternalUser[] = (profiles ?? []).map((p: any) => ({
+        id: p.id,
+        username: p.username ?? "",
+        real_name: p.full_name ?? "",
+        phone: p.phone ?? "",
+        department: p.department ?? "",
+        position: "",
+        roles: roleMap.get(p.id) ?? [],
+        employment_status: "active",
+        account_status: p.account_type === "pending" ? "pending" : "active",
+        remark: "",
+        last_login_at: null,
+        must_change_password: false,
+      }));
+      if (alive) { setUsers(list); setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   // 筛选
   const [keyword, setKeyword] = useState("");
