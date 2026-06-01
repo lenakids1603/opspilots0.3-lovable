@@ -881,8 +881,43 @@ export default function JstDataIntegrationPage() {
         </Card>
       </Collapsible>
 
+      {/* 六点五、高级诊断 */}
+      <Collapsible>
+        <Card id="jst-advanced-diagnostics">
+          <CollapsibleTrigger asChild>
+            <button className="w-full px-5 py-4 flex items-center justify-between hover:bg-muted/30 transition-colors">
+              <div className="flex items-center gap-2 text-left">
+                <Stethoscope className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <div className="text-sm font-semibold">高级诊断</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    仅供开发与运维排查使用，日常不需要操作。
+                  </div>
+                </div>
+              </div>
+              <ChevronDown className="w-4 h-4 text-muted-foreground" />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <CardContent className="pt-0 pb-5 px-5 space-y-3 border-t border-border">
+              <div className="flex flex-wrap gap-2 pt-4">
+                <Button variant="outline" size="sm">测试聚水潭接口</Button>
+                <Button variant="outline" size="sm">刷新 Access Token</Button>
+                <Button variant="outline" size="sm">查看任务队列</Button>
+                <Button variant="outline" size="sm">查看原始响应</Button>
+                <Button variant="outline" size="sm">查看 Edge Function 错误</Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                这些操作可能直接调用聚水潭接口或暴露内部状态，请谨慎使用。
+              </p>
+            </CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
+
       {/* 七、同步日志 */}
-      <Card>
+      <Card id="jst-sync-logs">
+
         <CardContent className="p-0">
           <div className="px-5 py-4 flex flex-wrap items-center justify-between gap-3 border-b border-border">
             <h3 className="text-sm font-semibold">同步日志</h3>
