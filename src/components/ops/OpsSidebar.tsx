@@ -37,9 +37,9 @@ const GROUPS: Group[] = [
     items: [
       { title: "财务总览", url: "/finance/overview" },
       { title: "公司资金流水", url: "/finance/cashflow" },
+      { title: "财务基础资料", url: "/finance/master-data" },
       { title: "供应商账单核对", url: "/finance/supplier-bills" },
       { title: "账务管理", url: "/finance/books" },
-      { title: "个体户账户管理", url: "/finance/entities" },
       { title: "额度预警", url: "/finance/quota-alerts" },
     ],
   },

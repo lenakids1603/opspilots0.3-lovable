@@ -20,6 +20,7 @@ import OpsPlaceholder from "./pages/ops/OpsPlaceholder";
 import RolesPage from "./pages/ops/RolesPage";
 import FinanceOverviewPage from "./pages/ops/FinanceOverviewPage";
 import CashflowPage from "./pages/ops/CashflowPage";
+import FinanceMasterDataPage from "./pages/ops/FinanceMasterDataPage";
 import JstSyncPage from "./pages/ops/JstSyncPage";
 import JstProductSyncPage from "./pages/ops/JstProductSyncPage";
 import SupplierDashboard from "./pages/supplier/SupplierDashboard";
@@ -58,7 +59,8 @@ const App = () => (
           <Route path="/finance/overview" element={wrap(<FinanceOverviewPage />)} />
           <Route path="/finance/cashflow" element={wrap(<CashflowPage />)} />
           <Route path="/finance/books" element={wrap(<OpsPlaceholder breadcrumb={["财税系统", "账务管理"]} title="账务管理" description="科目、凭证与账务分类管理" columns={["凭证号", "日期", "科目", "金额", "经办人", "操作"]} />)} />
-          <Route path="/finance/entities" element={wrap(<OpsPlaceholder breadcrumb={["财税系统", "个体户账户管理"]} title="个体户账户管理" description="维护公司多主体档案与对应银行账户" columns={["主体编号", "主体名称", "账户数", "本年累计流水", "状态", "操作"]} />)} />
+          <Route path="/finance/entities" element={wrap(<FinanceMasterDataPage />)} />
+          <Route path="/finance/master-data" element={wrap(<FinanceMasterDataPage />)} />
           <Route path="/finance/quota-alerts" element={wrap(<OpsPlaceholder breadcrumb={["财税系统", "额度预警"]} title="额度预警" description="个体户接近 500 万年度流水额度预警" columns={["主体", "本年流水", "剩余额度", "使用率", "风险等级", "操作"]} />)} />
 
           {/* 供应商系统 */}
