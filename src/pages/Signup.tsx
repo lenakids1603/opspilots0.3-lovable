@@ -126,6 +126,6 @@ export default function Signup() {
           </CardFooter>
         </form>
       </Card>
-    </div>
+    </main>
   );
 }
