@@ -235,6 +235,14 @@ async function resolveOldCredentialErrors(resolvedAt: string) {
   const ids = (data ?? []).filter((r: any) => /credential_missing|missing secret|缺少.*JST_|缺少.*凭证|缺少必要凭证|Token 种子|JST_APP_KEY|JST_APP_SECRET|JST_ACCESS_TOKEN|JST_REFRESH_TOKEN/i.test(String(r.error_message ?? ""))).map((r: any) => r.id);
   if (ids.length) await admin.from("jst_sync_errors").update({ status: "resolved", resolved_at: resolvedAt }).in("id", ids);
 }
+function classifyConnectionError(msg: string, code?: unknown) {
+  const text = `${String(code ?? "")} ${msg}`;
+  if (/权限|permission|forbidden|无权|access denied/i.test(text)) return "shops/query 无接口权限";
+  if (/ip|白名单|whitelist/i.test(text)) return "聚水潭 IP 白名单拒绝";
+  if (/token|授权|access_token|令牌|invalid_grant/i.test(text)) return "token 无效或已过期";
+  if (/proxy|ECONN|timeout|abort|network|fetch/i.test(text)) return "代理连接失败或网络超时";
+  return "其他 API 错误";
+}
 
 const pickStr = (...vs: any[]) => {
   for (const v of vs) if (v !== undefined && v !== null && String(v).trim() !== "") return String(v).trim();
