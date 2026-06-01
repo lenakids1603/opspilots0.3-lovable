@@ -478,7 +478,7 @@ export default function FinanceOverviewPage() {
           <div className="text-[11px] text-muted-foreground mt-3">核算总金额 (人民币)</div>
           <div className="flex items-end gap-3 mt-1">
             <div className="text-3xl font-bold font-mono text-emerald-600">{loading ? <Skeleton className="h-9 w-48" /> : fmtCNY(periodIncome)}</div>
-            <Link to="/finance/cashflow?direction=income" className="text-[12px] text-emerald-700 hover:underline pb-1.5 flex items-center gap-0.5">
+            <Link to="/finance/cashflow?direction=in" className="text-[12px] text-emerald-700 hover:underline pb-1.5 flex items-center gap-0.5">
               进入流水簿 <ChevronRight className="w-3 h-3" />
             </Link>
           </div>
@@ -498,7 +498,7 @@ export default function FinanceOverviewPage() {
           <div className="text-[11px] text-muted-foreground mt-3">核算总金额 (人民币)</div>
           <div className="flex items-end gap-3 mt-1">
             <div className="text-3xl font-bold font-mono text-rose-600">{loading ? <Skeleton className="h-9 w-48" /> : fmtCNY(periodExpense)}</div>
-            <Link to="/finance/cashflow?direction=expense" className="text-[12px] text-rose-700 hover:underline pb-1.5 flex items-center gap-0.5">
+            <Link to="/finance/cashflow?direction=out" className="text-[12px] text-rose-700 hover:underline pb-1.5 flex items-center gap-0.5">
               进入流水簿 <ChevronRight className="w-3 h-3" />
             </Link>
           </div>
@@ -540,10 +540,10 @@ export default function FinanceOverviewPage() {
             <span className="flex items-center gap-2 font-medium"><span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />供应商已付款</span>
             <CreditCard className="w-4 h-4 text-muted-foreground/60" />
           </div>
-          <div className="text-[11px] text-muted-foreground mt-2">期间 direction=expense 且 supplier_id 不为空</div>
+          <div className="text-[11px] text-muted-foreground mt-2">期间 direction=out 且 supplier_id 不为空</div>
           <div className="text-2xl font-bold font-mono mt-1">{loading ? <Skeleton className="h-7 w-36" /> : fmtCNY(txInPeriod.filter(t => t.direction === "out" && t.supplier_id).reduce((s, t) => s + Number(t.amount), 0))}</div>
           <div className="flex items-center justify-between text-[11px] mt-3">
-            <Link to="/finance/cashflow?direction=expense" className="text-sky-700 hover:underline">查看已打款明细 →</Link>
+            <Link to="/finance/cashflow?direction=out" className="text-sky-700 hover:underline">查看已打款明细 →</Link>
           </div>
         </Section>
       </div>
