@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
-import { Receipt, Building2, Truck } from 'lucide-react';
+import { Bot, Building2, Truck } from 'lucide-react';
 import type { UserType } from '@/lib/types';
 
 const DEPARTMENTS = ['Engineering', 'Marketing', 'Sales', 'Finance', 'HR', 'Operations', 'General'];
@@ -48,7 +48,7 @@ export default function Signup() {
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-success">
-              <Receipt className="h-6 w-6 text-success-foreground" />
+              <Bot className="h-6 w-6 text-success-foreground" />
             </div>
             <CardTitle className="text-2xl">请查收邮箱</CardTitle>
             <CardDescription>我们已向 {email} 发送验证链接，请完成验证后登录。</CardDescription>
@@ -66,10 +66,10 @@ export default function Signup() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary">
-            <Receipt className="h-6 w-6 text-primary-foreground" />
+            <Bot className="h-6 w-6 text-primary-foreground" />
           </div>
           <h1 className="text-2xl font-semibold tracking-tight">创建账号</h1>
-          <CardDescription>加入 ExpenseDesk 管理你的费用</CardDescription>
+          <CardDescription>加入 Lenakids 管理你的企业数据</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">

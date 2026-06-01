@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Receipt, PlusCircle, Users, CheckSquare,
+  LayoutDashboard, Receipt, Bot, PlusCircle, Users, CheckSquare,
   Building2, BarChart3, LogOut, ChevronDown, PieChart, MessageSquare,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -54,9 +54,9 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="pointer-events-none">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary">
-                <Receipt className="h-4 w-4 text-primary-foreground" />
+                <Bot className="h-4 w-4 text-primary-foreground" />
               </div>
-              {!collapsed && <span className="font-bold text-lg">ExpenseDesk</span>}
+              {!collapsed && <span className="font-bold text-lg">Lenakids</span>}
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

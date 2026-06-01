@@ -96,7 +96,7 @@ serve(async (req) => {
     const { expenses, profile } = await getUserExpenses(userId);
     const context = buildExpenseContext(expenses, profile);
 
-    const systemPrompt = `You are an AI expense assistant for ExpenseDesk. You help users understand and analyze their expense data.
+    const systemPrompt = `You are an AI assistant for Lenakids. You help users understand and analyze their enterprise and financial data.
 
 Here is the user's expense data:
 ${context}
