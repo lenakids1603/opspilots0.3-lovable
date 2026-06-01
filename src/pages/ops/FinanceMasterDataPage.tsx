@@ -563,7 +563,7 @@ function ShopsTab() {
     setEntities(es ?? []); setPlatforms(ps ?? []); setBanks(bs ?? []);
 
     let qry = supabase.from("shops").select("*", { count: "exact" }).is("deleted_at", null)
-      .order("name", { ascending: true });
+      .order(sortKey, { ascending: sortAsc, nullsFirst: false });
     const qq = q.trim();
     if (qq) qry = (qry as any).or(`name.ilike.%${qq}%,jst_shop_id.ilike.%${qq}%`);
     if (pf) qry = qry.eq("platform_id", pf);
