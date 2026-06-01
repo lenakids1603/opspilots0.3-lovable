@@ -113,7 +113,8 @@ async function callOpenweb(path: string, biz: Record<string, unknown>, attempt =
   params.sign = signOpenweb(params, JST_APP_SECRET);
   const url = `${OPENWEB_BASE}/open/${path.replace(/^\/+/, "")}`;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  // 单次 60s 超时（之前 30s，suppliers/query 命中 abort）
+  const timer = setTimeout(() => ctrl.abort(), 60_000);
   let text: string;
   try {
     const resp = await proxyFetch(url, {
@@ -121,8 +122,19 @@ async function callOpenweb(path: string, biz: Record<string, unknown>, attempt =
       body: new URLSearchParams(params).toString(), signal: ctrl.signal,
     });
     text = await resp.text();
+  } catch (e: any) {
+    clearTimeout(timer);
+    const errMsg = String(e?.message ?? e);
+    // fetch abort / network 错误：自动重试一次
+    if (attempt === 1 && /abort|aborted|timeout|fetch|ECONN|network/i.test(errMsg)) {
+      await sleep(1000);
+      return await callOpenweb(path, biz, 2);
+    }
+    throw new Error(`JST ${path} 网络异常: ${errMsg}`);
   } finally { clearTimeout(timer); }
-  const json = JSON.parse(text);
+  let json: any;
+  try { json = JSON.parse(text); }
+  catch { throw new Error(`JST ${path} 返回非 JSON: ${String(text).slice(0,200)}`); }
   const code = json.code ?? json.errCode;
   const msg = json.msg ?? json.message ?? "";
   const isOk = code === 0 || code === "0" || json.issuccess === true;
@@ -330,10 +342,13 @@ async function syncShops() {
 }
 
 async function syncSuppliers() {
+  // 用小 page_size，避免单次 fetch 太大导致 AbortSignal（之前 100 命中 30s 超时）
+  const PAGE_SIZE = 50;
+  const MAX_PAGES = 200; // 安全上限
   let page = 1, total = 0, inserted = 0, updated = 0;
-  while (true) {
-    const data = await callOpenweb("suppliers/query", { page_index: page, page_size: 100 });
-    const list: any[] = data.suppliers ?? data.datas ?? data.list ?? [];
+  while (page <= MAX_PAGES) {
+    const data = await callOpenweb("suppliers/query", { page_index: page, page_size: PAGE_SIZE });
+    const list: any[] = data.suppliers ?? data.datas ?? data.list ?? data.rows ?? [];
     if (list.length === 0) break;
     for (const r of list) {
       const jstId = pickStr(r.supplier_id, r.supplierId, r.id);
@@ -360,7 +375,7 @@ async function syncSuppliers() {
         inserted++;
       }
     }
-    if (list.length < 100) break;
+    if (list.length < PAGE_SIZE) break;
     page++;
     await sleep(RATE_DELAY_MS);
   }
@@ -859,60 +874,104 @@ Deno.serve(async (req) => {
     if (runErr) return respJson({ error: runErr.message }, 500);
     const runId = runRow.id;
 
+    // 子任务隔离执行：单个失败不影响其它子任务，最终聚合状态
+    const subResults: Record<string, { status: "ok" | "error" | "skipped"; summary: string; inserted: number; updated: number; error?: string }> = {
+      shops: { status: "skipped", summary: "未执行", inserted: 0, updated: 0 },
+      suppliers: { status: "skipped", summary: "未执行", inserted: 0, updated: 0 },
+      warehouses: { status: "skipped", summary: "未执行", inserted: 0, updated: 0 },
+    };
+    let shopStats: any = null;
+    let runFinalized = false;
+
     try {
-      const parts: string[] = [];
-      let inserted = 0, updated = 0;
-      let shopStats: any = null;
       for (const t of targets) {
-        if (t === "shops") {
-          const r = await syncShops();
-          parts.push(r.summary);
-          inserted += r.mappingInserted; updated += r.mappingUpdated + r.shopsUpdated;
-          shopStats = r;
-        } else if (t === "suppliers") {
-          const r = await syncSuppliers();
-          parts.push(r.summary);
-          inserted += r.inserted; updated += r.updated;
-        } else if (t === "warehouses") {
-          const r = await syncWarehouses();
-          parts.push(r.summary);
-          inserted += r.inserted; updated += r.updated;
+        try {
+          if (t === "shops") {
+            const r = await syncShops();
+            subResults.shops = { status: "ok", summary: r.summary, inserted: r.mappingInserted, updated: r.mappingUpdated + r.shopsUpdated };
+            shopStats = r;
+          } else if (t === "suppliers") {
+            const r = await syncSuppliers();
+            subResults.suppliers = { status: "ok", summary: r.summary, inserted: r.inserted, updated: r.updated };
+          } else if (t === "warehouses") {
+            const r = await syncWarehouses();
+            subResults.warehouses = { status: "ok", summary: r.summary, inserted: r.inserted, updated: r.updated };
+          }
+        } catch (subErr: any) {
+          const em = String(subErr?.message ?? subErr);
+          subResults[t] = { status: "error", summary: `${t} 同步失败`, inserted: 0, updated: 0, error: em };
+          // 写入子任务错误，便于页面区分
+          await admin.from("jst_sync_errors").insert({
+            module_key: `base_archive:${t}`, error_level: "error", status: "open",
+            error_message: `[${t}] ${em}`,
+          });
         }
       }
+
       const finishedAt = new Date().toISOString();
       const durationMs = Date.now() - t0;
-      const summary = parts.join("；");
+      const executed = targets.filter((t) => subResults[t]?.status !== "skipped");
+      const okSubs = executed.filter((t) => subResults[t].status === "ok");
+      const failSubs = executed.filter((t) => subResults[t].status === "error");
+      const inserted = executed.reduce((s, t) => s + subResults[t].inserted, 0);
+      const updated = executed.reduce((s, t) => s + subResults[t].updated, 0);
+      const summaryParts = executed.map((t) =>
+        subResults[t].status === "ok"
+          ? subResults[t].summary
+          : `${t}: 失败(${subResults[t].error?.slice(0, 80) ?? ""})`
+      );
+      const summary = summaryParts.join("；");
+      const overallStatus =
+        failSubs.length === 0 ? "ok" :
+        okSubs.length === 0 ? "error" : "partial";
       const nextSync = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
       await admin.from("jst_sync_runs").update({
-        status: "ok", finished_at: finishedAt, duration_ms: durationMs,
+        status: overallStatus === "partial" ? "ok" : overallStatus, // run 表只支持 ok/error/aborted，partial 计为 ok
+        finished_at: finishedAt, duration_ms: durationMs,
         inserted_count: inserted, updated_count: updated,
-        current_total_summary: summary,
+        failed_count: failSubs.length,
+        current_total_summary: overallStatus === "partial" ? `部分成功：${summary}` : summary,
+        error_message: failSubs.length ? failSubs.map((t) => `[${t}] ${subResults[t].error}`).join(" | ") : "",
       }).eq("id", runId);
+      runFinalized = true;
 
       await admin.from("jst_sync_modules").update({
-        status: "ok", last_sync_at: finishedAt, next_sync_at: nextSync,
-        last_result_summary: summary, retry_count: 0,
+        status: overallStatus === "ok" ? "ok" : (overallStatus === "partial" ? "partial" : "error"),
+        last_sync_at: finishedAt, next_sync_at: nextSync,
+        last_result_summary: summary.slice(0, 400),
+        retry_count: 0,
       }).eq("module_key", "base_archive");
 
-      await admin.from("jst_sync_errors").update({ status: "resolved", resolved_at: finishedAt })
-        .eq("module_key", "base_archive").neq("status", "resolved");
+      // 仅在该子任务成功时清理对应子任务旧错误；不要全清
+      for (const t of okSubs) {
+        await admin.from("jst_sync_errors").update({ status: "resolved", resolved_at: finishedAt })
+          .eq("module_key", `base_archive:${t}`).neq("status", "resolved");
+      }
+      // 全部成功才清 base_archive 父键错误
+      if (overallStatus === "ok") {
+        await admin.from("jst_sync_errors").update({ status: "resolved", resolved_at: finishedAt })
+          .eq("module_key", "base_archive").neq("status", "resolved");
+      }
 
       await admin.from("jst_sync_metrics").upsert({
         metric_key: "base_archive_summary",
         metric_name: "基础档案",
         metric_value: summary,
-        metric_extra: { parts, inserted, updated },
+        metric_extra: {
+          parts: summaryParts, inserted, updated,
+          sub_results: subResults,
+          overall_status: overallStatus,
+          executed,
+        },
         time_range_label: "全量快照",
         data_source_label: "聚水潭基础档案",
         last_sync_at: finishedAt,
         updated_at: finishedAt,
       }, { onConflict: "metric_key" });
 
-      // 店铺映射指标（从映射表实时聚合，避免只反映本次同步增量）
       if (shopStats) {
-        const { data: allMaps } = await admin.from("jst_shop_mappings")
-          .select("mapping_status");
+        const { data: allMaps } = await admin.from("jst_shop_mappings").select("mapping_status");
         const totalAll = allMaps?.length ?? 0;
         const mapped = (allMaps ?? []).filter((m) => m.mapping_status === "mapped").length;
         const ignored = (allMaps ?? []).filter((m) => m.mapping_status === "ignored").length;
@@ -929,37 +988,36 @@ Deno.serve(async (req) => {
         }, { onConflict: "metric_key" });
       }
 
-      return respJson({ ok: true, run_id: runId, summary, inserted, updated, duration_ms: durationMs, shopStats });
+      return respJson({ ok: failSubs.length === 0, run_id: runId, status: overallStatus, summary, inserted, updated, duration_ms: durationMs, sub_results: subResults, shopStats });
 
     } catch (e: any) {
+      // 兜底：理论上不会到这里（子任务已 try/catch），但只要发生就保证 run 收尾
       const finishedAt = new Date().toISOString();
       const errMsg = String(e?.message ?? e);
       await admin.from("jst_sync_runs").update({
         status: "error", finished_at: finishedAt, duration_ms: Date.now() - t0,
-        error_message: errMsg, current_total_summary: "同步失败",
+        error_message: errMsg, current_total_summary: "同步失败（dispatcher 异常）",
       }).eq("id", runId);
-
-      // 累计 retry_count
-      const { data: existingErr } = await admin.from("jst_sync_errors").select("id, retry_count")
-        .eq("module_key", "base_archive").neq("status", "resolved").maybeSingle();
-      if (existingErr) {
-        await admin.from("jst_sync_errors").update({
-          error_message: errMsg, retry_count: (existingErr.retry_count ?? 0) + 1,
-          last_seen_at: finishedAt, status: "retrying",
-        }).eq("id", existingErr.id);
-      } else {
-        await admin.from("jst_sync_errors").insert({
-          module_key: "base_archive", error_level: "error",
-          error_message: errMsg, status: "open",
-          first_seen_at: finishedAt, last_seen_at: finishedAt,
-        });
-      }
+      runFinalized = true;
+      await admin.from("jst_sync_errors").insert({
+        module_key: "base_archive", error_level: "error", status: "open",
+        error_message: errMsg,
+      });
       await admin.from("jst_sync_modules").update({
         status: "error", last_result_summary: errMsg.slice(0, 200),
-        retry_count: 0, last_sync_at: finishedAt,
+        last_sync_at: finishedAt,
       }).eq("module_key", "base_archive");
-
       return respJson({ ok: false, run_id: runId, error: errMsg }, 200);
+    } finally {
+      // ★ 终极兜底：无论如何，确保 run 不会停留在 running
+      if (!runFinalized) {
+        const finishedAt = new Date().toISOString();
+        await admin.from("jst_sync_runs").update({
+          status: "aborted", finished_at: finishedAt, duration_ms: Date.now() - t0,
+          error_message: "Edge Function 未正常返回（可能为 timeout / OOM / 进程终止），由 finally 兜底标记 aborted",
+          current_total_summary: "同步中断（finally 兜底）",
+        }).eq("id", runId).eq("status", "running");
+      }
     }
   } catch (e: any) {
     return respJson({ error: String(e?.message ?? e) }, 500);
