@@ -704,7 +704,7 @@ function CategoriesTab() {
       .order("direction").order("sort_order");
     const qq = q.trim();
     if (qq) qry = qry.or(`name.ilike.%${qq}%,code.ilike.%${qq}%`);
-    if (dir) qry = qry.eq("direction", dir);
+    if (dir) qry = qry.eq("direction", dir as "in" | "out" | "transfer");
     const from = (page - 1) * pageSize;
     const { data, count, error } = await qry.range(from, from + pageSize - 1);
     setLoading(false);
