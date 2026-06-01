@@ -130,7 +130,52 @@ const emptyForm = {
 
 // ============== 主组件 ==============
 export default function UsersPage() {
-  const [users, setUsers] = useState<InternalUser[]>(initialUsers);
+  const [users, setUsers] = useState<InternalUser[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) CURRENT_USER_ID = user.id;
+
+      const { data: profiles, error } = await supabase
+        .from("profiles")
+        .select("id, username, full_name, phone, department, account_type, user_type, created_at")
+        .eq("user_type", "internal")
+        .order("created_at", { ascending: true });
+      if (error) { toast.error("加载用户失败：" + error.message); setLoading(false); return; }
+
+      const ids = (profiles ?? []).map(p => p.id);
+      const { data: roleRows } = ids.length
+        ? await supabase.from("ops_user_roles").select("user_id, role_code").in("user_id", ids)
+        : { data: [] as { user_id: string; role_code: string }[] };
+
+      const roleMap = new Map<string, string[]>();
+      (roleRows ?? []).forEach((r: any) => {
+        const arr = roleMap.get(r.user_id) ?? [];
+        arr.push(r.role_code);
+        roleMap.set(r.user_id, arr);
+      });
+
+      const list: InternalUser[] = (profiles ?? []).map((p: any) => ({
+        id: p.id,
+        username: p.username ?? "",
+        real_name: p.full_name ?? "",
+        phone: p.phone ?? "",
+        department: p.department ?? "",
+        position: "",
+        roles: roleMap.get(p.id) ?? [],
+        employment_status: "active",
+        account_status: p.account_type === "pending" ? "pending" : "active",
+        remark: "",
+        last_login_at: null,
+        must_change_password: false,
+      }));
+      if (alive) { setUsers(list); setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   // 筛选
   const [keyword, setKeyword] = useState("");
