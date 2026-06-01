@@ -342,10 +342,13 @@ async function syncShops() {
 }
 
 async function syncSuppliers() {
+  // 用小 page_size，避免单次 fetch 太大导致 AbortSignal（之前 100 命中 30s 超时）
+  const PAGE_SIZE = 50;
+  const MAX_PAGES = 200; // 安全上限
   let page = 1, total = 0, inserted = 0, updated = 0;
-  while (true) {
-    const data = await callOpenweb("suppliers/query", { page_index: page, page_size: 100 });
-    const list: any[] = data.suppliers ?? data.datas ?? data.list ?? [];
+  while (page <= MAX_PAGES) {
+    const data = await callOpenweb("suppliers/query", { page_index: page, page_size: PAGE_SIZE });
+    const list: any[] = data.suppliers ?? data.datas ?? data.list ?? data.rows ?? [];
     if (list.length === 0) break;
     for (const r of list) {
       const jstId = pickStr(r.supplier_id, r.supplierId, r.id);
@@ -372,7 +375,7 @@ async function syncSuppliers() {
         inserted++;
       }
     }
-    if (list.length < 100) break;
+    if (list.length < PAGE_SIZE) break;
     page++;
     await sleep(RATE_DELAY_MS);
   }
