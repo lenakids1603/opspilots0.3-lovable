@@ -258,42 +258,42 @@ export default function JstDataIntegrationPage() {
   // 触发同步：base_archive / shop / supplier / warehouse 走真实 Edge Function；
   // 其他模块暂为占位（写日志 + 提示未接入）。
   // ------------------------------------------------------------
-  const REAL_BASE_ARCHIVE = new Set(["base_archive", "shop", "supplier", "warehouse"]);
+  // 真实接入的 module_key：
+  //   - base_archive(+scope: shops/suppliers/warehouses)
+  //   - sales_refund(+days)
+  // 其它 module_key 一律按钮禁用，不允许写入 jst_sync_runs 占位记录。
+  const REAL_BASE_KEYS = new Set(["base_archive", "shop", "supplier", "warehouse"]);
+  const isRealModuleKey = (k: string) => REAL_BASE_KEYS.has(k) || k === "sales_refund";
+
+  type TriggerInput =
+    | { kind: "base_archive"; scope?: string[]; trigger_type: string; label: string }
+    | { kind: "sales_refund"; days: number; trigger_type: string; label: string };
 
   const triggerRun = useMutation({
-    mutationFn: async (input: { module_key: string; trigger_type: string; label: string }) => {
+    mutationFn: async (input: TriggerInput) => {
       if (!user) throw new Error("未登录");
-      if (REAL_BASE_ARCHIVE.has(input.module_key)) {
-        // 真实 base_archive 同步
-        const scopeMap: Record<string, string[] | undefined> = {
-          shop: ["shops"], supplier: ["suppliers"], warehouse: ["warehouses"],
-        };
-        const { data, error } = await supabase.functions.invoke("jst-sync-dispatch", {
-          body: {
-            module_key: "base_archive",
-            trigger_type: input.trigger_type,
-            scope: scopeMap[input.module_key],
-          },
-        });
-        if (error) throw new Error(error.message);
-        if (data?.error) throw new Error(data.error);
-        return { real: true, summary: data?.summary ?? "已完成", label: input.label };
-      }
-      // 其余模块：占位写日志（保留原有行为）
-      const { error } = await supabase.from("jst_sync_runs").insert({
-        module_key: input.module_key,
+      const body: Record<string, unknown> = {
         trigger_type: input.trigger_type,
-        status: "running",
-        started_at: new Date().toISOString(),
-        current_total_summary: `手动触发：${input.label}（该模块尚未接入真实聚水潭 API）`,
-        created_by: user.id,
-      });
-      if (error) throw error;
-      return { real: false, summary: "已写入运行日志（未真正调用）", label: input.label };
+      };
+      if (input.kind === "base_archive") {
+        body.module_key = "base_archive";
+        if (input.scope) body.scope = input.scope;
+      } else {
+        body.module_key = "sales_refund";
+        body.days = input.days;
+      }
+      const { data, error } = await supabase.functions.invoke("jst-sync-dispatch", { body });
+      if (error) throw new Error(error.message);
+      if (data?.error) throw new Error(data.error);
+      return {
+        summary: data?.message ?? data?.summary ?? "已完成",
+        label: input.label,
+        summary_updated: data?.summary_updated,
+      };
     },
     onSuccess: (d) => {
       toast({
-        title: d.real ? "同步完成" : "已记录运行",
+        title: d.summary_updated === false ? "已保存原始数据" : "同步完成",
         description: `${d.label} — ${d.summary}`,
       });
       qc.invalidateQueries({ queryKey: ["jst_sync_runs"] });
@@ -303,6 +303,13 @@ export default function JstDataIntegrationPage() {
     },
     onError: (e: any) => toast({ title: "同步失败", description: e.message, variant: "destructive" }),
   });
+
+  // 给未接入按钮统一弹提示
+  const notWired = (label: string) =>
+    toast({
+      title: "暂未接入",
+      description: `${label} 暂未接入真实聚水潭 API，按钮已禁用。`,
+    });
 
   // ------------------------------------------------------------
   // Derived state
