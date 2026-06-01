@@ -1,0 +1,1 @@
+GRANT EXECUTE ON FUNCTION public.get_email_by_identifier(text) TO anon, authenticated;
