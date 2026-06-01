@@ -679,18 +679,19 @@ export default function JstDataIntegrationPage() {
               {/* —— 基础档案同步 —— */}
               <TabsContent value="base" className="m-0">
                 <div className="px-5 pt-4 pb-3 border-b border-border flex flex-wrap items-center gap-2">
-                  <Button size="sm" onClick={() => triggerRun.mutate({ module_key: "shop", trigger_type: "manual", label: "同步店铺" })}>
+                  <Button size="sm" onClick={() => triggerRun.mutate({ kind: "base_archive", scope: ["shops"], trigger_type: "manual", label: "同步店铺" })}>
                     <Store className="w-3.5 h-3.5 mr-1" /> 同步店铺
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "supplier", trigger_type: "manual", label: "同步供应商" })}>
+                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ kind: "base_archive", scope: ["suppliers"], trigger_type: "manual", label: "同步供应商" })}>
                     <Users className="w-3.5 h-3.5 mr-1" /> 同步供应商
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ module_key: "warehouse", trigger_type: "manual", label: "同步仓库" })}>
+                  <Button size="sm" variant="outline" onClick={() => triggerRun.mutate({ kind: "base_archive", scope: ["warehouses"], trigger_type: "manual", label: "同步仓库" })}>
                     <Building2 className="w-3.5 h-3.5 mr-1" /> 同步仓库
                   </Button>
-                  <Button size="sm" variant="secondary" onClick={() => triggerRun.mutate({ module_key: "base_archive", trigger_type: "manual", label: "同步基础档案（店铺/供应商/仓库）" })}>
+                  <Button size="sm" variant="secondary" onClick={() => triggerRun.mutate({ kind: "base_archive", trigger_type: "manual", label: "同步基础档案（店铺/供应商/仓库）" })}>
                     <FileText className="w-3.5 h-3.5 mr-1" /> 同步基础档案
                   </Button>
+                  <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 ml-1">已接入真实同步</Badge>
                   <span className="text-xs text-muted-foreground ml-2">基础档案是销售/采购同步的前置条件。</span>
                 </div>
                 <Table>
