@@ -387,14 +387,17 @@ export default function JstDataIntegrationPage() {
                 全局控制
               </DropdownMenuLabel>
               <DropdownMenuItem
-                disabled={abnormalModules.length === 0}
-                onClick={() => triggerRun.mutate({
-                  module_key: abnormalModules[0]?.module_key ?? "inventory",
-                  trigger_type: "retry",
-                  label: "重试异常任务",
-                })}
+                disabled={!abnormalModules.some((m) => isRealModuleKey(m.module_key))}
+                onClick={() => {
+                  const target = abnormalModules.find((m) => isRealModuleKey(m.module_key));
+                  if (!target) return notWired("重试异常任务");
+                  retryAbnormalModule(target.module_key, `重试异常任务（${target.module_name}）`);
+                }}
               >
-                重试异常任务{abnormalModules.length > 0 ? `（${abnormalModules.length}）` : ""}
+                重试异常任务{(() => {
+                  const n = abnormalModules.filter((m) => isRealModuleKey(m.module_key)).length;
+                  return n > 0 ? `（${n}）` : "";
+                })()}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => {
                 document.getElementById("jst-sync-logs")?.scrollIntoView({ behavior: "smooth", block: "start" });
