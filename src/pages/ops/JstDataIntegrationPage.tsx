@@ -439,7 +439,7 @@ export default function JstDataIntegrationPage() {
               )}
             </div>
             <Button variant="outline" size="sm">查看异常</Button>
-            <Button size="sm" onClick={() => triggerRun.mutate({ module_key: abnormalModules[0].module_key, trigger_type: "retry", label: "手动重试异常模块" })}>
+            <Button size="sm" onClick={() => retryAbnormalModule(abnormalModules[0].module_key, "手动重试异常模块")}>
               手动重试
             </Button>
           </CardContent>
