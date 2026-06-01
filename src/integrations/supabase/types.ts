@@ -316,6 +316,13 @@ export type Database = {
             referencedRelation: "ops_arrivals"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "ops_arrival_items_sku_id_fkey"
+            columns: ["sku_id"]
+            isOneToOne: false
+            referencedRelation: "ops_skus"
+            referencedColumns: ["id"]
+          },
         ]
       }
       ops_arrivals: {
@@ -352,7 +359,22 @@ export type Database = {
           supplier_id?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "ops_arrivals_operator_id_fkey"
+            columns: ["operator_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ops_arrivals_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "ops_suppliers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       ops_products: {
         Row: {
@@ -439,7 +461,15 @@ export type Database = {
           updated_at?: string
           year?: number | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "ops_products_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "ops_suppliers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       ops_roles: {
         Row: {
@@ -599,6 +629,13 @@ export type Database = {
             referencedRelation: "ops_products"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "ops_skus_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "ops_suppliers"
+            referencedColumns: ["id"]
+          },
         ]
       }
       ops_supplier_bills: {
@@ -641,7 +678,22 @@ export type Database = {
           supplier_id?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "ops_supplier_bills_auditor_id_fkey"
+            columns: ["auditor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ops_supplier_bills_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "ops_suppliers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       ops_suppliers: {
         Row: {
@@ -710,7 +762,15 @@ export type Database = {
           role_code?: Database["public"]["Enums"]["ops_role_code"]
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "ops_user_roles_role_code_fkey"
+            columns: ["role_code"]
+            isOneToOne: false
+            referencedRelation: "ops_roles"
+            referencedColumns: ["code"]
+          },
+        ]
       }
       profiles: {
         Row: {
@@ -760,6 +820,13 @@ export type Database = {
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "profiles_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "ops_suppliers"
+            referencedColumns: ["id"]
+          },
         ]
       }
       purchase_order_items: {
@@ -772,6 +839,7 @@ export type Database = {
           external_poi_id: string | null
           id: string
           item_remark: string | null
+          product_id: string | null
           product_image_url: string | null
           product_name: string | null
           properties_value: string | null
@@ -780,6 +848,7 @@ export type Database = {
           raw: Json | null
           received_qty: number
           size: string | null
+          sku_id: string | null
           sku_no: string | null
           spec: string | null
           style_no: string | null
@@ -796,6 +865,7 @@ export type Database = {
           external_poi_id?: string | null
           id?: string
           item_remark?: string | null
+          product_id?: string | null
           product_image_url?: string | null
           product_name?: string | null
           properties_value?: string | null
@@ -804,6 +874,7 @@ export type Database = {
           raw?: Json | null
           received_qty?: number
           size?: string | null
+          sku_id?: string | null
           sku_no?: string | null
           spec?: string | null
           style_no?: string | null
@@ -820,6 +891,7 @@ export type Database = {
           external_poi_id?: string | null
           id?: string
           item_remark?: string | null
+          product_id?: string | null
           product_image_url?: string | null
           product_name?: string | null
           properties_value?: string | null
@@ -828,6 +900,7 @@ export type Database = {
           raw?: Json | null
           received_qty?: number
           size?: string | null
+          sku_id?: string | null
           sku_no?: string | null
           spec?: string | null
           style_no?: string | null
@@ -837,10 +910,24 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "purchase_order_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "ops_products"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "purchase_order_items_purchase_order_id_fkey"
             columns: ["purchase_order_id"]
             isOneToOne: false
             referencedRelation: "purchase_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_order_items_sku_id_fkey"
+            columns: ["sku_id"]
+            isOneToOne: false
+            referencedRelation: "ops_skus"
             referencedColumns: ["id"]
           },
         ]
@@ -934,12 +1021,14 @@ export type Database = {
           external_ioi_id: string | null
           external_po_id: string | null
           id: string
+          product_id: string | null
           product_name: string | null
           purchase_order_id: string | null
           raw: Json | null
           receipt_id: string
           received_qty: number
           remark: string | null
+          sku_id: string | null
           sku_no: string | null
           updated_at: string
         }
@@ -951,12 +1040,14 @@ export type Database = {
           external_ioi_id?: string | null
           external_po_id?: string | null
           id?: string
+          product_id?: string | null
           product_name?: string | null
           purchase_order_id?: string | null
           raw?: Json | null
           receipt_id: string
           received_qty?: number
           remark?: string | null
+          sku_id?: string | null
           sku_no?: string | null
           updated_at?: string
         }
@@ -968,16 +1059,25 @@ export type Database = {
           external_ioi_id?: string | null
           external_po_id?: string | null
           id?: string
+          product_id?: string | null
           product_name?: string | null
           purchase_order_id?: string | null
           raw?: Json | null
           receipt_id?: string
           received_qty?: number
           remark?: string | null
+          sku_id?: string | null
           sku_no?: string | null
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "purchase_receipt_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "ops_products"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "purchase_receipt_items_purchase_order_id_fkey"
             columns: ["purchase_order_id"]
@@ -990,6 +1090,13 @@ export type Database = {
             columns: ["receipt_id"]
             isOneToOne: false
             referencedRelation: "purchase_receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_receipt_items_sku_id_fkey"
+            columns: ["sku_id"]
+            isOneToOne: false
+            referencedRelation: "ops_skus"
             referencedColumns: ["id"]
           },
         ]
