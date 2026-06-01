@@ -26,7 +26,8 @@ import {
 } from "@/components/ui/select";
 import {
   AlertTriangle, RefreshCw, ChevronDown, FileText, Boxes, Package,
-  Warehouse, LineChart, Truck, Wrench, Search, Clock, Info,
+  Warehouse, LineChart, Truck, Wrench, Search, Clock, Info, Stethoscope,
+  Store, Users, Building2, ShoppingCart, PackageCheck,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
