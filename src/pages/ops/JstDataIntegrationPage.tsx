@@ -356,57 +356,39 @@ export default function JstDataIntegrationPage() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button disabled={triggerRun.isPending}>
-                <RefreshCw className={`w-4 h-4 mr-1.5 ${triggerRun.isPending ? "animate-spin" : ""}`} /> 同步操作
+                <RefreshCw className={`w-4 h-4 mr-1.5 ${triggerRun.isPending ? "animate-spin" : ""}`} /> 同步控制
                 <ChevronDown className="w-4 h-4 ml-1" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel className="text-xs text-muted-foreground">
-                真实同步（已接入聚水潭）
+                全局控制
               </DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "base_archive", trigger_type: "manual", label: "同步基础档案（店铺/供应商/仓库）" })}>
-                同步基础档案
+              <DropdownMenuItem
+                disabled={abnormalModules.length === 0}
+                onClick={() => triggerRun.mutate({
+                  module_key: abnormalModules[0]?.module_key ?? "inventory",
+                  trigger_type: "retry",
+                  label: "重试异常任务",
+                })}
+              >
+                重试异常任务{abnormalModules.length > 0 ? `（${abnormalModules.length}）` : ""}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "shop", trigger_type: "manual", label: "仅同步店铺" })}>
-                仅同步店铺
+              <DropdownMenuItem onClick={() => {
+                document.getElementById("jst-sync-logs")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}>
+                查看同步日志
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "supplier", trigger_type: "manual", label: "仅同步供应商" })}>
-                仅同步供应商
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "warehouse", trigger_type: "manual", label: "仅同步仓库" })}>
-                仅同步仓库
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-xs text-muted-foreground">
-                其他模块（占位，仅写日志）
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: abnormalModules[0]?.module_key ?? "inventory", trigger_type: "retry", label: "重试异常模块" })}>
-                重试异常模块
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "product", trigger_type: "manual", label: "同步指定模块" })}>
-                同步指定模块
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "product", trigger_type: "manual_backfill", label: "按款号补同步" })}>
-                按款号补同步
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "sku", trigger_type: "manual_backfill", label: "按 SKU 补同步" })}>
-                按 SKU 补同步
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "shop", trigger_type: "manual_backfill", label: "按店铺补同步" })}>
-                按店铺补同步
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "sales_refund", trigger_type: "manual_backfill", label: "同步最近 7 天" })}>
-                同步最近 7 天
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => triggerRun.mutate({ module_key: "sales_refund", trigger_type: "manual_backfill", label: "同步最近 30 天" })}>
-                同步最近 30 天
+              <DropdownMenuItem onClick={() => {
+                document.getElementById("jst-advanced-diagnostics")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}>
+                打开高级同步面板
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         }
       />
+
 
       {isLoading && (
         <div className="text-sm text-muted-foreground">加载中…</div>
