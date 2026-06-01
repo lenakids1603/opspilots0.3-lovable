@@ -2092,47 +2092,68 @@ export type Database = {
       }
       shops: {
         Row: {
+          auth_status: string | null
           code: string | null
           created_at: string
           default_bank_account_id: string | null
           deleted_at: string | null
-          entity_id: string
+          entity_id: string | null
           external_shop_id: string | null
           id: string
+          is_ignored: boolean
+          jst_shop_id: string | null
+          last_synced_at: string | null
           name: string
           normalized_name: string | null
-          platform_id: string
+          platform_id: string | null
+          platform_type: string | null
+          raw_jst_json: Json | null
           remark: string | null
+          shop_status_raw: string | null
           status: string
           updated_at: string
         }
         Insert: {
+          auth_status?: string | null
           code?: string | null
           created_at?: string
           default_bank_account_id?: string | null
           deleted_at?: string | null
-          entity_id: string
+          entity_id?: string | null
           external_shop_id?: string | null
           id?: string
+          is_ignored?: boolean
+          jst_shop_id?: string | null
+          last_synced_at?: string | null
           name: string
           normalized_name?: string | null
-          platform_id: string
+          platform_id?: string | null
+          platform_type?: string | null
+          raw_jst_json?: Json | null
           remark?: string | null
+          shop_status_raw?: string | null
           status?: string
           updated_at?: string
         }
         Update: {
+          auth_status?: string | null
           code?: string | null
           created_at?: string
           default_bank_account_id?: string | null
           deleted_at?: string | null
-          entity_id?: string
+          entity_id?: string | null
           external_shop_id?: string | null
           id?: string
+          is_ignored?: boolean
+          jst_shop_id?: string | null
+          last_synced_at?: string | null
           name?: string
           normalized_name?: string | null
-          platform_id?: string
+          platform_id?: string | null
+          platform_type?: string | null
+          raw_jst_json?: Json | null
           remark?: string | null
+          shop_status_raw?: string | null
           status?: string
           updated_at?: string
         }
