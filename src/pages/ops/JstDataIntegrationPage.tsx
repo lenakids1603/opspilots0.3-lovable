@@ -431,6 +431,9 @@ export default function JstDataIntegrationPage() {
         </CardContent>
       </Card>
 
+      {/* 二点五、聚水潭店铺映射 */}
+      <ShopMappingsCard />
+
       {/* 三、自动同步计划 */}
       <Card>
         <CardContent className="p-0">
