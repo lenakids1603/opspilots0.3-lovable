@@ -345,108 +345,168 @@ async function syncShops() {
 const SUPPLIERS_ENDPOINT = "supplier/query";
 
 async function syncSuppliers() {
-  const PAGE_SIZE = 50;
+  const PAGE_SIZE = 100;
   const MAX_PAGES = 200;
-  let page = 1, total = 0, inserted = 0, updated = 0;
+  let page = 1;
+  let apiTotal = 0;          // API 返回总条数
+  let parsed = 0;            // 成功解析（jstId+name 齐全）
+  let inserted = 0, updated = 0, skipped = 0;
+  const skipReasons: string[] = [];
+  const parsedSamples: Array<{ jst_supplier_id: string; supplier_name: string; supplier_code: string; status: string; written: "inserted" | "updated" | "skipped"; reason?: string }> = [];
   const diagnostics: any[] = [];
+
   while (page <= MAX_PAGES) {
     const bizParams = { page_index: page, page_size: PAGE_SIZE };
-    // 诊断：先用 diagnostic 包装拿一次完整结构（仅首页），后续页用普通 call
-    let listPayload: any;
-    let rawData: any;
-    if (page === 1) {
-      const diag = await callOpenwebDiagnostic(SUPPLIERS_ENDPOINT, bizParams);
-      rawData = diag.json?.data ?? diag.json ?? null;
-      const detected = detectSupplierList(rawData ?? diag.json);
-      const firstSample = detected.list[0] ? maskSensitive(detected.list[0]) : null;
-      diagnostics.push({
-        page,
-        request_endpoint: `/open/${SUPPLIERS_ENDPOINT}`,
-        request_params_summary: bizParams,
-        http_status: diag.httpStatus,
-        response_code: diag.json?.code ?? diag.json?.errCode ?? null,
-        response_msg: diag.json?.msg ?? diag.json?.message ?? "",
-        response_root_keys: keysOf(diag.json),
-        response_data_keys: keysOf(diag.json?.data),
-        detected_list_path: detected.path,
-        detected_record_count: detected.list.length,
-        first_record_sample: firstSample,
-        list_path_candidates: detected.candidates,
-      });
-      // 转抛：若接口返回非 0
-      const code = diag.json?.code ?? diag.json?.errCode;
-      const isOk = code === 0 || code === "0" || diag.json?.issuccess === true;
-      if (!isOk) {
-        const msg = diag.json?.msg ?? diag.json?.message ?? "";
-        const err = new Error(`JST ${SUPPLIERS_ENDPOINT} 失败 code=${code} msg=${msg}`);
-        (err as any).diagnostics = diagnostics;
-        throw err;
-      }
-      listPayload = detected.list;
-    } else {
-      const data = await callOpenweb(SUPPLIERS_ENDPOINT, bizParams);
-      rawData = data;
-      const detected = detectSupplierList({ data });
-      listPayload = detected.list.length ? detected.list : detectSupplierList(data).list;
+    const diag = await callOpenwebDiagnostic(SUPPLIERS_ENDPOINT, bizParams);
+    const code = diag.json?.code ?? diag.json?.errCode;
+    const isOk = code === 0 || code === "0" || diag.json?.issuccess === true;
+    const dataNode = diag.json?.data ?? diag.json ?? {};
+    const detected = detectSupplierList(dataNode);
+    const firstSample = page === 1 && detected.list[0] ? maskSensitive(detected.list[0]) : undefined;
+    diagnostics.push({
+      page,
+      request_endpoint: `/open/${SUPPLIERS_ENDPOINT}`,
+      request_params_summary: bizParams,
+      http_status: diag.httpStatus,
+      response_code: code ?? null,
+      response_msg: diag.json?.msg ?? diag.json?.message ?? "",
+      response_root_keys: keysOf(diag.json),
+      response_data_keys: keysOf(dataNode),
+      detected_list_path: detected.path,
+      detected_record_count: detected.list.length,
+      pagination: {
+        page_index: dataNode.page_index ?? null,
+        page_size: dataNode.page_size ?? null,
+        page_count: dataNode.page_count ?? null,
+        data_count: dataNode.data_count ?? null,
+        has_next: dataNode.has_next ?? null,
+      },
+      ...(firstSample !== undefined ? { first_record_sample: firstSample } : {}),
+      ...(page === 1 ? { list_path_candidates: detected.candidates } : {}),
+    });
+    if (!isOk) {
+      const msg = diag.json?.msg ?? diag.json?.message ?? "";
+      const err = new Error(`JST ${SUPPLIERS_ENDPOINT} 失败 code=${code} msg=${msg}`);
+      (err as any).diagnostics = diagnostics;
+      throw err;
     }
-    if (!listPayload || listPayload.length === 0) break;
-    for (const r of listPayload) {
-      // querymysupplier 返回的常见字段：supplier_co_id / co_id / supplier_id / id / channel_id；
-      // 名称：name / co_name / supplier_name / channel_name
-      const jstId = pickStr(
-        r.supplier_co_id, r.supplierCoId, r.co_id, r.coId,
-        r.supplier_id, r.supplierId, r.channel_id, r.channelId, r.id,
-      );
-      const name = pickStr(
-        r.name, r.co_name, r.coName, r.supplier_name, r.supplierName,
-        r.channel_name, r.channelName, r.full_name,
-      );
-      if (!jstId || !name) continue;
-      total++;
+    const list = detected.list;
+    apiTotal += list.length;
+    if (list.length === 0) break;
+
+    for (const r of list) {
+      const jstId = pickStr(r.supplier_id, r.supplierId, r.supplier_co_id, r.co_id, r.id);
+      const name = pickStr(r.name, r.supplier_name, r.co_name, r.full_name);
+      const supplierCode = pickStr(r.supplier_code, r.code, r.co_code);
+      const enabledFlag = r.enabled;
+      const statusStr = enabledFlag === false ? "disabled" : (enabledFlag === true ? "active" : pickStr(r.status) || "active");
+
+      // 1) 先 upsert 到 jst_suppliers_raw（保底，不丢字段）
+      let rawId: string | null = null;
+      if (jstId) {
+        const { data: rawExisting } = await admin.from("jst_suppliers_raw").select("id")
+          .eq("jst_supplier_id", jstId).maybeSingle();
+        const rawRow = {
+          jst_supplier_id: jstId,
+          supplier_name: name || "",
+          supplier_code: supplierCode || "",
+          status: statusStr,
+          raw_json: r,
+          last_sync_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        if (rawExisting) {
+          await admin.from("jst_suppliers_raw").update(rawRow).eq("id", rawExisting.id);
+          rawId = rawExisting.id;
+        } else {
+          const { data: ins } = await admin.from("jst_suppliers_raw").insert(rawRow).select("id").single();
+          rawId = ins?.id ?? null;
+        }
+      }
+
+      // 2) 解析校验
+      if (!jstId || !name) {
+        skipped++;
+        const reason = !jstId ? "缺少 supplier_id" : "缺少 name";
+        skipReasons.push(reason);
+        parsedSamples.push({
+          jst_supplier_id: jstId || "", supplier_name: name || "", supplier_code: supplierCode || "",
+          status: statusStr, written: "skipped", reason,
+        });
+        if (rawId) await admin.from("jst_suppliers_raw").update({ skip_reason: reason }).eq("id", rawId);
+        continue;
+      }
+      parsed++;
+
+      // 3) 映射到 ops_suppliers
       const { data: existing } = await admin.from("ops_suppliers").select("id")
         .eq("jst_supplier_id", jstId).maybeSingle();
       const row = {
         jst_supplier_id: jstId,
         name,
-        code: pickStr(r.code, r.supplier_code, r.co_code, jstId),
-        contact: pickStr(r.contact, r.contact_name, r.linkman),
-        phone: pickStr(r.phone, r.mobile, r.tel),
+        code: supplierCode || jstId,
+        contact: pickStr(r.contacts, r.contact, r.contact_name, r.linkman),
+        phone: pickStr(r.mobile, r.phone, r.tel),
         email: pickStr(r.email),
         address: pickStr(r.address),
         raw_jst_json: r,
         last_synced_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
+      let written: "inserted" | "updated" = "updated";
+      let opsId: string | null = null;
       if (existing) {
         await admin.from("ops_suppliers").update(row).eq("id", existing.id);
+        opsId = existing.id;
         updated++;
+        written = "updated";
       } else {
-        await admin.from("ops_suppliers").insert({ ...row, status: "active" });
+        const { data: ins } = await admin.from("ops_suppliers")
+          .insert({ ...row, status: statusStr }).select("id").single();
+        opsId = ins?.id ?? null;
         inserted++;
+        written = "inserted";
       }
+      if (rawId && opsId) {
+        await admin.from("jst_suppliers_raw").update({ matched_ops_supplier_id: opsId, skip_reason: "" }).eq("id", rawId);
+      }
+      parsedSamples.push({
+        jst_supplier_id: jstId, supplier_name: name, supplier_code: supplierCode || "", status: statusStr, written,
+      });
     }
-    if (listPayload.length < PAGE_SIZE) break;
+
+    const hasNext = dataNode.has_next === true || dataNode.has_next === "true";
+    const pageCount = Number(dataNode.page_count ?? 0);
+    if (!hasNext && (pageCount === 0 || page >= pageCount) && list.length < PAGE_SIZE) break;
+    if (!hasNext && pageCount > 0 && page >= pageCount) break;
+    if (list.length < PAGE_SIZE && !hasNext) break;
     page++;
     await sleep(RATE_DELAY_MS);
   }
+
   console.log("[syncSuppliers diagnostics]", JSON.stringify(diagnostics));
+  console.log("[syncSuppliers parsed list]", JSON.stringify(parsedSamples));
+
+  const reasonsTxt = skipped > 0 ? `（跳过原因：${[...new Set(skipReasons)].join("/")}）` : "";
+  const summary = `API 返回 ${apiTotal} 条，成功解析 ${parsed} 条，新增 ${inserted}，更新 ${updated}，跳过 ${skipped}${reasonsTxt}`;
   return {
-    total, inserted, updated,
-    summary: `供应商 ${total} 条（新增 ${inserted}，更新 ${updated}）`,
+    total: apiTotal, parsed, inserted, updated, skipped,
+    summary,
     diagnostics,
+    parsed_samples: parsedSamples,
+    skip_reasons: skipReasons,
   };
 }
 
 function detectSupplierList(raw: any) {
   const paths = [
-    "data.datas", "data.list", "data.suppliers", "data.channels", "data.items", "data.rows", "data.data",
-    "datas", "list", "suppliers", "channels", "items", "rows",
+    "datas", "list", "suppliers", "channels", "items", "rows", "data",
+    "data.datas", "data.list", "data.suppliers", "data.channels", "data.items", "data.rows",
   ];
   const candidates = paths.map((path) => {
     const value = getPath(raw, path);
     return { path, exists: value !== undefined, is_array: Array.isArray(value), count: Array.isArray(value) ? value.length : null };
   });
-  if (Array.isArray(raw?.data)) candidates.unshift({ path: "data", exists: true, is_array: true, count: raw.data.length });
   const hit = candidates.find((c) => c.is_array);
   const list = hit ? getPath(raw, hit.path) : [];
   return { list: Array.isArray(list) ? list : [], path: hit?.path ?? "", candidates };
