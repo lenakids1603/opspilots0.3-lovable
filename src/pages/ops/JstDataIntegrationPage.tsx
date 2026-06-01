@@ -311,6 +311,21 @@ export default function JstDataIntegrationPage() {
       description: `${label} 暂未接入真实聚水潭 API，按钮已禁用。`,
     });
 
+  const baseArchiveScopeOf = (k: string): string[] | undefined => ({
+    shop: ["shops"], supplier: ["suppliers"], warehouse: ["warehouses"],
+    base_archive: undefined as unknown as string[],
+  } as Record<string, string[] | undefined>)[k];
+
+  const retryAbnormalModule = (moduleKey: string, label = "重试异常任务") => {
+    if (REAL_BASE_KEYS.has(moduleKey)) {
+      triggerRun.mutate({ kind: "base_archive", scope: baseArchiveScopeOf(moduleKey), trigger_type: "retry", label });
+    } else if (moduleKey === "sales_refund") {
+      triggerRun.mutate({ kind: "sales_refund", days: 1, trigger_type: "retry", label });
+    } else {
+      notWired(label);
+    }
+  };
+
   // ------------------------------------------------------------
   // Derived state
   // ------------------------------------------------------------
