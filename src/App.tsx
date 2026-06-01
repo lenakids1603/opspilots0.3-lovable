@@ -81,6 +81,7 @@ const App = () => (
           <Route path="/data-center" element={wrap(<OpsPlaceholder breadcrumb={["数据中心"]} title="数据中心" description="销售、退款、直播、达人多维数据汇总" columns={["数据集", "来源", "更新时间", "记录数", "状态", "操作"]} />)} />
           <Route path="/data-center/jst-sync" element={wrap(<JstSyncPage />)} />
           <Route path="/data-center/jst-product-sync" element={wrap(<JstProductSyncPage />)} />
+          <Route path="/data-center/jst-integration" element={wrap(<JstDataIntegrationPage />)} />
 
           {/* 系统设置 */}
           <Route path="/system/supplier-accounts" element={wrap(<SupplierAccountsPage />)} />
