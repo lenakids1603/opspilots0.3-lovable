@@ -91,7 +91,7 @@ export function parseAccountWorkbook(
   // Sheet1: 店铺/公司/银行/账号/法人
   const sheet1 = wb.Sheets[wb.SheetNames.find(n => n.toLowerCase().includes("sheet1")) || wb.SheetNames[0]];
   if (sheet1) {
-    const rows = XLSX.utils.sheet_to_json<any>(sheet1, { defval: "" });
+    const rows = XLSX.utils.sheet_to_json<any>(sheet1, { defval: "", raw: false });
     for (const r of rows) {
       const shop = norm(r["店铺"] ?? r["店铺名称"]);
       const company = norm(r["公司"] ?? r["经营主体"]);
@@ -122,7 +122,7 @@ export function parseAccountWorkbook(
   // Sheet2: 运营单位（投流）/银行/账号/法人代表
   const sheet2Idx = wb.SheetNames.find(n => n.toLowerCase().includes("sheet2"));
   if (sheet2Idx) {
-    const rows = XLSX.utils.sheet_to_json<any>(wb.Sheets[sheet2Idx], { defval: "" });
+    const rows = XLSX.utils.sheet_to_json<any>(wb.Sheets[sheet2Idx], { defval: "", raw: false });
     for (const r of rows) {
       const company = norm(r["运营单位（投流）"] ?? r["运营单位(投流)"] ?? r["公司"] ?? r["经营主体"]);
       const bank = norm(r["银行"] ?? r["开户银行"]);
@@ -137,7 +137,7 @@ export function parseAccountWorkbook(
   // Optional: also handle a "收支分类" sheet
   const catSheet = wb.SheetNames.find(n => n.includes("收支分类"));
   if (catSheet) {
-    const rows = XLSX.utils.sheet_to_json<any>(wb.Sheets[catSheet], { defval: "" });
+    const rows = XLSX.utils.sheet_to_json<any>(wb.Sheets[catSheet], { defval: "", raw: false });
     for (const r of rows) {
       const name = norm(r["分类名称"] ?? r["名称"]);
       const dir = norm(r["收支方向"] ?? r["方向"]);
