@@ -32,6 +32,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { ShopMappingsCard } from "@/components/ops/ShopMappingsCard";
+import { SalesRefundPrecheckCard, useSalesRefundPrecheck } from "@/components/ops/SalesRefundPrecheckCard";
 
 // ============================================================
 // Types
