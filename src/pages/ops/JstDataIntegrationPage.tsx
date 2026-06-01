@@ -33,6 +33,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { ShopMappingsCard } from "@/components/ops/ShopMappingsCard";
 import { SalesRefundPrecheckCard, useSalesRefundPrecheck } from "@/components/ops/SalesRefundPrecheckCard";
+import { JstConnectionCheckCard } from "@/components/ops/JstConnectionCheckCard";
 
 // ============================================================
 // Types
@@ -485,6 +486,9 @@ export default function JstDataIntegrationPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 二点二、聚水潭连接检测 */}
+      <JstConnectionCheckCard />
 
       {/* 二点五、聚水潭店铺映射 */}
       <ShopMappingsCard />
