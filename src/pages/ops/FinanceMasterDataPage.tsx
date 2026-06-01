@@ -547,6 +547,8 @@ function ShopsTab() {
   const [bindState, setBindState] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [sortKey, setSortKey] = useState<string>("jst_shop_id");
+  const [sortAsc, setSortAsc] = useState<boolean>(true);
   const [bindOpen, setBindOpen] = useState(false);
   const [bindShop, setBindShop] = useState<AnyRow | null>(null);
   useDebouncedReset([q, pf, ent, stf, bindState, pageSize], setPage);
@@ -561,7 +563,7 @@ function ShopsTab() {
     setEntities(es ?? []); setPlatforms(ps ?? []); setBanks(bs ?? []);
 
     let qry = supabase.from("shops").select("*", { count: "exact" }).is("deleted_at", null)
-      .order("name", { ascending: true });
+      .order(sortKey, { ascending: sortAsc, nullsFirst: false });
     const qq = q.trim();
     if (qq) qry = (qry as any).or(`name.ilike.%${qq}%,jst_shop_id.ilike.%${qq}%`);
     if (pf) qry = qry.eq("platform_id", pf);
@@ -574,7 +576,7 @@ function ShopsTab() {
     setLoading(false);
     if (error) { toast({ title: "加载失败", description: error.message, variant: "destructive" }); return; }
     setRows(data ?? []); setTotal(count ?? 0);
-  }, [q, pf, ent, stf, bindState, page, pageSize]);
+  }, [q, pf, ent, stf, bindState, page, pageSize, sortKey, sortAsc]);
   useEffect(() => { load(); }, [load]);
 
   const entityMap = useMemo(() => new Map(entities.map(e => [e.id, e])), [entities]);
@@ -640,9 +642,33 @@ function ShopsTab() {
         <table className="w-full text-[12.5px]">
           <thead className="bg-muted/40 text-muted-foreground">
             <tr className="text-left">
-              {["店铺名称", "平台", "JST 店铺 ID", "所属经营主体", "主体银行账户", "授权状态", "店铺状态", "最后同步", "操作"].map(h => (
-                <th key={h} className="px-3 py-2.5 font-normal whitespace-nowrap">{h}</th>
-              ))}
+              {([
+                { label: "JST 店铺 ID", key: "jst_shop_id" },
+                { label: "店铺名称", key: "name" },
+                { label: "平台", key: "platform_type" },
+                { label: "所属经营主体", key: "entity_id" },
+                { label: "主体银行账户", key: null },
+                { label: "授权状态", key: "auth_status" },
+                { label: "店铺状态", key: "shop_status_raw" },
+                { label: "最后同步", key: "last_synced_at" },
+                { label: "操作", key: null },
+              ] as { label: string; key: string | null }[]).map(h => {
+                const sortable = !!h.key;
+                const active = sortable && sortKey === h.key;
+                return (
+                  <th
+                    key={h.label}
+                    className={`px-3 py-2.5 font-normal whitespace-nowrap ${sortable ? "cursor-pointer select-none hover:text-foreground" : ""}`}
+                    onClick={() => {
+                      if (!sortable) return;
+                      if (sortKey === h.key) setSortAsc(v => !v);
+                      else { setSortKey(h.key as string); setSortAsc(true); }
+                    }}
+                  >
+                    {h.label}{active ? (sortAsc ? " ↑" : " ↓") : sortable ? " ↕" : ""}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -661,9 +687,9 @@ function ShopsTab() {
               const platformName = r.platform_type || platformMap.get(r.platform_id)?.name || "-";
               return (
                 <tr key={r.id} className="border-t hover:bg-muted/30">
+                  <td className="px-3 py-2.5 font-mono text-[11.5px] text-muted-foreground">{r.jst_shop_id ?? "-"}</td>
                   <td className="px-3 py-2.5"><div className="font-medium">{r.name}</div></td>
                   <td className="px-3 py-2.5">{platformName}</td>
-                  <td className="px-3 py-2.5 font-mono text-[11.5px] text-muted-foreground">{r.jst_shop_id ?? "-"}</td>
                   <td className="px-3 py-2.5">{entity ? entity.name : <span className="text-amber-600">未绑定</span>}</td>
                   <td className="px-3 py-2.5 text-[12px] text-muted-foreground">{bankSummary}</td>
                   <td className="px-3 py-2.5">{r.auth_status || "-"}</td>
