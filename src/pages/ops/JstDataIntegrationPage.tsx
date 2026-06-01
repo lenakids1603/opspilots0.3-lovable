@@ -865,15 +865,15 @@ export default function JstDataIntegrationPage() {
                   <AlertDialogTrigger asChild>
                     <Button variant="destructive" size="sm">
                       <AlertTriangle className="w-3.5 h-3.5 mr-1" />
-                      全量同步全部数据
+                      全量同步基础档案
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>确认全量同步？</AlertDialogTitle>
+                      <AlertDialogTitle>确认全量重拉店铺 / 供应商 / 仓库？</AlertDialogTitle>
                       <AlertDialogDescription>
-                        全量同步会重新拉取聚水潭所有数据，耗时较长且占用 API 配额，
-                        仅在系统迁移或数据严重错乱时使用。请确认继续。
+                        会重新拉取聚水潭所有店铺、供应商、仓库资料并 upsert 到本系统的主数据表，
+                        不会覆盖已绑定的经营主体。耗时较长且占用 API 配额，仅在异常修复时使用。
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
