@@ -642,9 +642,33 @@ function ShopsTab() {
         <table className="w-full text-[12.5px]">
           <thead className="bg-muted/40 text-muted-foreground">
             <tr className="text-left">
-              {["店铺名称", "平台", "JST 店铺 ID", "所属经营主体", "主体银行账户", "授权状态", "店铺状态", "最后同步", "操作"].map(h => (
-                <th key={h} className="px-3 py-2.5 font-normal whitespace-nowrap">{h}</th>
-              ))}
+              {([
+                { label: "JST 店铺 ID", key: "jst_shop_id" },
+                { label: "店铺名称", key: "name" },
+                { label: "平台", key: "platform_type" },
+                { label: "所属经营主体", key: "entity_id" },
+                { label: "主体银行账户", key: null },
+                { label: "授权状态", key: "auth_status" },
+                { label: "店铺状态", key: "shop_status_raw" },
+                { label: "最后同步", key: "last_synced_at" },
+                { label: "操作", key: null },
+              ] as { label: string; key: string | null }[]).map(h => {
+                const sortable = !!h.key;
+                const active = sortable && sortKey === h.key;
+                return (
+                  <th
+                    key={h.label}
+                    className={`px-3 py-2.5 font-normal whitespace-nowrap ${sortable ? "cursor-pointer select-none hover:text-foreground" : ""}`}
+                    onClick={() => {
+                      if (!sortable) return;
+                      if (sortKey === h.key) setSortAsc(v => !v);
+                      else { setSortKey(h.key as string); setSortAsc(true); }
+                    }}
+                  >
+                    {h.label}{active ? (sortAsc ? " ↑" : " ↓") : sortable ? " ↕" : ""}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
