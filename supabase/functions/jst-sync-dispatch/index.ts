@@ -339,20 +339,78 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const moduleKey = String(body.module_key ?? "");
     const triggerType = String(body.trigger_type ?? "manual");
-    const scope = body.scope as string[] | undefined; // 可选: ["shops","suppliers","warehouses"]
+    const scope = body.scope as string[] | undefined;
+    const days = Math.max(1, Math.min(60, Number(body.days ?? 7)));
 
-    // sales_refund 真实同步前的店铺映射质量前置校验
+    // ============ sales_refund ============
     if (moduleKey === "sales_refund") {
       const precheck = await shopMappingPrecheck();
-      if (precheck.blocking) {
-        // 写 warning 错误,不更新正式销售汇总
+      const startedAt = new Date().toISOString();
+      const t0 = Date.now();
+
+      const { data: runRow, error: runErr } = await admin.from("jst_sync_runs").insert({
+        module_key: "sales_refund", trigger_type: triggerType, status: "running",
+        started_at: startedAt, created_by: user.id,
+        current_total_summary: precheck.blocking
+          ? `开始同步原始数据(店铺映射未完成,跳过正式汇总):${precheck.summary}`
+          : `开始同步并生成正式汇总`,
+      }).select("id").single();
+      if (runErr) return respJson({ error: runErr.message }, 500);
+      const runId = runRow.id;
+
+      try {
+        const result = await syncSalesRefund(runId, days, !precheck.blocking);
+        const finishedAt = new Date().toISOString();
+        const durationMs = Date.now() - t0;
+        const summaryUpdated = !precheck.blocking;
+        const msg = summaryUpdated
+          ? `原始订单 ${result.rawOrders} 条,原始退款 ${result.rawRefunds} 条,正式汇总 ${result.summaryRows} 行(店铺×日)`
+          : `原始订单 ${result.rawOrders} 条,原始退款 ${result.rawRefunds} 条;被阻止汇总:${precheck.summary}`;
+
+        await admin.from("jst_sync_runs").update({
+          status: "ok", finished_at: finishedAt, duration_ms: durationMs,
+          inserted_count: result.rawOrders + result.rawRefunds,
+          updated_count: result.summaryRows,
+          current_total_summary: msg,
+          error_message: precheck.blocking ? `店铺映射未完成,未更新正式汇总:${precheck.summary}` : "",
+        }).eq("id", runId);
+
+        if (precheck.blocking) {
+          await admin.from("jst_sync_errors").insert({
+            module_key: "sales_refund", error_level: "warn", status: "open",
+            error_message: `店铺映射未完成,允许保存原始数据但不更新正式销售汇总:${precheck.summary}`,
+          });
+        } else {
+          await admin.from("jst_sync_metrics").upsert({
+            metric_key: "sales_summary", metric_name: "销售与退款",
+            metric_value: `今日 GMV ¥${result.todayGmv.toFixed(0)}`,
+            metric_extra: {
+              today_gmv: result.todayGmv, today_gsv: result.todayGsv,
+              today_refund: result.todayRefund, today_orders: result.todayOrders,
+              refund_rate: result.todayGmv > 0 ? Number((result.todayRefund / result.todayGmv * 100).toFixed(2)) : 0,
+              active_shops: result.activeShops,
+              sync_delta_orders: result.rawOrders, sync_delta_gmv: result.todayGmv, status: "ok",
+            },
+            time_range_label: `最近 ${days} 天`,
+            data_source_label: "聚水潭经营口径",
+            last_sync_at: finishedAt, updated_at: finishedAt,
+          }, { onConflict: "metric_key" });
+        }
+
+        return respJson({ ok: true, run_id: runId, summary_updated: summaryUpdated, message: msg, precheck, ...result });
+      } catch (e: any) {
+        const finishedAt = new Date().toISOString();
+        const errMsg = String(e?.message ?? e);
+        await admin.from("jst_sync_runs").update({
+          status: "error", finished_at: finishedAt, duration_ms: Date.now() - t0,
+          error_message: errMsg, current_total_summary: "同步失败",
+        }).eq("id", runId);
         await admin.from("jst_sync_errors").insert({
-          module_key: "sales_refund", error_level: "warn", status: "open",
-          error_message: `店铺映射未完成治理,允许保存原始数据但不更新正式销售汇总:${precheck.summary}`,
+          module_key: "sales_refund", error_level: "error",
+          error_message: errMsg, status: "open",
         });
-        return respJson({ ok: false, blocked: true, reason: "shop_mapping_not_ready", detail: precheck }, 200);
+        return respJson({ ok: false, run_id: runId, error: errMsg }, 200);
       }
-      return respJson({ error: "sales_refund 真实同步尚未接入,请先完成店铺映射治理" }, 400);
     }
 
     if (moduleKey !== "base_archive") {
