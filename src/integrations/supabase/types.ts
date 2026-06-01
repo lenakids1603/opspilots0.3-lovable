@@ -1536,6 +1536,9 @@ export type Database = {
           id: string
           jst_supplier_id: string | null
           last_synced_at: string | null
+          manual_address: string
+          manual_contact_name: string
+          manual_contact_phone: string
           name: string
           owner_user_id: string | null
           phone: string | null
@@ -1559,6 +1562,9 @@ export type Database = {
           id?: string
           jst_supplier_id?: string | null
           last_synced_at?: string | null
+          manual_address?: string
+          manual_contact_name?: string
+          manual_contact_phone?: string
           name: string
           owner_user_id?: string | null
           phone?: string | null
@@ -1582,6 +1588,9 @@ export type Database = {
           id?: string
           jst_supplier_id?: string | null
           last_synced_at?: string | null
+          manual_address?: string
+          manual_contact_name?: string
+          manual_contact_phone?: string
           name?: string
           owner_user_id?: string | null
           phone?: string | null
