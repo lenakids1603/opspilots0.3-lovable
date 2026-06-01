@@ -724,9 +724,13 @@ export default function JstDataIntegrationPage() {
                             <TableCell><StatusBadge value={s} /></TableCell>
                             <TableCell className="text-xs text-muted-foreground max-w-[260px]">{m.last_result_summary}</TableCell>
                             <TableCell className="text-right space-x-2">
-                              <Button variant="ghost" size="sm" onClick={() => triggerRun.mutate({ module_key: m.module_key, trigger_type: s === "error" ? "retry" : "manual", label: `${s === "error" ? "重试" : "同步"} ${m.module_name}` })}>
-                                {s === "error" ? "重试" : "同步"}
-                              </Button>
+                              {isRealModuleKey(m.module_key) ? (
+                                <Button variant="ghost" size="sm" onClick={() => retryAbnormalModule(m.module_key, `${s === "error" ? "重试" : "同步"} ${m.module_name}`)}>
+                                  {s === "error" ? "重试" : "同步"}
+                                </Button>
+                              ) : (
+                                <Button variant="ghost" size="sm" disabled title="该模块暂未接入真实同步">暂未接入</Button>
+                              )}
                               <Button variant="ghost" size="sm">日志</Button>
                               <Button variant="ghost" size="sm">查看异常</Button>
                             </TableCell>
