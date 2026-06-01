@@ -576,7 +576,7 @@ function ShopsTab() {
     setLoading(false);
     if (error) { toast({ title: "加载失败", description: error.message, variant: "destructive" }); return; }
     setRows(data ?? []); setTotal(count ?? 0);
-  }, [q, pf, ent, stf, bindState, page, pageSize]);
+  }, [q, pf, ent, stf, bindState, page, pageSize, sortKey, sortAsc]);
   useEffect(() => { load(); }, [load]);
 
   const entityMap = useMemo(() => new Map(entities.map(e => [e.id, e])), [entities]);
