@@ -158,7 +158,9 @@ export default function SupplierAccountsPage() {
   };
 
   const loadSuppliers = async () => {
-    const { data } = await supabase.from("ops_suppliers").select("id, name").order("name");
+    // 仅展示人工已确认的有效供应商，避免污染账号绑定。
+    const { data } = await supabase.from("ops_suppliers").select("id, name")
+      .eq("confirm_status", "confirmed").order("name");
     setSuppliers((data as any) ?? []);
   };
 
