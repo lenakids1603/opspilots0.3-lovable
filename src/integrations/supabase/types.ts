@@ -736,6 +736,45 @@ export type Database = {
         }
         Relationships: []
       }
+      jst_warehouses: {
+        Row: {
+          created_at: string
+          id: string
+          jst_wms_co_id: string
+          last_synced_at: string | null
+          name: string
+          raw_jst_json: Json | null
+          remark: string
+          status: string
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          jst_wms_co_id: string
+          last_synced_at?: string | null
+          name?: string
+          raw_jst_json?: Json | null
+          remark?: string
+          status?: string
+          type?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          jst_wms_co_id?: string
+          last_synced_at?: string | null
+          name?: string
+          raw_jst_json?: Json | null
+          remark?: string
+          status?: string
+          type?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ops_arrival_items: {
         Row: {
           arrival_id: string
