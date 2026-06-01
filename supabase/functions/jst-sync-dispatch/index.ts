@@ -360,9 +360,36 @@ async function syncSuppliers() {
     const diag = await callOpenwebDiagnostic(SUPPLIERS_ENDPOINT, bizParams);
     const code = diag.json?.code ?? diag.json?.errCode;
     const isOk = code === 0 || code === "0" || diag.json?.issuccess === true;
+    // NOTE: diag.json is masked (arrays truncated to 3 by maskSensitive).
+    // Use diag.list (unmasked, already-detected by detectListPayload which prefers data.datas) for actual records.
+    // Scalar pagination fields survive masking, so we can still read them from diag.json.
     const dataNode = diag.json?.data ?? diag.json ?? {};
-    const detected = detectSupplierList(dataNode);
-    const firstSample = page === 1 && detected.list[0] ? maskSensitive(detected.list[0]) : undefined;
+    const list: any[] = Array.isArray(diag.list) ? diag.list : [];
+    const detectedPath = diag.diagnostics?.detected_list_path || "";
+    const candidates = diag.diagnostics?.candidate_list_paths || [];
+    const pagination = {
+      page_index: dataNode.page_index ?? null,
+      page_size: dataNode.page_size ?? null,
+      page_count: dataNode.page_count ?? null,
+      data_count: dataNode.data_count ?? null,
+      has_next: dataNode.has_next ?? null,
+    };
+    // Sanity check: if pagination.data_count >> detected count and a deeper data.* candidate exists,
+    // prefer it. (Defense-in-depth — diag.list normally already handles this.)
+    let finalList = list;
+    let finalPath = detectedPath;
+    const dataCount = Number(pagination.data_count ?? 0);
+    if (dataCount > finalList.length + 5 && Array.isArray(candidates)) {
+      const deep = candidates.find((c: any) => c?.is_array && typeof c.path === "string" && c.path.startsWith("data.") && (c.count ?? 0) > finalList.length);
+      if (deep) {
+        const v = getPath(diag.json, deep.path);
+        if (Array.isArray(v) && v.length > finalList.length) {
+          finalList = v;
+          finalPath = deep.path;
+        }
+      }
+    }
+    const firstSample = page === 1 && finalList[0] ? maskSensitive(finalList[0]) : undefined;
     diagnostics.push({
       page,
       request_endpoint: `/open/${SUPPLIERS_ENDPOINT}`,
@@ -372,17 +399,11 @@ async function syncSuppliers() {
       response_msg: diag.json?.msg ?? diag.json?.message ?? "",
       response_root_keys: keysOf(diag.json),
       response_data_keys: keysOf(dataNode),
-      detected_list_path: detected.path,
-      detected_record_count: detected.list.length,
-      pagination: {
-        page_index: dataNode.page_index ?? null,
-        page_size: dataNode.page_size ?? null,
-        page_count: dataNode.page_count ?? null,
-        data_count: dataNode.data_count ?? null,
-        has_next: dataNode.has_next ?? null,
-      },
+      detected_list_path: finalPath,
+      detected_record_count: finalList.length,
+      pagination,
       ...(firstSample !== undefined ? { first_record_sample: firstSample } : {}),
-      ...(page === 1 ? { list_path_candidates: detected.candidates } : {}),
+      ...(page === 1 ? { list_path_candidates: candidates } : {}),
     });
     if (!isOk) {
       const msg = diag.json?.msg ?? diag.json?.message ?? "";
@@ -390,11 +411,10 @@ async function syncSuppliers() {
       (err as any).diagnostics = diagnostics;
       throw err;
     }
-    const list = detected.list;
-    apiTotal += list.length;
-    if (list.length === 0) break;
+    apiTotal += finalList.length;
+    if (finalList.length === 0) break;
 
-    for (const r of list) {
+    for (const r of finalList) {
       const jstId = pickStr(r.supplier_id, r.supplierId, r.supplier_co_id, r.co_id, r.id);
       const name = pickStr(r.name, r.supplier_name, r.co_name, r.full_name);
       const supplierCode = pickStr(r.supplier_code, r.code, r.co_code);
@@ -475,11 +495,10 @@ async function syncSuppliers() {
       });
     }
 
-    const hasNext = dataNode.has_next === true || dataNode.has_next === "true";
-    const pageCount = Number(dataNode.page_count ?? 0);
-    if (!hasNext && (pageCount === 0 || page >= pageCount) && list.length < PAGE_SIZE) break;
-    if (!hasNext && pageCount > 0 && page >= pageCount) break;
-    if (list.length < PAGE_SIZE && !hasNext) break;
+    const hasNext = pagination.has_next === true || pagination.has_next === "true";
+    const pageCount = Number(pagination.page_count ?? 0);
+    // 结束条件：has_next=false 且（无 page_count 或已到末页）
+    if (!hasNext && (pageCount === 0 || page >= pageCount)) break;
     page++;
     await sleep(RATE_DELAY_MS);
   }
@@ -499,9 +518,10 @@ async function syncSuppliers() {
 }
 
 function detectSupplierList(raw: any) {
+  // Prefer deeper data.* paths first (聚水潭 v2 标准结构是 data.datas)
   const paths = [
-    "datas", "list", "suppliers", "channels", "items", "rows", "data",
-    "data.datas", "data.list", "data.suppliers", "data.channels", "data.items", "data.rows",
+    "data.datas", "data.list", "data.suppliers", "data.channels", "data.rows", "data.items",
+    "datas", "list", "suppliers", "channels", "rows", "items", "data",
   ];
   const candidates = paths.map((path) => {
     const value = getPath(raw, path);
