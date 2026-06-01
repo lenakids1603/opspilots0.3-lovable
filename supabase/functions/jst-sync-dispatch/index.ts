@@ -495,11 +495,10 @@ async function syncSuppliers() {
       });
     }
 
-    const hasNext = dataNode.has_next === true || dataNode.has_next === "true";
-    const pageCount = Number(dataNode.page_count ?? 0);
-    if (!hasNext && (pageCount === 0 || page >= pageCount) && list.length < PAGE_SIZE) break;
-    if (!hasNext && pageCount > 0 && page >= pageCount) break;
-    if (list.length < PAGE_SIZE && !hasNext) break;
+    const hasNext = pagination.has_next === true || pagination.has_next === "true";
+    const pageCount = Number(pagination.page_count ?? 0);
+    // 结束条件：has_next=false 且（无 page_count 或已到末页）
+    if (!hasNext && (pageCount === 0 || page >= pageCount)) break;
     page++;
     await sleep(RATE_DELAY_MS);
   }
