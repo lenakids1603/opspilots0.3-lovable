@@ -250,7 +250,7 @@ function EntitiesTab() {
       .order("created_at", { ascending: false });
     const qq = q.trim();
     if (qq) qry = qry.or(`name.ilike.%${qq}%,legal_person.ilike.%${qq}%,code.ilike.%${qq}%`);
-    if (typeFilter) qry = qry.eq("entity_type", typeFilter);
+    if (typeFilter) qry = qry.eq("entity_type", typeFilter as "individual" | "company");
     if (statusFilter) qry = qry.eq("status", statusFilter);
     const from = (page - 1) * pageSize;
     const { data, count, error } = await qry.range(from, from + pageSize - 1);
