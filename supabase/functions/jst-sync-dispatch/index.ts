@@ -1005,7 +1005,7 @@ Deno.serve(async (req) => {
     const runId = runRow.id;
 
     // 子任务隔离执行：单个失败不影响其它子任务，最终聚合状态
-    const subResults: Record<string, { status: "ok" | "error" | "skipped"; summary: string; inserted: number; updated: number; error?: string }> = {
+    const subResults: Record<string, { status: "ok" | "error" | "skipped"; summary: string; inserted: number; updated: number; error?: string; extra?: any }> = {
       shops: { status: "skipped", summary: "未执行", inserted: 0, updated: 0 },
       suppliers: { status: "skipped", summary: "未执行", inserted: 0, updated: 0 },
       warehouses: { status: "skipped", summary: "未执行", inserted: 0, updated: 0 },
