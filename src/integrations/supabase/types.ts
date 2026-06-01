@@ -1154,7 +1154,7 @@ export type Database = {
         | "approved"
         | "rejected"
         | "reimbursed"
-      ops_account_type: "internal" | "supplier"
+      ops_account_type: "internal" | "supplier" | "pending"
       ops_role_code: "admin" | "ops" | "finance" | "warehouse" | "supplier"
       user_type: "internal" | "supplier"
     }
@@ -1294,7 +1294,7 @@ export const Constants = {
         "rejected",
         "reimbursed",
       ],
-      ops_account_type: ["internal", "supplier"],
+      ops_account_type: ["internal", "supplier", "pending"],
       ops_role_code: ["admin", "ops", "finance", "warehouse", "supplier"],
       user_type: ["internal", "supplier"],
     },
