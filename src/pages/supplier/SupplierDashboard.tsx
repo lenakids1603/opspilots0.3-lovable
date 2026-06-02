@@ -661,7 +661,7 @@ export default function SupplierDashboard() {
       <Card className="p-5">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <h3 className="text-sm font-semibold flex items-center gap-2">
-            <span className="w-1 h-4 bg-emerald-500 rounded" /> 待交付商品明细
+            <span className="w-1 h-4 bg-emerald-500 rounded" /> 7天内急需交货
             {selectedYmd && (
               <Badge variant="outline" className="text-[11px]">交付日 = {selectedYmd}</Badge>
             )}
