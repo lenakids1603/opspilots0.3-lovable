@@ -21,7 +21,9 @@ type CheckResult = {
   hint?: string;
   diagnostics?: Record<string, unknown>;
   sanitized_response?: unknown;
+  transport_failed?: boolean;
 };
+
 
 const REQUIRED = ["JST_APP_KEY", "JST_APP_SECRET"];
 const OPTIONAL = ["JST_ACCESS_TOKEN", "JST_REFRESH_TOKEN", "JST_PROXY_URL", "JST_PROXY_USER", "JST_PROXY_PASS"];
