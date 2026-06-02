@@ -61,10 +61,13 @@ const IGNORE_PRESETS = ["历史废弃店铺", "店铺已关闭", "个体户已�
 export function ShopMappingsCard() {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [bindTarget, setBindTarget] = useState<Mapping | null>(null);
   const [ignoreTarget, setIgnoreTarget] = useState<Mapping | null>(null);
   const [auditTarget, setAuditTarget] = useState<Mapping | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchIgnoreOpen, setBatchIgnoreOpen] = useState(false);
 
   const mappingsQ = useQuery({
     queryKey: ["jst_shop_mappings"],
@@ -80,7 +83,7 @@ export function ShopMappingsCard() {
     queryKey: ["shops_for_mapping"],
     queryFn: async () => {
       const { data, error } = await supabase.from("shops")
-        .select("id, name, external_shop_id").is("deleted_at", null).order("name");
+        .select("id, name, external_shop_id, status, is_ignored, entity_id, platform_id").is("deleted_at", null).order("name");
       if (error) throw error;
       return data ?? [];
     },
