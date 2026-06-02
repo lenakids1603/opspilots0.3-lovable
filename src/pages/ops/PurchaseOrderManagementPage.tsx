@@ -16,7 +16,8 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
-import { Search, Inbox } from "lucide-react";
+import { Search, Inbox, ArrowUp, ArrowDown, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
 
