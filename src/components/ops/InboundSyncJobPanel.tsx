@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "@/hooks/use-toast";
 import { RefreshCw, PlayCircle, XCircle, Activity } from "lucide-react";
+
+const STALE_RUNNING_MS = 2 * 60_000;
 
 const fmtInt = (n: any) => (n == null ? "-" : Number(n).toLocaleString("zh-CN"));
 const fmtDT = (s: any) => {
@@ -23,6 +26,7 @@ const STATUS_COLOR: Record<string, string> = {
   stalled: "bg-amber-100 text-amber-700",
   failed: "bg-rose-100 text-rose-700",
   cancelled: "bg-slate-100 text-slate-700",
+  waiting_next_tick: "bg-blue-100 text-blue-700",
 };
 
 interface Props {
