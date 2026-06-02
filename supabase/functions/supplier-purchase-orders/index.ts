@@ -116,6 +116,7 @@ Deno.serve(async (req) => {
         { count: "exact" },
       )
       .order("po_date", { ascending: false })
+      .not("status", "in", "(Delete,delete,Deleted,deleted,已删除)")
       .range((page - 1) * pageSize, page * pageSize - 1);
     if (startDate) q = q.gte("po_date", startDate);
     if (endDate) q = q.lte("po_date", endDate);
