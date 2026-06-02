@@ -376,7 +376,6 @@ function POTable({ rows, onDetail }: { rows: OrderRow[]; expanded?: string | nul
               <SortTh<OrderRow> k="total_received_qty" currentKey={sortKey} dir={sortDir} onSort={onSort} className="text-right">已入库</SortTh>
               <SortTh<OrderRow> k="total_unreceived_qty" currentKey={sortKey} dir={sortDir} onSort={onSort} className="text-right">未入库</SortTh>
               <SortTh<OrderRow> k="total_amount" currentKey={sortKey} dir={sortDir} onSort={onSort} className="text-right">采购金额</SortTh>
-              {hasExpected && <SortTh<OrderRow> k="expected_delivery_date" currentKey={sortKey} dir={sortDir} onSort={onSort}>预计交期</SortTh>}
               {hasLatest && <SortTh<OrderRow> k="latest_receipt_at" currentKey={sortKey} dir={sortDir} onSort={onSort}>最近入库</SortTh>}
               <Th className="min-w-[160px]">入仓进度</Th>
               <SortTh<OrderRow> k="expected_delivery_date" currentKey={sortKey} dir={sortDir} onSort={onSort}>协议到货日期</SortTh>
