@@ -25,6 +25,7 @@ const fmtMoney = (n: number | null | undefined) => "¥" + (Number(n ?? 0)).toLoc
 import { formatDateCN, formatDateTimeCN, beijingDayRangeToUTC, beijingYMD } from "@/lib/datetime";
 const fmtDate = (d?: string | null) => formatDateCN(d);
 const fmtDateTime = (d?: string | null) => formatDateTimeCN(d);
+const fmtDateTimeMin = (d?: string | null) => formatDateTimeCN(d, { withSeconds: false });
 
 const WAREHOUSE_STATUS_LABEL: Record<string, string> = {
   not_received: "未入库",
