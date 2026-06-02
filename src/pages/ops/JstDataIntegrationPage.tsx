@@ -1091,9 +1091,15 @@ export default function JstDataIntegrationPage() {
                       没有匹配的日志
                     </TableCell>
                   </TableRow>
-                ) : filteredLogs.map((l) => {
+                ) : filteredLogs.map((l: any) => {
+                  const isPurchase = l._source === "purchase_log";
                   const mod = modules.find((m) => m.module_key === l.module_key);
-                  const groupLabel = mod ? (CATEGORY_LABEL[mod.category] ?? mod.category) : "—";
+                  const groupLabel = isPurchase
+                    ? CATEGORY_LABEL.purchase
+                    : (mod ? (CATEGORY_LABEL[mod.category] ?? mod.category) : "—");
+                  const moduleName = isPurchase
+                    ? (l.module_key === "purchase_orders" ? "采购单" : l.module_key === "purchase_receipts" ? "采购入库单" : "采购与入库")
+                    : (mod?.module_name ?? l.module_key);
                   const s = asStatus(l.status === "running" ? "ok" : l.status);
                   return (
                     <TableRow key={l.id}>
@@ -1102,22 +1108,24 @@ export default function JstDataIntegrationPage() {
                         <Badge variant="outline" className="font-normal">{TRIGGER_LABEL[l.trigger_type] ?? l.trigger_type}</Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground">{groupLabel}</TableCell>
-                      <TableCell>{mod?.module_name ?? l.module_key}</TableCell>
+                      <TableCell>{moduleName}</TableCell>
                       <TableCell>
                         {l.status === "running"
                           ? <Badge variant="secondary" className="bg-sky-100 text-sky-700">运行中</Badge>
                           : <StatusBadge value={s} />}
                       </TableCell>
-                      <TableCell className="text-xs">{l.inserted_count}</TableCell>
-                      <TableCell className="text-xs">{l.updated_count}</TableCell>
-                      <TableCell className={`text-xs ${l.failed_count > 0 ? "text-rose-600" : ""}`}>{l.failed_count}</TableCell>
+                      <TableCell className="text-xs">{l.inserted_count ?? 0}</TableCell>
+                      <TableCell className="text-xs">{l.updated_count ?? 0}</TableCell>
+                      <TableCell className={`text-xs ${(l.failed_count ?? 0) > 0 ? "text-rose-600" : ""}`}>{l.failed_count ?? 0}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{l.current_total_summary || "—"}</TableCell>
                       <TableCell className="text-xs">{fmtDuration(l.duration_ms)}</TableCell>
                       <TableCell className="text-xs text-rose-600 max-w-[200px] truncate" title={l.error_message ?? ""}>
                         {l.error_message || "-"}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="sm">{l.status === "error" ? "重试" : "详情"}</Button>
+                        <Button variant="ghost" size="sm" onClick={() => setDetailLog(l)}>
+                          详情
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );
