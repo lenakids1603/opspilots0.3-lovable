@@ -289,7 +289,7 @@ const ZONE_STYLE: Record<Zone, { fill: string; text: string; soft: string }> = {
   future: { fill: "bg-emerald-500", text: "text-white", soft: "text-emerald-600" },
 };
 const CHEVRON_CLIP = "polygon(10px 0, 100% 0, calc(100% - 10px) 50%, 100% 100%, 10px 100%, 0 50%)";
-const MAX_STYLES = 4;
+const MAX_STYLES = 5;
 
 function Timeline({
   items, selectedYmd, onSelect, onShowAll,
