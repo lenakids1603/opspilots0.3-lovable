@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Store, Link2, AlertTriangle, History } from "lucide-react";
+import { Store, Link2, AlertTriangle, History, RefreshCw } from "lucide-react";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
@@ -115,6 +115,25 @@ export function ShopMappingsCard() {
     onError: (e: any) => toast({ title: "保存失败", description: e.message, variant: "destructive" }),
   });
 
+  const resyncMut = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await (supabase as any).rpc("jst_resync_shop_mappings_from_shops");
+      if (error) throw error;
+      return Array.isArray(data) ? data[0] : data;
+    },
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ["jst_shop_mappings"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_metrics"] });
+      toast({
+        title: "自动匹配完成",
+        description: `更新 ${res?.updated_count ?? 0} 条;已映射 ${res?.mapped_after ?? 0}/未映射 ${res?.unmapped_after ?? 0}/已忽略 ${res?.ignored_after ?? 0}`,
+      });
+    },
+    onError: (e: any) => toast({ title: "自动匹配失败", description: e.message, variant: "destructive" }),
+  });
+
+
+
   const rows = mappingsQ.data ?? [];
 
   // 质量分析
@@ -150,10 +169,21 @@ export function ShopMappingsCard() {
               <Badge variant="secondary" className="bg-amber-100 text-amber-700">需处理</Badge>
             )}
           </div>
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button size="sm" variant="outline"><Link2 className="w-4 h-4 mr-1.5" /> 管理映射</Button>
-            </DialogTrigger>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={resyncMut.isPending}
+              onClick={() => resyncMut.mutate()}
+              title="根据财务店铺主表中的聚水潭店铺 ID,自动回填映射、主体、平台"
+            >
+              <RefreshCw className={`w-4 h-4 mr-1.5 ${resyncMut.isPending ? "animate-spin" : ""}`} />
+              根据财务店铺自动匹配
+            </Button>
+            <Dialog open={open} onOpenChange={setOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" variant="outline"><Link2 className="w-4 h-4 mr-1.5" /> 管理映射</Button>
+              </DialogTrigger>
             <DialogContent className="max-w-6xl">
               <DialogHeader>
                 <DialogTitle>聚水潭店铺映射</DialogTitle>
@@ -229,7 +259,8 @@ export function ShopMappingsCard() {
               </div>
               <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>关闭</Button></DialogFooter>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </div>
         </div>
 
         {/* 基础统计 */}
