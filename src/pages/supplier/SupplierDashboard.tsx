@@ -182,14 +182,16 @@ interface PendingItem {
   po_status: string;
   po_date: string | null;
 }
-// 拉取所有 unreceived>0 且 delivery_date <= 今天+7 的明细（涵盖未来 7 天 + 已延期）
+// 拉取 unreceived>0 且 delivery_date 在 [今天-5, 今天+7] 区间内的明细
 function usePendingItemsRaw() {
   return useQuery({
-    queryKey: ["dash_pending_raw_v2"],
+    queryKey: ["dash_pending_raw_v3"],
     queryFn: async (): Promise<PendingItem[]> => {
       const todayYmd = beijingYMD(new Date());
       const today = new Date(todayYmd + "T00:00:00+08:00");
+      const start = new Date(today); start.setDate(start.getDate() - 5);
       const end = new Date(today); end.setDate(end.getDate() + 7);
+      const gte = beijingDayRangeToUTC(beijingYMD(start))!.gte;
       const lte = beijingDayRangeToUTC(beijingYMD(end))!.lte;
       const { data, error } = await supabase.from("purchase_order_items")
         .select(`
@@ -199,6 +201,7 @@ function usePendingItemsRaw() {
         `)
         .gt("unreceived_qty", 0)
         .not("delivery_date", "is", null)
+        .gte("delivery_date", gte)
         .lte("delivery_date", lte)
         .not("purchase_orders.status", "in", EXCLUDED_IN)
         .limit(10000);
@@ -658,7 +661,7 @@ export default function SupplierDashboard() {
       <Card className="p-5">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <h3 className="text-sm font-semibold flex items-center gap-2">
-            <span className="w-1 h-4 bg-emerald-500 rounded" /> 待交付商品明细
+            <span className="w-1 h-4 bg-emerald-500 rounded" /> 7天内急需交货
             {selectedYmd && (
               <Badge variant="outline" className="text-[11px]">交付日 = {selectedYmd}</Badge>
             )}
@@ -697,7 +700,7 @@ export default function SupplierDashboard() {
                 <tr><td colSpan={10} className="py-10 text-center text-rose-600">读取失败：{(pendingQ.error as any).message}</td></tr>
               ) : pageRows.length === 0 ? (
                 <tr><td colSpan={10} className="py-12 text-center text-muted-foreground">
-                  <Inbox className="w-6 h-6 inline mr-2 opacity-50" />未来 7 天暂无待交付款式
+                  <Inbox className="w-6 h-6 inline mr-2 opacity-50" />过去 5 天至未来 7 天暂无待交付款式
                 </td></tr>
               ) : pageRows.map((r) => {
                 const st = r.status;
