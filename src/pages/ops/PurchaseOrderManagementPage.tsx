@@ -468,7 +468,6 @@ export default function PurchaseOrderManagementPage() {
                     <SortHead<PoSortKey> k="total_received_qty" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">已入库</SortHead>
                     <SortHead<PoSortKey> k="total_unreceived_qty" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">未入库</SortHead>
                     <SortHead<PoSortKey> k="total_amount" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">采购金额</SortHead>
-                    <SortHead<PoSortKey> k="updated_at" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>最近同步</SortHead>
                     <SortHead<PoSortKey> k="warehouse_status" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>入库状态</SortHead>
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
