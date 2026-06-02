@@ -138,18 +138,35 @@ function useShopMappingCounts() {
 }
 function useSupplierCounts() {
   return useQuery({
-    queryKey: ["ops_suppliers", "counts"],
+    queryKey: ["jst_suppliers_raw", "counts"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("ops_suppliers").select("is_enabled, updated_at");
+      // 聚水潭侧识别到的供应商（jst_suppliers_raw），用于检查与内部 ops_suppliers 的绑定情况
+      const { data, error } = await (supabase as any)
+        .from("jst_suppliers_raw")
+        .select("matched_ops_supplier_id, skip_reason, last_sync_at, updated_at");
       if (error) throw error;
       const rows = (data ?? []) as any[];
-      const enabled = rows.filter((r) => r.is_enabled).length;
-      const disabled = rows.length - enabled;
-      const lastSync = rows.reduce<string | null>((m, r) => (!m || (r.updated_at && r.updated_at > m)) ? r.updated_at : m, null);
-      return { total: rows.length, enabled, disabled, lastSync };
+      const total = rows.length;
+      const ignored = rows.filter((r) => r.skip_reason && String(r.skip_reason).trim().length > 0).length;
+      const active = rows.filter((r) => !(r.skip_reason && String(r.skip_reason).trim().length > 0));
+      const matched = active.filter((r) => !!r.matched_ops_supplier_id).length;
+      const pending = active.length - matched;
+      const lastSync = rows.reduce<string | null>(
+        (m, r) => {
+          const t = r.last_sync_at ?? r.updated_at;
+          return !m || (t && t > m) ? t : m;
+        },
+        null,
+      );
+      // 同时获取内部 ERP 档案总数，仅用于对照展示
+      const { count: opsTotal } = await supabase
+        .from("ops_suppliers")
+        .select("id", { count: "exact", head: true });
+      return { total, matched, pending, ignored, lastSync, opsTotal: opsTotal ?? 0 };
     },
   });
 }
+
 function useWarehouseCounts() {
   return useQuery({
     queryKey: ["jst_warehouses", "counts"],
@@ -635,13 +652,19 @@ export default function JstDataIntegrationPage() {
                 <ModuleCard
                   icon={<Users className="w-4 h-4 text-muted-foreground" />}
                   title="供应商资料"
-                  statusDot="ok" statusLabel="正常" statusTone="ok"
+                  statusDot={supplier && supplier.pending > 0 ? "warn" : "ok"}
+                  statusLabel={supplier && supplier.pending > 0 ? "待处理" : "正常"}
+                  statusTone={supplier && supplier.pending > 0 ? "warn" : "ok"}
                   rows={[
-                    { label: "聚水潭原始供应商", value: fmtNum(supplier?.total ?? baseExtra.suppliers) },
-                    { label: "ERP 已启用", value: fmtNum(supplier?.enabled) },
-                    { label: "ERP 已禁用", value: fmtNum(supplier?.disabled) },
+                    { label: "聚水潭识别供应商总数", value: fmtNum(supplier?.total ?? baseExtra.suppliers) },
+                    { label: "已匹配（已绑定 ERP 档案）", value: fmtNum(supplier?.matched) },
+                    { label: "待处理（未绑定）", value: fmtNum(supplier?.pending), valueTone: supplier && supplier.pending > 0 ? "destructive" : "default" },
+                    { label: "已忽略", value: fmtNum(supplier?.ignored) },
+                    { label: "内部 ERP 档案总数（对照）", value: fmtNum(supplier?.opsTotal) },
                     { label: "最近同步时间", value: fmtTime(supplier?.lastSync) },
                   ]}
+                  footer="这里显示的是聚水潭采购/入库数据中识别到的供应商，并用于绑定到系统内部供应商档案。内部供应商档案已有数据，并不代表聚水潭供应商映射已经完成。"
+
                   actions={
                     <>
                       <Button size="sm" disabled={triggerRun.isPending}
