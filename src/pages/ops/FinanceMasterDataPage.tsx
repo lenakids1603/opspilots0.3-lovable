@@ -45,6 +45,14 @@ export default function FinanceMasterDataPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={downloadTemplate}><Download className="w-4 h-4 mr-1.5" />下载模板</Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-1.5" />导出</Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={async () => { try { await exportAllMasterData(); toast({ title: "已导出全部基础资料" }); } catch (e: any) { toast({ title: "导出失败", description: String(e?.message ?? e), variant: "destructive" }); } }}>导出全部基础资料</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}><Upload className="w-4 h-4 mr-1.5" />导入表格</Button>
         </div>
       </div>
