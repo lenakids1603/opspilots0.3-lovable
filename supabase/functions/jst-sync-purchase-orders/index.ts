@@ -1431,7 +1431,8 @@ async function tickInboundJob(jobId: string) {
     const winTo = new Date(win.to);
 
     try {
-      const result = await processInboundPage({
+      const pageProcessor = job.sync_type === "purchase_orders" ? processPurchasePage : processInboundPage;
+      const result = await pageProcessor({
         job, windowIndex, windowFrom: winFrom, windowTo: winTo, pageIndex,
       });
       pagesThisRun++;
