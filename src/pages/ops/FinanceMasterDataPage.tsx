@@ -538,7 +538,7 @@ function BanksTab() {
 
 /* ============================== 店铺 ============================== */
 
-function ShopsTab() {
+function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
   const [rows, setRows] = useState<AnyRow[]>([]);
   const [total, setTotal] = useState(0);
   const [entities, setEntities] = useState<AnyRow[]>([]);
@@ -549,7 +549,7 @@ function ShopsTab() {
   const [pf, setPf] = useState("");
   const [ent, setEnt] = useState("");
   const [stf, setStf] = useState("");
-  const [bindState, setBindState] = useState("");
+  const [bindState, setBindState] = useState(initialFilter || "");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [sortKey, setSortKey] = useState<string>("jst_shop_id");
