@@ -598,7 +598,7 @@ async function syncPurchaseOrdersSegment(
             supplier_id: supplierId,
             jst_supplier_id: po.supplier_id ? String(po.supplier_id) : null,
             supplier_name: po.seller ?? po.supplier_name ?? "",
-            po_date: po.po_date ? new Date(po.po_date).toISOString() : null,
+            po_date: parseJstBeijingDateTime(po.po_date),
             status: po.status ?? "", status_label: po.status ?? "",
             raw_receive_status: po.receive_status ?? "",
             remark: po.remark ?? "",
