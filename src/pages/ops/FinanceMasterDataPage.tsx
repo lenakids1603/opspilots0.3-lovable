@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,7 +30,10 @@ const PAGE_SIZES = [20, 50, 100];
 export default function FinanceMasterDataPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [importOpen, setImportOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
   const triggerRefresh = () => setRefreshKey(k => k + 1);
+  const tab = searchParams.get("tab") ?? "entities";
+  const filter = searchParams.get("filter") ?? "";
 
   return (
     <div className="space-y-5">
@@ -44,7 +48,7 @@ export default function FinanceMasterDataPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="entities">
+      <Tabs value={tab} onValueChange={(v) => { const sp = new URLSearchParams(searchParams); sp.set("tab", v); setSearchParams(sp); }}>
         <TabsList>
           <TabsTrigger value="entities">经营主体</TabsTrigger>
           <TabsTrigger value="banks">银行账户</TabsTrigger>
@@ -54,9 +58,10 @@ export default function FinanceMasterDataPage() {
 
         <TabsContent value="entities"><EntitiesTab key={`e${refreshKey}`} /></TabsContent>
         <TabsContent value="banks"><BanksTab key={`b${refreshKey}`} /></TabsContent>
-        <TabsContent value="shops"><ShopsTab key={`s${refreshKey}`} /></TabsContent>
+        <TabsContent value="shops"><ShopsTab key={`s${refreshKey}-${filter}`} initialFilter={filter} /></TabsContent>
         <TabsContent value="categories"><CategoriesTab key={`c${refreshKey}`} /></TabsContent>
       </Tabs>
+
 
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} onImported={triggerRefresh} />
     </div>
@@ -533,7 +538,7 @@ function BanksTab() {
 
 /* ============================== 店铺 ============================== */
 
-function ShopsTab() {
+function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
   const [rows, setRows] = useState<AnyRow[]>([]);
   const [total, setTotal] = useState(0);
   const [entities, setEntities] = useState<AnyRow[]>([]);
@@ -544,7 +549,7 @@ function ShopsTab() {
   const [pf, setPf] = useState("");
   const [ent, setEnt] = useState("");
   const [stf, setStf] = useState("");
-  const [bindState, setBindState] = useState("");
+  const [bindState, setBindState] = useState(initialFilter || "");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [sortKey, setSortKey] = useState<string>("jst_shop_id");
@@ -570,7 +575,8 @@ function ShopsTab() {
     if (ent) qry = qry.eq("entity_id", ent);
     if (stf) qry = qry.eq("status", stf);
     if (bindState === "bound") qry = qry.not("entity_id", "is", null);
-    else if (bindState === "unbound") qry = qry.is("entity_id", null);
+    else if (bindState === "unbound" || bindState === "missing_entity") qry = qry.is("entity_id", null);
+    else if (bindState === "missing_platform") qry = qry.is("platform_id", null);
     const from = (page - 1) * pageSize;
     const { data, count, error } = await qry.range(from, from + pageSize - 1);
     setLoading(false);
@@ -630,6 +636,8 @@ function ShopsTab() {
           <option value="">全部绑定状态</option>
           <option value="bound">已绑定主体</option>
           <option value="unbound">未绑定主体</option>
+          <option value="missing_entity">缺主体（待补）</option>
+          <option value="missing_platform">缺平台（待补）</option>
         </select>
         <select value={stf} onChange={e => setStf(e.target.value)} className="h-9 rounded-md border px-2 text-[13px]">
           <option value="">全部状态</option><option value="active">运营中</option><option value="disabled">停用</option>
