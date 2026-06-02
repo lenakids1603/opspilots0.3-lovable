@@ -15,11 +15,12 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
-import { Search, RefreshCw, Download, Activity, FileJson, PlayCircle, XCircle } from "lucide-react";
+import { Search, Download, Activity, FileJson } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import {
   formatDateCN, formatDateTimeCN, beijingDayRangeToUTC, todayCN, beijingYMD,
 } from "@/lib/datetime";
+import { InboundSyncJobPanel } from "@/components/ops/InboundSyncJobPanel";
 
 const PAGE_SIZE = 20;
 const fmtMoney = (n: number | null | undefined) =>
@@ -275,107 +276,8 @@ export default function InboundOrdersPage() {
   });
   const diag = useDiagnostics();
 
-  // ===== 断点续跑任务状态 =====
-  const [jobId, setJobId] = useState<string | null>(null);
+  // ===== 断点续跑任务由 InboundSyncJobPanel 统一管理 =====
 
-  // 启动新任务
-  const startMut = useMutation({
-    mutationFn: async (days: number) => {
-      const { data, error } = await supabase.functions.invoke("jst-sync-purchase-orders", {
-        body: { action: "start_inbound_job", days, requested_range: days <= 1 ? "1d" : days <= 7 ? "7d" : "30d" },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.ok === false) throw new Error(data?.error ?? "启动失败");
-      return data as { job_id: string; total_windows: number };
-    },
-    onSuccess: (d) => {
-      setJobId(d.job_id);
-      toast({
-        title: "已创建入库单同步任务",
-        description: `自动拆分为 ${d.total_windows} 个 ≤3 天窗口,每次最多处理 3 页;任务在后台分批执行,进度自动刷新。`,
-      });
-    },
-    onError: (e: any) => toast({ title: "启动同步失败", description: e.message, variant: "destructive" }),
-  });
-
-  // 继续 / 触发下一段
-  const tickMut = useMutation({
-    mutationFn: async (id: string) => {
-      const { data, error } = await supabase.functions.invoke("jst-sync-purchase-orders", {
-        body: { action: "tick_inbound_job", job_id: id },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.ok === false) throw new Error(data?.error ?? "继续失败");
-      return data;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["inbound_job", jobId] });
-      qc.invalidateQueries({ queryKey: ["inbound_list"] });
-      qc.invalidateQueries({ queryKey: ["inbound_stats"] });
-    },
-    onError: (e: any) => toast({ title: "继续同步失败", description: e.message, variant: "destructive" }),
-  });
-
-  const cancelMut = useMutation({
-    mutationFn: async (id: string) => {
-      const { data, error } = await supabase.functions.invoke("jst-sync-purchase-orders", {
-        body: { action: "cancel_inbound_job", job_id: id },
-      });
-      if (error) throw new Error(error.message);
-      return data;
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["inbound_job", jobId] }),
-  });
-
-  // 轮询任务状态
-  const jobQ = useQuery({
-    queryKey: ["inbound_job", jobId],
-    enabled: !!jobId,
-    refetchInterval: (q) => {
-      const d: any = q.state.data;
-      if (!d) return 3000;
-      if (["success", "failed", "cancelled"].includes(d.status)) return false;
-      return 3000;
-    },
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("jst_sync_jobs").select("*").eq("id", jobId!).maybeSingle();
-      if (error) throw error;
-      return data;
-    },
-  });
-
-  // 任务为 partial 时自动 tick 推进
-  useMemo(() => {
-    const j: any = jobQ.data;
-    if (!j) return;
-    if (j.status === "partial" && !tickMut.isPending) {
-      tickMut.mutate(j.id);
-    }
-    if (j.status === "success" || j.status === "failed") {
-      qc.invalidateQueries({ queryKey: ["inbound_list"] });
-      qc.invalidateQueries({ queryKey: ["inbound_stats"] });
-      qc.invalidateQueries({ queryKey: ["inbound_diag"] });
-    }
-    return j.status;
-  }, [jobQ.data?.status, jobQ.data?.next_page_index]);
-
-  // 启动后查询是否已有未完成任务,优先恢复
-  const lastJobQ = useQuery({
-    queryKey: ["inbound_last_job"],
-    enabled: !jobId,
-    queryFn: async () => {
-      const { data } = await supabase.from("jst_sync_jobs")
-        .select("*").eq("sync_type", "purchase_inbound_orders")
-        .order("started_at", { ascending: false }).limit(1).maybeSingle();
-      return data;
-    },
-  });
-  useMemo(() => {
-    if (!jobId && lastJobQ.data && ["pending", "running", "partial", "stalled"].includes((lastJobQ.data as any).status)) {
-      setJobId((lastJobQ.data as any).id);
-    }
-  }, [lastJobQ.data, jobId]);
 
 
   const onSearch = () => { setPage(0); setFilters(draft); };
@@ -482,52 +384,21 @@ export default function InboundOrdersPage() {
           <Button size="sm" onClick={onSearch}><Search className="w-4 h-4 mr-1" />查询</Button>
           <Button size="sm" variant="outline" onClick={onReset}>重置</Button>
           <div className="flex-1" />
-          <Button size="sm" variant="outline" onClick={() => startMut.mutate(1)} disabled={startMut.isPending}>
-            <RefreshCw className={"w-4 h-4 mr-1 " + (startMut.isPending ? "animate-spin" : "")} />同步最近 1 天
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => startMut.mutate(7)} disabled={startMut.isPending}>同步最近 7 天</Button>
-          <Button size="sm" variant="outline" onClick={() => startMut.mutate(30)} disabled={startMut.isPending}>同步最近 30 天</Button>
           <Button size="sm" variant="outline" onClick={onExport}><Download className="w-4 h-4 mr-1" />导出</Button>
         </div>
-        {jobQ.data && (() => {
-          const j: any = jobQ.data;
-          const pct = j.total_windows > 0 ? Math.round(((j.current_window_index ?? 0) / j.total_windows) * 100) : 0;
-          const color =
-            j.status === "success" ? "bg-emerald-100 text-emerald-700" :
-            j.status === "partial" ? "bg-blue-100 text-blue-700" :
-            j.status === "running" ? "bg-blue-100 text-blue-700" :
-            j.status === "stalled" ? "bg-amber-100 text-amber-700" :
-            j.status === "failed" ? "bg-rose-100 text-rose-700" :
-            "bg-slate-100 text-slate-700";
-          return (
-            <div className="rounded border p-3 mt-2 space-y-1 text-xs bg-muted/30">
-              <div className="flex items-center gap-2">
-                <Badge className={color}>{j.status}</Badge>
-                <span className="font-medium">入库单同步任务</span>
-                <span className="text-muted-foreground">窗口 {(j.current_window_index ?? 0) + 1}/{j.total_windows} · 第 {j.current_page_index || j.next_page_index} 页 · 进度 {pct}%</span>
-                <div className="flex-1" />
-                {(j.status === "partial" || j.status === "stalled") && (
-                  <Button size="sm" variant="outline" onClick={() => tickMut.mutate(j.id)} disabled={tickMut.isPending}>
-                    <PlayCircle className="w-4 h-4 mr-1" />继续同步
-                  </Button>
-                )}
-                {(["pending", "running", "partial", "stalled"].includes(j.status)) && (
-                  <Button size="sm" variant="ghost" onClick={() => cancelMut.mutate(j.id)}>
-                    <XCircle className="w-4 h-4 mr-1" />取消
-                  </Button>
-                )}
-                <Button size="sm" variant="ghost" onClick={() => setJobId(null)}>关闭</Button>
-              </div>
-              <div className="text-muted-foreground">
-                API 累计 {fmtInt(j.total_api_count)} · 主表 upsert {fmtInt(j.total_order_upserted)} · 明细 upsert {fmtInt(j.total_item_upserted)} · 失败 {fmtInt(j.total_failed)}
-              </div>
-              <div className="text-muted-foreground">当前窗口: {formatDateTimeCN(j.current_window_from)} → {formatDateTimeCN(j.current_window_to)}</div>
-              <div className="whitespace-pre-wrap break-all">{j.message}</div>
-              {j.error_detail && <div className="text-rose-600 whitespace-pre-wrap break-all">错误: {j.error_detail}</div>}
-            </div>
-          );
-        })()}
       </CardContent></Card>
+
+      {/* 入库同步任务面板（与数据中心共用同一组件） */}
+      <div className="mb-3">
+        <InboundSyncJobPanel
+          onJobFinished={() => {
+            qc.invalidateQueries({ queryKey: ["inbound_list"] });
+            qc.invalidateQueries({ queryKey: ["inbound_stats"] });
+            qc.invalidateQueries({ queryKey: ["inbound_diag"] });
+          }}
+        />
+      </div>
+
 
 
       {/* 列表 */}
