@@ -193,7 +193,8 @@ export function parseAccountWorkbook(file: ArrayBuffer, existing: ExistingContex
       const ownerRaw = norm(r["账户法定归属主体"] ?? r["所属主体"] ?? r["所属主体*"]);
       const relatedRaw = norm(r["关联主体"]);
       const personName = norm(r["关联人"] ?? r["关联人 / 持卡人"] ?? r["持卡人"]);
-      const usageRaw = norm(r["用途*"] ?? r["用途"] ?? r["账户用途"]) || "收款";
+      const usageRawIn = norm(r["用途*"] ?? r["用途"] ?? r["账户用途"]);
+      const usageRaw = usageRawIn || "其他";
       const balance = toNum(r["当前余额"]) ?? 0;
       const isDefault = YES_MAP.has(norm(r["是否默认"] ?? r["默认"]).toLowerCase());
       const statusRaw = norm(r["状态"] ?? r["状态(启用/停用)"]);
@@ -471,9 +472,9 @@ export function downloadTemplate() {
   ]), "经营主体");
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ["开户名*", "账户类型*", "开户银行*", "银行账号*", "账户法定归属主体", "关联主体", "关联人 / 持卡人", "用途*", "当前余额", "是否默认", "状态", "备注"],
-    ["杭州萧山独去闲贸易商行", "对公账户", "中国银行某支行", "6222000000000000", "杭州萧山独去闲贸易商行（个体工商户）", "", "", "收款", 0, "是", "启用", ""],
-    ["张三", "个人账户", "招商银行", "6222000000000001", "", "杭州萧山独去闲贸易商行（个体工商户）", "张三", "备用", 0, "否", "启用", ""],
+    ["开户名*", "账户类型*", "开户银行*", "银行账号*", "当前余额", "状态", "备注"],
+    ["杭州萧山独去闲贸易商行", "对公账户", "中国银行某支行", "6222000000000000", 0, "启用", "对公账户开户名通常等于经营主体名称"],
+    ["张三", "个人账户", "招商银行", "6222000000000001", 0, "启用", "个人账户开户名为持卡人"],
   ]), "银行账户");
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
@@ -539,15 +540,14 @@ export async function exportAllMasterData() {
     主体简称: e.code, 法人: e.legal_person, 年度流水额度: e.annual_flow_limit,
     状态: e.status === "active" ? "启用" : "停用", 备注: e.remark,
   }));
+  const bindCountByBank = new Map<string, number>();
+  bindings.forEach((b: any) => { if (b.status === "active") bindCountByBank.set(b.bank_account_id, (bindCountByBank.get(b.bank_account_id) ?? 0) + 1); });
   const bankRows = banks.filter((b: any) => !b.deleted_at).map((b: any) => ({
     开户名: b.account_holder_name || b.account_name,
     账户类型: ACCOUNT_TYPE_LABEL[b.account_type] ?? b.account_type,
     开户银行: b.bank_name, 银行账号: b.account_number || b.account_no_masked,
-    账户法定归属主体: entMap.get(b.owner_entity_id) ?? "",
-    关联主体: entMap.get(b.related_entity_id) ?? "",
-    关联人: b.related_person_name ?? "",
-    用途: USAGE_LABEL[b.usage_type] ?? b.usage_type,
-    当前余额: b.current_balance, 是否默认: b.is_default ? "是" : "否",
+    绑定店铺数: bindCountByBank.get(b.id) ?? 0,
+    当前余额: b.current_balance,
     状态: b.status === "active" ? "启用" : "停用", 备注: b.remark,
   }));
   const shopRows = shops.filter((s: any) => !s.deleted_at).map((s: any) => ({
