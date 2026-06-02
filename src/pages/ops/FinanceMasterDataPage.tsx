@@ -416,12 +416,10 @@ function BanksTab() {
   const [editing, setEditing] = useState<AnyRow | null>(null);
   const [q, setQ] = useState("");
   const [acctTypeFilter, setAcctTypeFilter] = useState("");
-  const [usageFilter, setUsageFilter] = useState("");
-  const [entFilter, setEntFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  useDebouncedReset([q, acctTypeFilter, usageFilter, entFilter, statusFilter, pageSize], setPage);
+  useDebouncedReset([q, acctTypeFilter, statusFilter, pageSize], setPage);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -434,8 +432,6 @@ function BanksTab() {
     const qq = q.trim();
     if (qq) qry = qry.or(`account_holder_name.ilike.%${qq}%,account_name.ilike.%${qq}%,bank_name.ilike.%${qq}%,account_number.ilike.%${qq}%,account_no_masked.ilike.%${qq}%`);
     if (acctTypeFilter) qry = qry.eq("account_type", acctTypeFilter);
-    if (usageFilter) qry = qry.eq("usage_type", usageFilter);
-    if (entFilter) qry = qry.or(`owner_entity_id.eq.${entFilter},related_entity_id.eq.${entFilter}`);
     if (statusFilter) qry = qry.eq("status", statusFilter);
     const from = (page - 1) * pageSize;
     const { data, count, error } = await qry.range(from, from + pageSize - 1);
@@ -451,7 +447,7 @@ function BanksTab() {
       (bnd ?? []).forEach((b: any) => m.set(b.bank_account_id, (m.get(b.bank_account_id) ?? 0) + 1));
       setBindingCounts(m);
     } else setBindingCounts(new Map());
-  }, [q, acctTypeFilter, usageFilter, entFilter, statusFilter, page, pageSize]);
+  }, [q, acctTypeFilter, statusFilter, page, pageSize]);
   useEffect(() => { load(); }, [load]);
 
   const entityMap = useMemo(() => new Map(entities.map(e => [e.id, e])), [entities]);
@@ -465,23 +461,23 @@ function BanksTab() {
 
   const handleExport = async () => {
     const { data } = await supabase.from("bank_accounts").select("*").is("deleted_at", null);
-    const out = (data ?? []).map((r: any) => {
-      const owner = entityMap.get(r.owner_entity_id);
-      const related = entityMap.get(r.related_entity_id);
-      return {
-        开户名: r.account_holder_name || r.account_name || "",
-        账户类型: ACCOUNT_TYPE_LABEL[r.account_type] ?? r.account_type ?? "",
-        开户银行: r.bank_name || "",
-        银行账号: r.account_number || r.account_no_masked || "",
-        账户法定归属主体: owner?.name ?? "",
-        关联主体: related?.name ?? "",
-        关联人: r.related_person_name || "",
-        用途: USAGE_LABEL[r.usage_type] ?? r.usage_type ?? "",
-        当前余额: r.current_balance,
-        状态: r.status === "active" ? "启用" : "停用",
-        备注: r.remark,
-      };
-    });
+    const ids = (data ?? []).map((r: any) => r.id);
+    const cntMap = new Map<string, number>();
+    if (ids.length) {
+      const { data: bnd } = await supabase.from("shop_bank_account_bindings")
+        .select("bank_account_id").in("bank_account_id", ids).eq("status", "active");
+      (bnd ?? []).forEach((b: any) => cntMap.set(b.bank_account_id, (cntMap.get(b.bank_account_id) ?? 0) + 1));
+    }
+    const out = (data ?? []).map((r: any) => ({
+      开户名: r.account_holder_name || r.account_name || "",
+      账户类型: ACCOUNT_TYPE_LABEL[r.account_type] ?? r.account_type ?? "",
+      开户银行: r.bank_name || "",
+      银行账号: r.account_number || r.account_no_masked || "",
+      绑定店铺数: cntMap.get(r.id) ?? 0,
+      当前余额: r.current_balance,
+      状态: r.status === "active" ? "启用" : "停用",
+      备注: r.remark,
+    }));
     exportRowsToXlsx(`银行账户_${new Date().toISOString().slice(0, 10)}.xlsx`, "银行账户", out);
     toast({ title: "已导出" });
   };
