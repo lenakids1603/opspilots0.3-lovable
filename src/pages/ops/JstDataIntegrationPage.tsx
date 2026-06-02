@@ -27,6 +27,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { ShopMappingsCard } from "@/components/ops/ShopMappingsCard";
 import { JstConnectionCheckCard } from "@/components/ops/JstConnectionCheckCard";
+import { InboundSyncJobPanel } from "@/components/ops/InboundSyncJobPanel";
 
 // ============================================================
 // Types & helpers
