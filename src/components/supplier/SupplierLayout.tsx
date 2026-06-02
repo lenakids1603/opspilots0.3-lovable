@@ -57,16 +57,6 @@ export default function SupplierLayout({ children }: { children: React.ReactNode
         </header>
 
         <main className="flex-1 p-6 overflow-auto">{children}</main>
-
-        <footer className="h-8 bg-[#0b1f1a] text-[11px] text-white/80 flex items-center justify-between px-6 font-mono">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>EXTERNAL COOPERATIVE SECURITY SHIELD INTENSITY HIGH</span>
-            <span className="text-white/30 mx-2">·</span>
-            <span>EXTERNAL PORT: LENAKIDS SUPPLY CHAIN PORTAL</span>
-          </div>
-          <div className="text-white/60">v.2.5.0</div>
-        </footer>
       </div>
     </div>
   );
