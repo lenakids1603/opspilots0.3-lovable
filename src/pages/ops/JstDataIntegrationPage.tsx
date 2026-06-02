@@ -417,10 +417,17 @@ export default function JstDataIntegrationPage() {
   );
 
   const filteredLogs = useMemo(() => {
-    return runs.filter((l) => {
+    const allLogs: any[] = [...runs.map((r: any) => ({ ...r, _source: "run" })), ...purchaseLogRows];
+    allLogs.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+    return allLogs.filter((l) => {
+      const isPurchaseLog = l._source === "purchase_log";
       const mod = modules.find((m) => m.module_key === l.module_key);
-      const groupLabel = mod ? (CATEGORY_LABEL[mod.category] ?? mod.category) : "";
-      const moduleName = mod?.module_name ?? l.module_key;
+      const groupLabel = isPurchaseLog
+        ? CATEGORY_LABEL.purchase
+        : (mod ? (CATEGORY_LABEL[mod.category] ?? mod.category) : "");
+      const moduleName = isPurchaseLog
+        ? (l.module_key === "purchase_orders" ? "采购单" : l.module_key === "purchase_receipts" ? "采购入库单" : "采购与入库")
+        : (mod?.module_name ?? l.module_key);
       const triggerLabel = TRIGGER_LABEL[l.trigger_type] ?? l.trigger_type;
 
       if (triggerFilter !== "all" && triggerLabel !== triggerFilter) return false;
@@ -432,7 +439,7 @@ export default function JstDataIntegrationPage() {
       }
       return true;
     });
-  }, [runs, modules, triggerFilter, groupFilter, statusFilter, keyword]);
+  }, [runs, purchaseLogRows, modules, triggerFilter, groupFilter, statusFilter, keyword]);
 
   const isLoading = modulesQ.isLoading || metricsQ.isLoading || errorsQ.isLoading || runsQ.isLoading;
 
