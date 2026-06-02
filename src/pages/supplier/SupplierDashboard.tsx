@@ -52,7 +52,7 @@ function usePurchaseStats(startYmd: string, endYmd: string) {
       const { gte, lte } = ymdToUTCRange(startYmd, endYmd);
       let q = supabase.from("purchase_orders")
         .select("total_purchase_qty,total_amount,status", { count: "exact" })
-        .not("status", "in", `(${EXCLUDED_STATUSES.map(s => `"${s}"`).join(",")})`)
+        .not("status", "in", EXCLUDED_IN)
         .limit(10000);
       if (gte) q = q.gte("po_date", gte);
       if (lte) q = q.lte("po_date", lte);
@@ -114,7 +114,7 @@ function useOverdueStats() {
         .gt("unreceived_qty", 0)
         .not("delivery_date", "is", null)
         .lt("delivery_date", todayUtc)
-        .not("purchase_orders.status", "in", `(${EXCLUDED_STATUSES.map(s => `"${s}"`).join(",")})`)
+        .not("purchase_orders.status", "in", EXCLUDED_IN)
         .limit(5000);
       if (error) throw error;
       let qty = 0, amt = 0;
@@ -150,7 +150,7 @@ function useTimeline(dayBefore: number, dayAfter: number) {
         .select("style_no,product_name,unreceived_qty,delivery_date,purchase_orders!inner(status)")
         .gt("unreceived_qty", 0)
         .gte("delivery_date", gte).lte("delivery_date", lte)
-        .not("purchase_orders.status", "in", `(${EXCLUDED_STATUSES.map(s => `"${s}"`).join(",")})`)
+        .not("purchase_orders.status", "in", EXCLUDED_IN)
         .limit(5000);
       if (error) throw error;
       return (data ?? []).map((r: any) => ({
@@ -193,7 +193,7 @@ function usePendingItems(startYmd: string, endYmd: string, dayFilterYmd?: string
           purchase_orders!inner(supplier_name,status,po_date)
         `)
         .gt("unreceived_qty", 0)
-        .not("purchase_orders.status", "in", `(${EXCLUDED_STATUSES.map(s => `"${s}"`).join(",")})`)
+        .not("purchase_orders.status", "in", EXCLUDED_IN)
         .limit(5000);
       if (gte) q = q.gte("purchase_orders.po_date", gte);
       if (lte) q = q.lte("purchase_orders.po_date", lte);
