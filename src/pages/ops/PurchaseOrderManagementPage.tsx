@@ -16,7 +16,8 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
-import { Search, Inbox } from "lucide-react";
+import { Search, Inbox, ArrowUp, ArrowDown, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
 
@@ -60,6 +61,8 @@ const EMPTY_FILTERS: Filters = {
   warehouseStatus: "all",
 };
 
+const DELETED_STATUSES = "(Delete,delete,Deleted,deleted,已删除)";
+
 function applyPoFilters(q: any, f: Filters) {
   // 北京时区日期 → UTC ISO 区间，避免 new Date("YYYY-MM-DD") 按 UTC 解析丢掉北京当日凌晨 0-8 点。
   if (f.startDate) { const r = beijingDayRangeToUTC(f.startDate); if (r) q = q.gte("po_date", r.gte); }
@@ -68,7 +71,45 @@ function applyPoFilters(q: any, f: Filters) {
   if (f.poNo) q = q.ilike("external_po_id", `%${f.poNo}%`);
   if (f.status !== "all") q = q.eq("status", f.status);
   if (f.warehouseStatus !== "all") q = q.eq("warehouse_status", f.warehouseStatus);
+  // 默认排除聚水潭已删除采购单
+  q = q.not("status", "in", DELETED_STATUSES);
   return q;
+}
+
+type SortDir = "asc" | "desc";
+type PoSortKey =
+  | "external_po_id" | "supplier_name" | "po_date" | "status"
+  | "total_purchase_qty" | "total_received_qty" | "total_unreceived_qty"
+  | "total_amount" | "updated_at" | "warehouse_status";
+
+type StyleSortKey =
+  | "latest_po_date" | "style_no" | "product_name" | "suppliers"
+  | "po_count" | "sku_count" | "purchase_qty" | "received_qty"
+  | "unreceived_qty" | "amount" | "warehouse_status";
+
+function SortHead<K extends string>({
+  k, currentKey, dir, onSort, children, align,
+}: {
+  k: K; currentKey: K; dir: SortDir;
+  onSort: (k: K) => void; children: React.ReactNode; align?: "left" | "right";
+}) {
+  const active = k === currentKey;
+  const Icon = !active ? ChevronsUpDown : dir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <TableHead className={align === "right" ? "text-right" : ""}>
+      <button
+        type="button"
+        onClick={() => onSort(k)}
+        className={cn(
+          "inline-flex items-center gap-1 select-none hover:text-foreground transition cursor-pointer",
+          active ? "text-foreground font-semibold" : "text-muted-foreground"
+        )}
+      >
+        <span>{children}</span>
+        <Icon className={cn("w-3 h-3", active ? "opacity-90" : "opacity-50")} />
+      </button>
+    </TableHead>
+  );
 }
 
 function usePurchaseStats(filters: Filters) {
@@ -95,9 +136,9 @@ function usePurchaseStats(filters: Filters) {
   });
 }
 
-function usePurchaseOrders(filters: Filters, page: number) {
+function usePurchaseOrders(filters: Filters, page: number, sortKey: PoSortKey, sortDir: SortDir) {
   return useQuery({
-    queryKey: ["purchase_orders", filters, page],
+    queryKey: ["purchase_orders", filters, page, sortKey, sortDir],
     queryFn: async () => {
       let q = supabase.from("purchase_orders").select("*", { count: "exact" });
       q = applyPoFilters(q, filters);
@@ -116,8 +157,11 @@ function usePurchaseOrders(filters: Filters, page: number) {
         q = q.in("id", ids);
       }
 
-      q = q.order("po_date", { ascending: false, nullsFirst: false })
-           .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
+      q = q.order(sortKey, { ascending: sortDir === "asc", nullsFirst: false });
+      if (sortKey !== "external_po_id") {
+        q = q.order("external_po_id", { ascending: false, nullsFirst: false });
+      }
+      q = q.range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
       const { data, count, error } = await q;
       if (error) throw error;
       return { rows: data ?? [], count: count ?? 0 };
@@ -141,17 +185,19 @@ function usePoItems(poId: string | null) {
   });
 }
 
-function useStyleAggregation(filters: Filters, page: number) {
+function useStyleAggregation(filters: Filters, page: number, sortKey: StyleSortKey, sortDir: SortDir) {
   return useQuery({
-    queryKey: ["po_items_by_style", filters, page],
+    queryKey: ["po_items_by_style", filters, page, sortKey, sortDir],
     queryFn: async () => {
       // 取所有项目(受筛选影响)
       let q = supabase.from("purchase_order_items").select(
-        "style_no, product_name, purchase_qty, received_qty, unreceived_qty, amount, purchase_order_id, purchase_orders!inner(supplier_name, po_date, status, warehouse_status, external_po_id)"
+        "style_no, sku_no, product_name, purchase_qty, received_qty, unreceived_qty, amount, purchase_order_id, purchase_orders!inner(supplier_name, po_date, status, warehouse_status, external_po_id)"
       ).limit(5000);
       if (filters.styleNo) q = q.ilike("style_no", `%${filters.styleNo}%`);
       if (filters.skuNo) q = q.ilike("sku_no", `%${filters.skuNo}%`);
       if (filters.productName) q = q.ilike("product_name", `%${filters.productName}%`);
+      // 默认排除聚水潭已删除采购单(通过 inner join 的 purchase_orders.status)
+      q = q.not("purchase_orders.status", "in", DELETED_STATUSES);
       const { data, error } = await q;
       if (error) throw error;
       const rows = data ?? [];
@@ -159,7 +205,10 @@ function useStyleAggregation(filters: Filters, page: number) {
       // 应用 PO 维度筛选(在前端)
       const filtered = rows.filter((r: any) => {
         const po = r.purchase_orders;
-        if (!po) return true;
+        if (!po) return false;
+        // 二次防御:剔除已删除采购单
+        const st = String(po.status ?? "").toLowerCase();
+        if (st === "delete" || st === "deleted" || po.status === "已删除") return false;
         if (filters.supplier && !(po.supplier_name ?? "").includes(filters.supplier)) return false;
         if (filters.poNo && !(po.external_po_id ?? "").includes(filters.poNo)) return false;
         if (filters.status !== "all" && po.status !== filters.status) return false;
@@ -178,7 +227,9 @@ function useStyleAggregation(filters: Filters, page: number) {
           product_name: r.product_name ?? "",
           suppliers: new Set<string>(),
           po_ids: new Set<string>(),
+          sku_set: new Set<string>(),
           purchase_qty: 0, received_qty: 0, unreceived_qty: 0, amount: 0,
+          latest_po_ts: 0,
         };
         cur.purchase_qty += Number(r.purchase_qty ?? 0);
         cur.received_qty += Number(r.received_qty ?? 0);
@@ -186,13 +237,48 @@ function useStyleAggregation(filters: Filters, page: number) {
         cur.amount += Number(r.amount ?? 0);
         if (r.purchase_orders?.supplier_name) cur.suppliers.add(r.purchase_orders.supplier_name);
         if (r.purchase_order_id) cur.po_ids.add(r.purchase_order_id);
+        if (r.sku_no) cur.sku_set.add(r.sku_no);
+        const ts = r.purchase_orders?.po_date ? new Date(r.purchase_orders.po_date).getTime() : 0;
+        if (ts > cur.latest_po_ts) cur.latest_po_ts = ts;
         map.set(key, cur);
       }
-      const aggregated = Array.from(map.values()).map((c: any) => ({
-        ...c,
-        suppliers: Array.from(c.suppliers).join("、"),
-        po_count: c.po_ids.size,
-      })).sort((a, b) => b.amount - a.amount);
+      const aggregated = Array.from(map.values()).map((c: any) => {
+        // 入库状态聚合:全部已入库 / 部分入库 / 未入库
+        let warehouse_status: "not_received" | "partial" | "received" = "not_received";
+        if (c.purchase_qty > 0 && c.received_qty >= c.purchase_qty) warehouse_status = "received";
+        else if (c.received_qty > 0) warehouse_status = "partial";
+        return {
+          style_no: c.style_no,
+          product_name: c.product_name,
+          suppliers: Array.from(c.suppliers).join("、"),
+          po_count: c.po_ids.size,
+          sku_count: c.sku_set.size,
+          purchase_qty: c.purchase_qty,
+          received_qty: c.received_qty,
+          unreceived_qty: c.unreceived_qty,
+          amount: c.amount,
+          latest_po_ts: c.latest_po_ts,
+          latest_po_date: c.latest_po_ts ? new Date(c.latest_po_ts).toISOString() : null,
+          warehouse_status,
+        };
+      });
+
+      // 排序(纯数字按数字,日期按时间戳,字符串按 localeCompare)
+      const numKeys = new Set<string>(["po_count", "sku_count", "purchase_qty", "received_qty", "unreceived_qty", "amount"]);
+      aggregated.sort((a: any, b: any) => {
+        let va: any, vb: any;
+        if (sortKey === "latest_po_date") { va = a.latest_po_ts; vb = b.latest_po_ts; }
+        else { va = a[sortKey]; vb = b[sortKey]; }
+        if (numKeys.has(sortKey) || sortKey === "latest_po_date") {
+          const diff = (Number(va) || 0) - (Number(vb) || 0);
+          if (diff !== 0) return sortDir === "asc" ? diff : -diff;
+        } else {
+          const cmp = String(va ?? "").localeCompare(String(vb ?? ""), "zh-CN");
+          if (cmp !== 0) return sortDir === "asc" ? cmp : -cmp;
+        }
+        // 平局:按采购件数降序
+        return (b.purchase_qty || 0) - (a.purchase_qty || 0);
+      });
 
       const total = aggregated.length;
       const paged = aggregated.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
@@ -226,9 +312,15 @@ export default function PurchaseOrderManagementPage() {
   const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
   const [tab, setTab] = useState("po");
 
+  // 排序状态:两个 Tab 各自维护
+  const [poSortKey, setPoSortKey] = useState<PoSortKey>("po_date");
+  const [poSortDir, setPoSortDir] = useState<SortDir>("desc");
+  const [styleSortKey, setStyleSortKey] = useState<StyleSortKey>("latest_po_date");
+  const [styleSortDir, setStyleSortDir] = useState<SortDir>("desc");
+
   const statsQ = usePurchaseStats(filters);
-  const ordersQ = usePurchaseOrders(filters, page);
-  const styleQ = useStyleAggregation(filters, stylePage);
+  const ordersQ = usePurchaseOrders(filters, page, poSortKey, poSortDir);
+  const styleQ = useStyleAggregation(filters, stylePage, styleSortKey, styleSortDir);
 
   const selectedPo = useMemo(
     () => ordersQ.data?.rows.find((r: any) => r.id === selectedPoId) ?? null,
@@ -243,6 +335,24 @@ export default function PurchaseOrderManagementPage() {
 
   const applyFilters = () => { setFilters(draftFilters); setPage(0); setStylePage(0); };
   const resetFilters = () => { setDraftFilters(EMPTY_FILTERS); setFilters(EMPTY_FILTERS); setPage(0); setStylePage(0); };
+
+  // 切换 Tab 重置该 Tab 的排序为默认
+  const onTabChange = (v: string) => {
+    setTab(v);
+    if (v === "po") { setPoSortKey("po_date"); setPoSortDir("desc"); setPage(0); }
+    else { setStyleSortKey("latest_po_date"); setStyleSortDir("desc"); setStylePage(0); }
+  };
+
+  const onPoSort = (k: PoSortKey) => {
+    if (poSortKey !== k) { setPoSortKey(k); setPoSortDir("desc"); setPage(0); return; }
+    if (poSortDir === "desc") { setPoSortDir("asc"); setPage(0); return; }
+    setPoSortKey("po_date"); setPoSortDir("desc"); setPage(0);
+  };
+  const onStyleSort = (k: StyleSortKey) => {
+    if (styleSortKey !== k) { setStyleSortKey(k); setStyleSortDir("desc"); setStylePage(0); return; }
+    if (styleSortDir === "desc") { setStyleSortDir("asc"); setStylePage(0); return; }
+    setStyleSortKey("latest_po_date"); setStyleSortDir("desc"); setStylePage(0);
+  };
 
   return (
     <div className="space-y-6">
@@ -337,7 +447,7 @@ export default function PurchaseOrderManagementPage() {
 
       <Card>
         <CardContent className="p-0">
-          <Tabs value={tab} onValueChange={setTab}>
+          <Tabs value={tab} onValueChange={onTabChange}>
             <div className="px-4 pt-3">
               <TabsList>
                 <TabsTrigger value="po">按采购单查看</TabsTrigger>
@@ -349,16 +459,16 @@ export default function PurchaseOrderManagementPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>采购单号</TableHead>
-                    <TableHead>供应商</TableHead>
-                    <TableHead>采购日期</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead className="text-right">采购件数</TableHead>
-                    <TableHead className="text-right">已入库</TableHead>
-                    <TableHead className="text-right">未入库</TableHead>
-                    <TableHead className="text-right">采购金额</TableHead>
-                    <TableHead>最近同步</TableHead>
-                    <TableHead>入库状态</TableHead>
+                    <SortHead<PoSortKey> k="external_po_id" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>采购单号</SortHead>
+                    <SortHead<PoSortKey> k="supplier_name" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>供应商</SortHead>
+                    <SortHead<PoSortKey> k="po_date" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>采购日期</SortHead>
+                    <SortHead<PoSortKey> k="status" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>状态</SortHead>
+                    <SortHead<PoSortKey> k="total_purchase_qty" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">采购件数</SortHead>
+                    <SortHead<PoSortKey> k="total_received_qty" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">已入库</SortHead>
+                    <SortHead<PoSortKey> k="total_unreceived_qty" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">未入库</SortHead>
+                    <SortHead<PoSortKey> k="total_amount" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">采购金额</SortHead>
+                    <SortHead<PoSortKey> k="updated_at" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>最近同步</SortHead>
+                    <SortHead<PoSortKey> k="warehouse_status" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>入库状态</SortHead>
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -406,36 +516,46 @@ export default function PurchaseOrderManagementPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>款号</TableHead>
-                    <TableHead>商品名称</TableHead>
-                    <TableHead>涉及供应商</TableHead>
-                    <TableHead className="text-right">采购单数</TableHead>
-                    <TableHead className="text-right">采购件数</TableHead>
-                    <TableHead className="text-right">已入库</TableHead>
-                    <TableHead className="text-right">未入库</TableHead>
-                    <TableHead className="text-right">采购金额</TableHead>
+                    <SortHead<StyleSortKey> k="latest_po_date" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort}>最近采购日期</SortHead>
+                    <SortHead<StyleSortKey> k="style_no" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort}>款号</SortHead>
+                    <SortHead<StyleSortKey> k="product_name" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort}>商品名称</SortHead>
+                    <SortHead<StyleSortKey> k="suppliers" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort}>供应商</SortHead>
+                    <SortHead<StyleSortKey> k="po_count" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort} align="right">涉及采购单数</SortHead>
+                    <SortHead<StyleSortKey> k="sku_count" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort} align="right">SKU 数</SortHead>
+                    <SortHead<StyleSortKey> k="purchase_qty" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort} align="right">采购件数</SortHead>
+                    <SortHead<StyleSortKey> k="received_qty" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort} align="right">已入库</SortHead>
+                    <SortHead<StyleSortKey> k="unreceived_qty" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort} align="right">未入库</SortHead>
+                    <SortHead<StyleSortKey> k="amount" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort} align="right">采购金额</SortHead>
+                    <SortHead<StyleSortKey> k="warehouse_status" currentKey={styleSortKey} dir={styleSortDir} onSort={onStyleSort}>入库状态</SortHead>
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {styleQ.isLoading ? (
-                    <TableRow><TableCell colSpan={9} className="text-center py-10 text-muted-foreground">加载中…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={12} className="text-center py-10 text-muted-foreground">加载中…</TableCell></TableRow>
                   ) : (styleQ.data?.rows.length ?? 0) === 0 ? (
-                    <TableRow><TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
+                    <TableRow><TableCell colSpan={12} className="text-center py-10 text-muted-foreground">
                       暂无采购数据,请先执行聚水潭采购同步
                     </TableCell></TableRow>
                   ) : styleQ.data!.rows.map((s: any) => (
                     <TableRow key={s.style_no}>
+                      <TableCell className="text-xs">{fmtDate(s.latest_po_date)}</TableCell>
                       <TableCell className="font-mono text-xs">{s.style_no}</TableCell>
                       <TableCell>{s.product_name}</TableCell>
                       <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate" title={s.suppliers}>{s.suppliers}</TableCell>
                       <TableCell className="text-right tabular-nums">{s.po_count}</TableCell>
+                      <TableCell className="text-right tabular-nums">{s.sku_count}</TableCell>
                       <TableCell className="text-right tabular-nums">{s.purchase_qty}</TableCell>
                       <TableCell className="text-right tabular-nums text-emerald-600">{s.received_qty}</TableCell>
                       <TableCell className="text-right tabular-nums text-amber-600">{s.unreceived_qty}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtMoney(s.amount)}</TableCell>
+                      <TableCell>
+                        <Badge variant="secondary" className={WAREHOUSE_STATUS_TONE[s.warehouse_status ?? "not_received"] ?? ""}>
+                          {WAREHOUSE_STATUS_LABEL[s.warehouse_status ?? "not_received"] ?? "—"}
+                        </Badge>
+                      </TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => setSelectedStyle(s.style_no)}>查看明细</Button>
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedStyle(s.style_no)}>查看详情</Button>
                       </TableCell>
                     </TableRow>
                   ))}
