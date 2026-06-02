@@ -156,6 +156,7 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
   const isRunningStale = status === "running" && (!heartbeatMs || Date.now() - heartbeatMs > STALE_RUNNING_MS);
   const hasMoreWork = !!j && (j.has_next === true || (j.current_window_index ?? 0) < Math.max((j.total_windows ?? 1) - 1, 0));
   const isResumable = !!j && hasMoreWork && (
+    status === "pending" ||
     status === "partial" ||
     status === "waiting_next_tick" ||
     status === "stalled" ||
