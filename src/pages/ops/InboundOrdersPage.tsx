@@ -280,7 +280,9 @@ export default function InboundOrdersPage() {
     const end = todayCN();
     let start = "";
     let endDate = end;
-    if (kind === "7d") {
+    if (kind === "today") {
+      start = end;
+    } else if (kind === "7d") {
       const d = new Date(`${end}T00:00:00+08:00`); d.setUTCDate(d.getUTCDate() - 6); start = beijingYMD(d);
     } else if (kind === "30d") {
       const d = new Date(`${end}T00:00:00+08:00`); d.setUTCDate(d.getUTCDate() - 29); start = beijingYMD(d);
