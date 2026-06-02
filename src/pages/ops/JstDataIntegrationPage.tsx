@@ -138,18 +138,35 @@ function useShopMappingCounts() {
 }
 function useSupplierCounts() {
   return useQuery({
-    queryKey: ["ops_suppliers", "counts"],
+    queryKey: ["jst_suppliers_raw", "counts"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("ops_suppliers").select("is_enabled, updated_at");
+      // 聚水潭侧识别到的供应商（jst_suppliers_raw），用于检查与内部 ops_suppliers 的绑定情况
+      const { data, error } = await (supabase as any)
+        .from("jst_suppliers_raw")
+        .select("matched_ops_supplier_id, skip_reason, last_sync_at, updated_at");
       if (error) throw error;
       const rows = (data ?? []) as any[];
-      const enabled = rows.filter((r) => r.is_enabled).length;
-      const disabled = rows.length - enabled;
-      const lastSync = rows.reduce<string | null>((m, r) => (!m || (r.updated_at && r.updated_at > m)) ? r.updated_at : m, null);
-      return { total: rows.length, enabled, disabled, lastSync };
+      const total = rows.length;
+      const ignored = rows.filter((r) => r.skip_reason && String(r.skip_reason).trim().length > 0).length;
+      const active = rows.filter((r) => !(r.skip_reason && String(r.skip_reason).trim().length > 0));
+      const matched = active.filter((r) => !!r.matched_ops_supplier_id).length;
+      const pending = active.length - matched;
+      const lastSync = rows.reduce<string | null>(
+        (m, r) => {
+          const t = r.last_sync_at ?? r.updated_at;
+          return !m || (t && t > m) ? t : m;
+        },
+        null,
+      );
+      // 同时获取内部 ERP 档案总数，仅用于对照展示
+      const { count: opsTotal } = await supabase
+        .from("ops_suppliers")
+        .select("id", { count: "exact", head: true });
+      return { total, matched, pending, ignored, lastSync, opsTotal: opsTotal ?? 0 };
     },
   });
 }
+
 function useWarehouseCounts() {
   return useQuery({
     queryKey: ["jst_warehouses", "counts"],
