@@ -349,8 +349,12 @@ export default function JstDataIntegrationPage() {
   });
 
   const purchaseSyncMut = useMutation({
-    mutationFn: async (input: { days?: number; label: string }) => {
-      const body: Record<string, unknown> = { action: "sync" };
+    mutationFn: async (input: {
+      days?: number;
+      label: string;
+      scope: "purchase_orders" | "purchase_inbound_orders";
+    }) => {
+      const body: Record<string, unknown> = { action: "sync", scope: input.scope };
       if (input.days && input.days > 0) {
         const to = new Date();
         const from = new Date(Date.now() - input.days * 86400_000);
@@ -360,17 +364,22 @@ export default function JstDataIntegrationPage() {
       const { data, error } = await supabase.functions.invoke("jst-sync-purchase-orders", { body });
       if (error) throw new Error(error.message);
       if (data?.ok === false) throw new Error(data?.error ?? "同步失败");
-      return { label: input.label, message: data?.message ?? "同步已在后台启动" };
+      return { label: input.label, scope: input.scope, message: data?.message ?? "同步已在后台启动" };
     },
     onSuccess: (d) => {
-      toast({ title: "已启动采购同步", description: `${d.label} — ${d.message}` });
+      const title = d.scope === "purchase_inbound_orders" ? "已启动入库单同步" : "已启动采购单同步";
+      toast({ title, description: `${d.label} — ${d.message}` });
       qc.invalidateQueries({ queryKey: ["jst_sync_logs", "purchase"] });
       qc.invalidateQueries({ queryKey: ["jst_sync_runs"] });
       qc.invalidateQueries({ queryKey: ["jst_sync_modules"] });
       setTimeout(() => document.getElementById("jst-sync-logs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
     },
-    onError: (e: any) => toast({ title: "采购同步失败", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "同步失败", description: e.message, variant: "destructive" }),
   });
+
+  const pendingScope = purchaseSyncMut.isPending ? (purchaseSyncMut.variables as any)?.scope : null;
+  const poBusy = pendingScope === "purchase_orders";
+  const inBusy = pendingScope === "purchase_inbound_orders";
 
   const notWired = (label: string) =>
     toast({ title: "暂未接入", description: `${label} 暂未接入真实聚水潭 API，按钮已禁用。` });
