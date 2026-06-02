@@ -469,17 +469,8 @@ export default function InboundOrdersPage() {
         </div>
       </CardContent></Card>
 
-      {/* 入库同步任务面板（与数据中心共用同一组件） */}
-      <div className="mb-3">
-        <InboundSyncJobPanel
-          onJobFinished={(job) => {
-            if (job?.status === "success") setLastFinishedJob(job);
-            qc.invalidateQueries({ queryKey: ["inbound_list"] });
-            qc.invalidateQueries({ queryKey: ["inbound_stats"] });
-            qc.invalidateQueries({ queryKey: ["inbound_diag"] });
-          }}
-        />
-      </div>
+      {/* 入库同步任务面板已迁移至「聚水潭数据接入详情」页面，此处不再展示 */}
+
 
       {/* 本次同步结果 */}
       {lastFinishedJob && (
