@@ -10,6 +10,7 @@ import {
   CashTransaction, BusinessEntity, BankAccount, CashTxCategory, Shop,
   CashDirection, DIRECTION_LABEL, DIRECTION_COLOR, fmtMoney,
 } from "@/lib/finance";
+import { formatDateCN } from "@/lib/datetime";
 
 type SupplierLite = { id: string; name: string };
 

@@ -10,6 +10,7 @@ import type {
   BankAccount, BusinessEntity, CashTransaction, CashTxCategory,
   CashDirection, Shop,
 } from "@/lib/finance";
+import { formatDateCN, todayCN, beijingDayRangeToUTC } from "@/lib/datetime";
 
 type SupplierLite = { id: string; name: string };
 
@@ -278,12 +279,12 @@ export function CashflowDrawer({
         dupQ = dupQ
           .eq("amount", Number(amount))
           .eq("bank_account_id", bankId)
-          .gte("occurred_at", new Date(day + "T00:00:00").toISOString())
-          .lte("occurred_at", new Date(day + "T23:59:59").toISOString());
+          .gte("occurred_at", beijingDayRangeToUTC(day)?.gte ?? new Date(day + "T00:00:00+08:00").toISOString())
+          .lte("occurred_at", beijingDayRangeToUTC(day)?.lte ?? new Date(day + "T23:59:59+08:00").toISOString());
       }
       const { data: dups } = await dupQ;
       if (dups && dups.length > 0) {
-        const list = dups.map((d: any) => `· ${d.occurred_at?.slice(0,10)} ¥${d.amount} ${d.summary ?? ""}`).join("\n");
+        const list = dups.map((d: any) => `· ${formatDateCN(d.occurred_at)} ¥${d.amount} ${d.summary ?? ""}`).join("\n");
         if (!confirm(`系统检测到 ${dups.length} 条疑似重复流水：\n${list}\n\n是否继续保存？`)) return;
       }
     }
