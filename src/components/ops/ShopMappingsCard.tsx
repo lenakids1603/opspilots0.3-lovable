@@ -115,6 +115,28 @@ export function ShopMappingsCard() {
     onError: (e: any) => toast({ title: "保存失败", description: e.message, variant: "destructive" }),
   });
 
+  const resyncMut = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await (supabase as any).rpc("jst_resync_shop_mappings_from_shops");
+      if (error) throw error;
+      return Array.isArray(data) ? data[0] : data;
+    },
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ["jst_shop_mappings"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_metrics"] });
+      toast({
+        title: "自动匹配完成",
+        description: `更新 ${res?.updated_count ?? 0} 条;已映射 ${res?.mapped_after ?? 0}/未映射 ${res?.unmapped_after ?? 0}/已忽略 ${res?.ignored_after ?? 0}`,
+      });
+    },
+    onError: (e: any) => toast({ title: "自动匹配失败", description: e.message, variant: "destructive" }),
+  });
+      qc.invalidateQueries({ queryKey: ["jst_sync_metrics"] });
+      toast({ title: "已保存" });
+    },
+    onError: (e: any) => toast({ title: "保存失败", description: e.message, variant: "destructive" }),
+  });
+
   const rows = mappingsQ.data ?? [];
 
   // 质量分析
