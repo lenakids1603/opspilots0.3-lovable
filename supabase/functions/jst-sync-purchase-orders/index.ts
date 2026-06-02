@@ -973,7 +973,7 @@ async function markStaleInboundJobs() {
     .from("jst_sync_jobs")
     .update({
       status: "stalled",
-      ended_at: new Date().toISOString(),
+      ended_at: null,
       message: "任务超过 3 分钟无心跳,已标记为 stalled,可点击「继续同步」从断点恢复",
       error_detail: "stalled: heartbeat exceeded threshold",
     })
@@ -1041,9 +1041,15 @@ async function createInboundJob(opts: {
 }
 
 async function updateJobProgress(jobId: string, patch: Record<string, unknown>) {
+  const normalizedPatch = {
+    ...patch,
+    message: patch.message ?? "",
+    error_detail: patch.error_detail ?? "",
+    heartbeat_at: new Date().toISOString(),
+  };
   const { error } = await admin
     .from("jst_sync_jobs")
-    .update({ ...patch, heartbeat_at: new Date().toISOString() })
+    .update(normalizedPatch)
     .eq("id", jobId);
   if (error) console.error("updateJobProgress error", error.message);
 }
@@ -1185,6 +1191,7 @@ async function processInboundPage(args: {
 
 async function tickInboundJob(jobId: string) {
   const tickStart = Date.now();
+  await markStaleInboundJobs();
   const { data: job, error: loadErr } = await admin
     .from("jst_sync_jobs")
     .select("*")
@@ -1192,7 +1199,15 @@ async function tickInboundJob(jobId: string) {
     .maybeSingle();
   if (loadErr) throw loadErr;
   if (!job) throw new Error("任务不存在");
-  if (["success", "failed", "cancelled"].includes(job.status)) {
+  if (["success", "cancelled"].includes(job.status)) {
+    return { status: job.status, job };
+  }
+  const heartbeatAt = job.heartbeat_at ? new Date(job.heartbeat_at).getTime() : 0;
+  const staleRunning = job.status === "running" && (!heartbeatAt || Date.now() - heartbeatAt > INBOUND_JOB_CONFIG.staleMs);
+  if (job.status === "running" && !staleRunning) {
+    return { status: "running", job };
+  }
+  if (job.status === "failed" && !job.has_next && !(job.next_page_index > 0)) {
     return { status: job.status, job };
   }
 
@@ -1290,7 +1305,7 @@ async function tickInboundJob(jobId: string) {
       : lastError
         ? `任务失败 · 窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页 · ${lastError}`
         : `本次 tick 已处理 ${pagesThisRun} 页,等待继续 · 当前窗口 ${windowIndex + 1}/${windows.length} 下一页=${pageIndex}`,
-    error_detail: lastError || null,
+    error_detail: lastError || "",
   };
   await updateJobProgress(jobId, tail);
 
