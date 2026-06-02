@@ -240,7 +240,8 @@ export function ShopMappingsCard() {
               </div>
               <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>关闭</Button></DialogFooter>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </div>
         </div>
 
         {/* 基础统计 */}
