@@ -149,21 +149,34 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
     onSuccess: () => qc.invalidateQueries({ queryKey: ["inbound_job", jobId] }),
   });
 
-  // auto-tick partial / notify on finish
-  const status: string | undefined = (jobQ.data as any)?.status;
-  const nextPage: number | undefined = (jobQ.data as any)?.next_page_index;
+  const j: any = jobQ.data;
+  const status: string | undefined = j?.status;
+  const nextPage: number | undefined = j?.next_page_index;
+  const heartbeatMs = j?.heartbeat_at ? new Date(j.heartbeat_at).getTime() : 0;
+  const isRunningStale = status === "running" && (!heartbeatMs || Date.now() - heartbeatMs > STALE_RUNNING_MS);
+  const hasMoreWork = !!j && (j.has_next === true || (j.current_window_index ?? 0) < Math.max((j.total_windows ?? 1) - 1, 0));
+  const isResumable = !!j && hasMoreWork && (
+    status === "partial" ||
+    status === "waiting_next_tick" ||
+    status === "stalled" ||
+    (status === "failed" && ((j.next_page_index ?? 0) > 0 || j.has_next === true)) ||
+    isRunningStale
+  );
+  const totalWindows = Math.max(Number(j?.total_windows ?? 1), 1);
+  const currentWindowNumber = Math.min(Number(j?.current_window_index ?? 0) + 1, totalWindows);
+  const progressValue = status === "success" ? 100 : Math.max(1, Math.min(99, Math.round((currentWindowNumber / totalWindows) * 100)));
+
+  // auto-tick resumable states / notify on finish
   useEffect(() => {
-    if (!status) return;
-    if (status === "partial" && !tickMut.isPending) {
-      tickMut.mutate(jobId!);
+    if (!status || !jobId) return;
+    if (isResumable) {
+      requestTick(jobId);
     }
     if (status === "success" || status === "failed" || status === "cancelled") {
       onJobFinished?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, nextPage]);
-
-  const j: any = jobQ.data;
+  }, [status, nextPage, isResumable, jobId]);
 
   return (
     <Card>
