@@ -418,13 +418,19 @@ async function callJushuitan(method: string, biz: Record<string, unknown>) {
 }
 
 // ---------- 时间窗口 ----------
-function* timeWindows(from: Date, to: Date, days = 1) {
+// 聚水潭采购入库/采购单查询接口对 modified_begin~modified_end 限制单次最长 7 天。
+// 为保险起见,每段实际使用 6 天 23 小时 59 分钟,避免边界判断报错。
+// 任何 days > 7 的范围都会被自动拆分成多个不超过 7 天的窗口。
+const JST_MAX_WINDOW_MS = 7 * 86400_000 - 60_000; // 6d 23h 59m
+function buildJstTimeWindows(from: Date, to: Date): Array<readonly [Date, Date]> {
+  const out: Array<readonly [Date, Date]> = [];
   let cur = new Date(from);
   while (cur < to) {
-    const end = new Date(Math.min(cur.getTime() + days * 86400_000, to.getTime()));
-    yield [new Date(cur), end] as const;
+    const end = new Date(Math.min(cur.getTime() + JST_MAX_WINDOW_MS, to.getTime()));
+    out.push([new Date(cur), end] as const);
     cur = end;
   }
+  return out;
 }
 
 // 限流:聚水潭 5次/秒、100次/分钟。保守 ~4 req/s
