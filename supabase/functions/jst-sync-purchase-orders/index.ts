@@ -1309,21 +1309,22 @@ async function tickInboundJob(jobId: string) {
 }
 
 // ---------- auth ----------
-async function isAdminCaller(req: Request): Promise<boolean> {
+async function resolveCaller(req: Request): Promise<{ isAdmin: boolean; uid: string | null }> {
   const auth = req.headers.get("Authorization");
-  if (!auth?.startsWith("Bearer ")) return false;
+  if (!auth?.startsWith("Bearer ")) return { isAdmin: false, uid: null };
   const token = auth.slice(7);
   const userClient = createClient(SUPABASE_URL, ANON_KEY, {
     global: { headers: { Authorization: auth } },
   });
   const { data, error } = await userClient.auth.getClaims(token);
-  if (error || !data?.claims?.sub) return false;
+  if (error || !data?.claims?.sub) return { isAdmin: false, uid: null };
   const uid = data.claims.sub as string;
-  const { data: hasAdmin } = await admin.rpc("has_ops_role", {
-    _uid: uid,
-    _code: "admin",
-  });
-  return !!hasAdmin;
+  const { data: hasAdmin } = await admin.rpc("has_ops_role", { _uid: uid, _code: "admin" });
+  return { isAdmin: !!hasAdmin, uid };
+}
+
+async function isAdminCaller(req: Request): Promise<boolean> {
+  return (await resolveCaller(req)).isAdmin;
 }
 
 // ---------- handler ----------
