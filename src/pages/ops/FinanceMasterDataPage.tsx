@@ -1351,7 +1351,7 @@ function ImportDialog({
     if (!preview) return;
     const banks = preview.banks.map(r => {
       if (!r.needsAccountType) return r;
-      const d = { ...r.data, account_type: val };
+      const d: any = { ...r.data, account_type: val };
       if (val === "corporate") d.account_holder_name = d.account_holder_name || d.owner_entity_name || "";
       else d.account_holder_name = d.related_person_name || d.account_holder_name || "";
       return { ...r, data: d, needsAccountType: false };
