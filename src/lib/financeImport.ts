@@ -193,7 +193,8 @@ export function parseAccountWorkbook(file: ArrayBuffer, existing: ExistingContex
       const ownerRaw = norm(r["账户法定归属主体"] ?? r["所属主体"] ?? r["所属主体*"]);
       const relatedRaw = norm(r["关联主体"]);
       const personName = norm(r["关联人"] ?? r["关联人 / 持卡人"] ?? r["持卡人"]);
-      const usageRaw = norm(r["用途*"] ?? r["用途"] ?? r["账户用途"]) || "收款";
+      const usageRawIn = norm(r["用途*"] ?? r["用途"] ?? r["账户用途"]);
+      const usageRaw = usageRawIn || "其他";
       const balance = toNum(r["当前余额"]) ?? 0;
       const isDefault = YES_MAP.has(norm(r["是否默认"] ?? r["默认"]).toLowerCase());
       const statusRaw = norm(r["状态"] ?? r["状态(启用/停用)"]);
