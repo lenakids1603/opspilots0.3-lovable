@@ -312,9 +312,15 @@ export default function PurchaseOrderManagementPage() {
   const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
   const [tab, setTab] = useState("po");
 
+  // 排序状态:两个 Tab 各自维护
+  const [poSortKey, setPoSortKey] = useState<PoSortKey>("po_date");
+  const [poSortDir, setPoSortDir] = useState<SortDir>("desc");
+  const [styleSortKey, setStyleSortKey] = useState<StyleSortKey>("latest_po_date");
+  const [styleSortDir, setStyleSortDir] = useState<SortDir>("desc");
+
   const statsQ = usePurchaseStats(filters);
-  const ordersQ = usePurchaseOrders(filters, page);
-  const styleQ = useStyleAggregation(filters, stylePage);
+  const ordersQ = usePurchaseOrders(filters, page, poSortKey, poSortDir);
+  const styleQ = useStyleAggregation(filters, stylePage, styleSortKey, styleSortDir);
 
   const selectedPo = useMemo(
     () => ordersQ.data?.rows.find((r: any) => r.id === selectedPoId) ?? null,
@@ -329,6 +335,24 @@ export default function PurchaseOrderManagementPage() {
 
   const applyFilters = () => { setFilters(draftFilters); setPage(0); setStylePage(0); };
   const resetFilters = () => { setDraftFilters(EMPTY_FILTERS); setFilters(EMPTY_FILTERS); setPage(0); setStylePage(0); };
+
+  // 切换 Tab 重置该 Tab 的排序为默认
+  const onTabChange = (v: string) => {
+    setTab(v);
+    if (v === "po") { setPoSortKey("po_date"); setPoSortDir("desc"); setPage(0); }
+    else { setStyleSortKey("latest_po_date"); setStyleSortDir("desc"); setStylePage(0); }
+  };
+
+  const onPoSort = (k: PoSortKey) => {
+    if (poSortKey !== k) { setPoSortKey(k); setPoSortDir("desc"); setPage(0); return; }
+    if (poSortDir === "desc") { setPoSortDir("asc"); setPage(0); return; }
+    setPoSortKey("po_date"); setPoSortDir("desc"); setPage(0);
+  };
+  const onStyleSort = (k: StyleSortKey) => {
+    if (styleSortKey !== k) { setStyleSortKey(k); setStyleSortDir("desc"); setStylePage(0); return; }
+    if (styleSortDir === "desc") { setStyleSortDir("asc"); setStylePage(0); return; }
+    setStyleSortKey("latest_po_date"); setStyleSortDir("desc"); setStylePage(0);
+  };
 
   return (
     <div className="space-y-6">
