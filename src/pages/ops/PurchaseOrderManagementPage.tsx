@@ -476,7 +476,7 @@ export default function PurchaseOrderManagementPage() {
                   {ordersQ.isLoading ? (
                     <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">加载中…</TableCell></TableRow>
                   ) : (ordersQ.data?.rows.length ?? 0) === 0 ? (
-                    <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">
+                    <TableRow><TableCell colSpan={10} className="text-center py-10 text-muted-foreground">
                       <Inbox className="w-6 h-6 inline mr-2 opacity-50" />
                       暂无采购单数据,请先执行聚水潭采购同步
                     </TableCell></TableRow>
@@ -484,13 +484,12 @@ export default function PurchaseOrderManagementPage() {
                     <TableRow key={po.id}>
                       <TableCell className="font-mono text-xs">{po.external_po_id}</TableCell>
                       <TableCell>{po.supplier_name ?? "—"}</TableCell>
-                      <TableCell>{fmtDate(po.po_date)}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">{fmtDateTimeMin(po.po_date)}</TableCell>
                       <TableCell><Badge variant="outline">{po.status_label ?? po.status ?? "—"}</Badge></TableCell>
                       <TableCell className="text-right tabular-nums">{Number(po.total_purchase_qty ?? 0)}</TableCell>
                       <TableCell className="text-right tabular-nums text-emerald-600">{Number(po.total_received_qty ?? 0)}</TableCell>
                       <TableCell className="text-right tabular-nums text-amber-600">{Number(po.total_unreceived_qty ?? 0)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtMoney(po.total_amount)}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{fmtDateTime(po.updated_at)}</TableCell>
                       <TableCell>
                         <Badge variant="secondary" className={WAREHOUSE_STATUS_TONE[po.warehouse_status ?? "not_received"] ?? ""}>
                           {WAREHOUSE_STATUS_LABEL[po.warehouse_status ?? "not_received"] ?? "—"}
