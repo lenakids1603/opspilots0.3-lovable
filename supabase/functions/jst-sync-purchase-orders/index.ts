@@ -1495,11 +1495,12 @@ async function tickInboundJob(jobId: string) {
     current_window_from: windows[Math.min(windowIndex, windows.length - 1)]?.from ?? null,
     current_window_to: windows[Math.min(windowIndex, windows.length - 1)]?.to ?? null,
     next_page_index: pageIndex,
-    message: allDone
-      ? `全部完成 · 窗口 ${windows.length} 个 · 入库单 ${totalMain} · 明细 ${totalItem}${lastError ? ` · 末次错误: ${lastError}` : ""}`
-      : lastError
-        ? `任务失败 · 窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页 · ${lastError}`
-        : `本次 tick 已处理 ${pagesThisRun} 页,等待继续 · 当前窗口 ${windowIndex + 1}/${windows.length} 下一页=${pageIndex}`,
+    message: (() => {
+      const unit = job.sync_type === "purchase_orders" ? "采购单" : "入库单";
+      if (allDone) return `全部完成 · 窗口 ${windows.length} 个 · ${unit} ${totalMain} · 明细 ${totalItem}${lastError ? ` · 末次错误: ${lastError}` : ""}`;
+      if (lastError) return `任务失败 · 窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页 · ${lastError}`;
+      return `本次 tick 已处理 ${pagesThisRun} 页,等待继续 · 当前窗口 ${windowIndex + 1}/${windows.length} 下一页=${pageIndex}`;
+    })(),
     error_detail: lastError || "",
   };
   await updateJobProgress(jobId, tail);
