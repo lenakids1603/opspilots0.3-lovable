@@ -103,11 +103,18 @@ function md5(s: string) {
   return createHash("md5").update(s).digest("hex");
 }
 
+// 聚水潭 API 的 modified_begin / modified_end 期望北京时间字符串 (YYYY-MM-DD HH:mm:ss)。
+// Edge Function 运行在 UTC 时区,直接用 d.getHours() 会拿到 UTC 小时,
+// 等于把窗口在北京视角下整体后退 8 小时 —— 会漏掉「现在 - 8h」之内的新增/修改单据。
+// 必须显式转换为 Asia/Shanghai 时区再格式化。
 function fmt(d: Date) {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(
-    d.getHours(),
-  )}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  // sv-SE 输出 "YYYY-MM-DD HH:mm:ss" 形式,刚好符合聚水潭格式
+  return d.toLocaleString("sv-SE", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
 }
 
 // 聚水潭 openweb 签名: MD5(app_secret + sorted(k+v 拼接, 排除 sign)),32 位小写
