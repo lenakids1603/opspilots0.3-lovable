@@ -237,10 +237,24 @@ export function ShopMappingsCard() {
                   未绑定店铺无法用于销售、退款、订单归属。请绑定到系统 shop / 主体 / 平台,或填写原因后忽略。
                 </DialogDescription>
               </DialogHeader>
+              {selectedIds.size > 0 && (
+                <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-2">
+                  <span className="text-xs text-amber-800">已选 {selectedIds.size} 个店铺</span>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setSelectedIds(new Set())}>清空选择</Button>
+                    <Button size="sm" variant="destructive" onClick={() => setBatchIgnoreOpen(true)}>
+                      <EyeOff className="w-3.5 h-3.5 mr-1" />批量忽略
+                    </Button>
+                  </div>
+                </div>
+              )}
               <div className="max-h-[60vh] overflow-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-8">
+                        <Checkbox checked={allSelected} onCheckedChange={toggleAll} />
+                      </TableHead>
                       <TableHead>聚水潭店铺</TableHead>
                       <TableHead>平台 / 平台店铺ID</TableHead>
                       <TableHead>状态</TableHead>
@@ -256,8 +270,14 @@ export function ShopMappingsCard() {
                       const matchedEntity = entitiesQ.data?.find(e => e.id === r.matched_business_entity_id);
                       const matchedPlatform = platformsQ.data?.find(p => p.id === r.matched_platform_id);
                       const isDup = r.matched_shop_id && quality.dupShopIds.has(r.matched_shop_id);
+                      const canSelect = r.mapping_status !== "ignored";
                       return (
                         <TableRow key={r.id}>
+                          <TableCell>
+                            {canSelect && (
+                              <Checkbox checked={selectedIds.has(r.id)} onCheckedChange={() => toggleOne(r.id)} />
+                            )}
+                          </TableCell>
                           <TableCell>
                             <div className="font-medium">{r.jst_shop_name || "—"}</div>
                             <div className="text-xs text-muted-foreground">JST ID: {r.jst_shop_id}</div>
@@ -298,7 +318,7 @@ export function ShopMappingsCard() {
                       );
                     })}
                     {rows.length === 0 && (
-                      <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">暂无映射数据,请先触发店铺同步</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">暂无映射数据,请先触发店铺同步</TableCell></TableRow>
                     )}
                   </TableBody>
                 </Table>
@@ -312,7 +332,7 @@ export function ShopMappingsCard() {
         {/* 基础统计 */}
         <div className="grid grid-cols-4 gap-4 text-sm">
           <Stat label="聚水潭店铺总数" value={quality.total} />
-          <Stat label="已映射" value={quality.mapped} tone="ok" />
+          <Stat label="已完整可统计" value={quality.ready} tone="ok" />
           <Stat label="已忽略" value={quality.ignored} />
           <Stat label="待处理" value={quality.pending} tone={quality.pending ? "warn" : undefined} />
         </div>
@@ -320,22 +340,34 @@ export function ShopMappingsCard() {
         {/* 质量检查 */}
         <div className="grid grid-cols-4 gap-4 text-sm pt-2 border-t">
           <Stat label="映射处理率" value={`${quality.processedRate}%`} tone={quality.processedRate === 100 ? "ok" : "warn"} />
-          <Stat label="无主体绑定（已映射）" value={quality.noEntity} tone={quality.noEntity ? "warn" : undefined} />
-          <Stat label="无平台绑定（已映射）" value={quality.noPlatform} tone={quality.noPlatform ? "warn" : undefined} />
+          <Stat
+            label="缺主体（已映射启用）"
+            value={quality.noEntity}
+            tone={quality.noEntity ? "warn" : undefined}
+            onClick={() => navigate("/finance/master-data?tab=shops&filter=missing_entity")}
+          />
+          <Stat
+            label="缺平台（已映射启用）"
+            value={quality.noPlatform}
+            tone={quality.noPlatform ? "warn" : undefined}
+            onClick={() => navigate("/finance/master-data?tab=shops&filter=missing_platform")}
+          />
           <Stat label="疑似重复绑定" value={quality.dupCount} tone={quality.dupCount ? "danger" : undefined} />
         </div>
 
         {quality.needsAttention ? (
-          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 flex items-start gap-2">
+          <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2 flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-            <div>
-              仍有店铺未处理时，正式销售汇总受限。已忽略的历史店铺不会阻塞同步。请处理以下风险:
-              <span className="ml-1">
-                {quality.pending > 0 && `待处理 ${quality.pending} 个;`}
-                {quality.noEntity > 0 && ` 已映射但无主体 ${quality.noEntity} 个;`}
-                {quality.noPlatform > 0 && ` 已映射但无平台 ${quality.noPlatform} 个;`}
-                {quality.dupCount > 0 && ` 疑似重复绑定 ${quality.dupCount} 个;`}
-              </span>
+            <div className="flex-1">
+              {quality.pending === 0 && (quality.noEntity > 0 || quality.noPlatform > 0)
+                ? `店铺已全部处理，但仍有 ${quality.noEntity} 个已映射店铺缺经营主体、${quality.noPlatform} 个缺平台，因此正式销售汇总暂不可用。`
+                : `仍有店铺未处理时，正式销售汇总受限。已忽略的历史店铺不会阻塞同步。`}
+              <Button
+                size="sm" variant="link" className="h-auto p-0 ml-2 text-amber-900"
+                onClick={() => navigate("/finance/master-data?tab=shops&filter=missing_entity")}
+              >
+                去财务基础资料处理 <ExternalLink className="w-3 h-3 ml-0.5" />
+              </Button>
             </div>
           </div>
         ) : (
@@ -344,6 +376,13 @@ export function ShopMappingsCard() {
           </div>
         )}
       </CardContent>
+
+      {/* 批量忽略弹窗 */}
+      <IgnoreDialog
+        target={batchIgnoreOpen ? ({ jst_shop_name: `${selectedIds.size} 个店铺`, jst_shop_id: "(批量)" } as any) : null}
+        onClose={() => setBatchIgnoreOpen(false)}
+        onSave={(reason) => batchIgnoreMut.mutate({ ids: Array.from(selectedIds), reason })}
+      />
 
       {/* 绑定弹窗 */}
       <BindDialog
