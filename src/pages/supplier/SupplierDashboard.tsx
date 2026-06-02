@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { formatDateCN, formatDateTimeCN, beijingYMD, beijingDayRangeToUTC } from "@/lib/datetime";
 
 // ============ Helpers ============
@@ -164,7 +165,7 @@ function useTimeline(dayBefore: number, dayAfter: number) {
   });
 }
 
-interface PendingRow {
+interface PendingItem {
   id: string;
   style_no: string;
   sku_no: string;
@@ -181,27 +182,26 @@ interface PendingRow {
   po_status: string;
   po_date: string | null;
 }
-function usePendingItems(startYmd: string, endYmd: string, dayFilterYmd?: string) {
+// 拉取所有 unreceived>0 且 delivery_date <= 今天+7 的明细（涵盖未来 7 天 + 已延期）
+function usePendingItemsRaw() {
   return useQuery({
-    queryKey: ["dash_pending", startYmd, endYmd, dayFilterYmd],
-    queryFn: async (): Promise<PendingRow[]> => {
-      const { gte, lte } = ymdToUTCRange(startYmd, endYmd);
-      let q = supabase.from("purchase_order_items")
+    queryKey: ["dash_pending_raw_v2"],
+    queryFn: async (): Promise<PendingItem[]> => {
+      const todayYmd = beijingYMD(new Date());
+      const today = new Date(todayYmd + "T00:00:00+08:00");
+      const end = new Date(today); end.setDate(end.getDate() + 7);
+      const lte = beijingDayRangeToUTC(beijingYMD(end))!.lte;
+      const { data, error } = await supabase.from("purchase_order_items")
         .select(`
           id,style_no,sku_no,product_name,product_image_url,
           purchase_qty,received_qty,unreceived_qty,amount,unit_price,delivery_date,external_po_id,
           purchase_orders!inner(supplier_name,status,po_date)
         `)
         .gt("unreceived_qty", 0)
+        .not("delivery_date", "is", null)
+        .lte("delivery_date", lte)
         .not("purchase_orders.status", "in", EXCLUDED_IN)
-        .limit(5000);
-      if (gte) q = q.gte("purchase_orders.po_date", gte);
-      if (lte) q = q.lte("purchase_orders.po_date", lte);
-      if (dayFilterYmd) {
-        const d = beijingDayRangeToUTC(dayFilterYmd);
-        if (d) q = q.gte("delivery_date", d.gte).lte("delivery_date", d.lte);
-      }
-      const { data, error } = await q;
+        .limit(10000);
       if (error) throw error;
       return (data ?? []).map((r: any) => ({
         id: r.id,
@@ -222,6 +222,38 @@ function usePendingItems(startYmd: string, endYmd: string, dayFilterYmd?: string
       }));
     },
     staleTime: 30_000,
+  });
+}
+
+interface StyleRow {
+  key: string;
+  style_no: string;
+  product_name: string;
+  product_image_url: string | null;
+  supplier_name: string;
+  sku_count: number;
+  purchase_qty: number;
+  received_qty: number;
+  unreceived_qty: number;
+  amount: number;
+  earliest_delivery: string | null;
+  is_overdue: boolean;
+  status: PendingStatus;
+  items: PendingItem[];
+}
+
+// 查询当前供应商账号对应的供应商名称（内部账号则返回空）
+function useCurrentSupplierName(supplierId?: string | null) {
+  return useQuery({
+    queryKey: ["current_supplier_name", supplierId],
+    enabled: !!supplierId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("ops_suppliers").select("name,code").eq("id", supplierId!).maybeSingle();
+      if (error) throw error;
+      return data as { name: string; code: string } | null;
+    },
+    staleTime: 5 * 60_000,
   });
 }
 
@@ -393,14 +425,14 @@ function Timeline({
 
 // ============ Status helpers ============
 type PendingStatus = "overdue" | "soon" | "producing" | "partial" | "done";
-function pendingStatus(r: PendingRow, todayYmd: string): PendingStatus {
-  if (r.unreceived_qty <= 0) return "done";
-  if (!r.delivery_date) return r.received_qty > 0 ? "partial" : "producing";
-  const dYmd = beijingYMD(r.delivery_date);
+function statusForStyle(unreceived: number, received: number, earliestDelivery: string | null, todayYmd: string): PendingStatus {
+  if (unreceived <= 0) return "done";
+  if (!earliestDelivery) return received > 0 ? "partial" : "producing";
+  const dYmd = beijingYMD(earliestDelivery);
   if (dYmd < todayYmd) return "overdue";
   const diffDays = Math.floor((new Date(dYmd + "T00:00:00+08:00").getTime() - new Date(todayYmd + "T00:00:00+08:00").getTime()) / 86400000);
   if (diffDays <= 3) return "soon";
-  if (r.received_qty > 0) return "partial";
+  if (received > 0) return "partial";
   return "producing";
 }
 const STATUS_LABEL: Record<PendingStatus, { label: string; cls: string }> = {
@@ -411,6 +443,11 @@ const STATUS_LABEL: Record<PendingStatus, { label: string; cls: string }> = {
   done:      { label: "已完成", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
 };
 
+// 款号 fallback
+function getStyleKey(it: PendingItem): string {
+  return (it.style_no || it.sku_no || "(无款号)").trim();
+}
+
 // ============ Main page ============
 export default function SupplierDashboard() {
   const [rangeKey, setRangeKey] = useState<RangeKey>("month");
@@ -420,7 +457,7 @@ export default function SupplierDashboard() {
   const [page, setPage] = useState(1);
   const pageSize = 20;
   const [selectedYmd, setSelectedYmd] = useState<string | null>(null);
-  const [detailRow, setDetailRow] = useState<PendingRow | null>(null);
+  const [detailStyle, setDetailStyle] = useState<StyleRow | null>(null);
   const [stylesPopup, setStylesPopup] = useState<{ ymd: string; list: { style_no: string; qty: number }[] } | null>(null);
 
   const { startYmd, endYmd } = useMemo(
@@ -428,31 +465,89 @@ export default function SupplierDashboard() {
     [rangeKey, customStart, customEnd]
   );
 
+  // 当前供应商名称（供应商账号）
+  const { profile } = useAuth();
+  const supplierId = (profile as any)?.supplier_id ?? null;
+  const supplierNameQ = useCurrentSupplierName(supplierId);
+
   const purchaseQ = usePurchaseStats(startYmd, endYmd);
   const inboundQ = useInboundStats(startYmd, endYmd);
   const overdueQ = useOverdueStats();
   const timelineQ = useTimeline(5, 14);
-  const pendingQ = usePendingItems(startYmd, endYmd, selectedYmd ?? undefined);
+  const pendingQ = usePendingItemsRaw();
 
   const todayYmd = beijingYMD(new Date());
 
-  // 过滤 + 分页
-  const filteredPending = useMemo(() => {
-    const kw = keyword.trim().toLowerCase();
-    let rows = pendingQ.data ?? [];
-    if (kw) rows = rows.filter(r =>
-      r.style_no.toLowerCase().includes(kw) ||
-      r.sku_no.toLowerCase().includes(kw) ||
-      r.product_name.toLowerCase().includes(kw) ||
-      r.supplier_name.toLowerCase().includes(kw)
-    );
-    return rows;
-  }, [pendingQ.data, keyword]);
-  const totalPages = Math.max(1, Math.ceil(filteredPending.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const pageRows = filteredPending.slice((safePage - 1) * pageSize, safePage * pageSize);
+  // 按款号聚合 → 排序 → 过滤
+  const styleRows = useMemo<StyleRow[]>(() => {
+    const items = pendingQ.data ?? [];
+    const filtered = selectedYmd
+      ? items.filter(it => it.delivery_date && beijingYMD(it.delivery_date) === selectedYmd)
+      : items;
+    const groups = new Map<string, PendingItem[]>();
+    for (const it of filtered) {
+      const k = getStyleKey(it);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(it);
+    }
+    const rows: StyleRow[] = [];
+    for (const [key, arr] of groups.entries()) {
+      const purchase_qty = arr.reduce((s, x) => s + x.purchase_qty, 0);
+      const received_qty = arr.reduce((s, x) => s + x.received_qty, 0);
+      const unreceived_qty = arr.reduce((s, x) => s + x.unreceived_qty, 0);
+      const amount = arr.reduce((s, x) => s + (x.amount > 0 ? x.amount : x.purchase_qty * x.unit_price), 0);
+      // 最早未完成交付日期
+      const unreceivedItems = arr.filter(x => x.unreceived_qty > 0 && x.delivery_date);
+      const earliest_delivery = unreceivedItems.length
+        ? unreceivedItems.map(x => x.delivery_date!).sort()[0]
+        : null;
+      const is_overdue = !!earliest_delivery && beijingYMD(earliest_delivery) < todayYmd;
+      const status = statusForStyle(unreceived_qty, received_qty, earliest_delivery, todayYmd);
+      const sku_count = new Set(arr.map(x => x.sku_no)).size;
+      const first = arr[0];
+      rows.push({
+        key,
+        style_no: first.style_no || key,
+        product_name: arr.find(x => x.product_name)?.product_name ?? "",
+        product_image_url: arr.find(x => x.product_image_url)?.product_image_url ?? null,
+        supplier_name: first.supplier_name,
+        sku_count, purchase_qty, received_qty, unreceived_qty, amount,
+        earliest_delivery, is_overdue, status, items: arr,
+      });
+    }
+    // 应用过滤规则：交付率>90% 且 待入库<20 时隐藏
+    const visible = rows.filter(r => {
+      if (r.purchase_qty <= 0) return true;
+      const rate = r.received_qty / r.purchase_qty;
+      return !(rate > 0.9 && r.unreceived_qty < 20);
+    });
+    // 排序：已延期 → delivery_date 升序 → 待入库降序 → 金额降序
+    visible.sort((a, b) => {
+      if (a.is_overdue !== b.is_overdue) return a.is_overdue ? -1 : 1;
+      const da = a.earliest_delivery ?? "9999";
+      const db = b.earliest_delivery ?? "9999";
+      if (da !== db) return da < db ? -1 : 1;
+      if (a.unreceived_qty !== b.unreceived_qty) return b.unreceived_qty - a.unreceived_qty;
+      return b.amount - a.amount;
+    });
+    return visible;
+  }, [pendingQ.data, selectedYmd, todayYmd]);
 
-  const lastUpdatedAt = new Date(); // 当次查询完成时间
+  const filteredStyles = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    if (!kw) return styleRows;
+    return styleRows.filter(r =>
+      r.style_no.toLowerCase().includes(kw) ||
+      r.product_name.toLowerCase().includes(kw) ||
+      r.supplier_name.toLowerCase().includes(kw) ||
+      r.items.some(x => x.sku_no.toLowerCase().includes(kw))
+    );
+  }, [styleRows, keyword]);
+  const totalPages = Math.max(1, Math.ceil(filteredStyles.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = filteredStyles.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  const lastUpdatedAt = new Date();
 
   const RANGE_OPTIONS: { v: RangeKey; l: string }[] = [
     { v: "today", l: "今日" }, { v: "month", l: "本月" }, { v: "30d", l: "近30天" }, { v: "year", l: "今年" }, { v: "custom", l: "自定义" },
@@ -463,8 +558,14 @@ export default function SupplierDashboard() {
       {/* Header */}
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
+          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2 flex-wrap">
             工作台首页 <span className="text-muted-foreground font-medium text-base">Dashboard</span>
+            {supplierNameQ.data?.name && (
+              <Badge className="bg-emerald-600 hover:bg-emerald-600 text-white text-[11px] ml-1">
+                供应商：{supplierNameQ.data.name}
+                {supplierNameQ.data.code ? <span className="ml-1 opacity-80 font-mono">({supplierNameQ.data.code})</span> : null}
+              </Badge>
+            )}
           </h1>
           <p className="text-[12px] text-muted-foreground mt-1">
             数据最后统计更新时间：
@@ -578,13 +679,13 @@ export default function SupplierDashboard() {
             <thead className="text-muted-foreground border-b border-border">
               <tr className="text-left">
                 <th className="py-2.5 font-normal w-12"></th>
-                <th className="py-2.5 font-normal">款号 / SKU / 商品</th>
+                <th className="py-2.5 font-normal">款号 / 商品</th>
                 <th className="py-2.5 font-normal">供应商</th>
                 <th className="py-2.5 font-normal text-right">采购数</th>
                 <th className="py-2.5 font-normal text-right">已入库</th>
                 <th className="py-2.5 font-normal text-right">待入库</th>
                 <th className="py-2.5 pr-6 font-normal text-right">采购金额</th>
-                <th className="py-2.5 pl-2 font-normal">交付日期</th>
+                <th className="py-2.5 pl-2 font-normal">最早交期</th>
                 <th className="py-2.5 font-normal">交付状态</th>
                 <th className="py-2.5 font-normal">操作</th>
               </tr>
@@ -596,21 +697,21 @@ export default function SupplierDashboard() {
                 <tr><td colSpan={10} className="py-10 text-center text-rose-600">读取失败：{(pendingQ.error as any).message}</td></tr>
               ) : pageRows.length === 0 ? (
                 <tr><td colSpan={10} className="py-12 text-center text-muted-foreground">
-                  <Inbox className="w-6 h-6 inline mr-2 opacity-50" />暂无待交付明细
+                  <Inbox className="w-6 h-6 inline mr-2 opacity-50" />未来 7 天暂无待交付款式
                 </td></tr>
               ) : pageRows.map((r) => {
-                const st = pendingStatus(r, todayYmd);
+                const st = r.status;
                 const rate = r.purchase_qty > 0 ? Math.round((r.received_qty / r.purchase_qty) * 100) : 0;
                 return (
-                  <tr key={r.id} className="border-b border-border/60 last:border-0 hover:bg-muted/30">
+                  <tr key={r.key} className="border-b border-border/60 last:border-0 hover:bg-muted/30">
                     <td className="py-3">
                       {r.product_image_url
                         ? <img src={r.product_image_url} alt="" className="w-9 h-9 object-cover rounded-md" onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
                         : <div className="w-9 h-9 rounded-md bg-muted" />}
                     </td>
                     <td className="py-3">
-                      <div className="font-mono text-foreground">{r.style_no || "-"} <span className="text-muted-foreground">/ {r.sku_no || "-"}</span></div>
-                      <div className="text-[11px] text-muted-foreground truncate max-w-[260px]">{r.product_name || "-"}</div>
+                      <div className="font-mono text-foreground">{r.style_no}</div>
+                      <div className="text-[11px] text-muted-foreground truncate max-w-[260px]">{r.product_name || "-"} · 共 {r.sku_count} 个 SKU</div>
                     </td>
                     <td className="py-3 text-[11px] text-muted-foreground">{r.supplier_name || "-"}</td>
                     <td className="py-3 text-right tabular-nums">{fmtInt(r.purchase_qty)} <span className="text-muted-foreground">件</span></td>
@@ -620,13 +721,13 @@ export default function SupplierDashboard() {
                     <td className={`py-3 text-right tabular-nums font-semibold ${st === "overdue" ? "text-rose-600" : st === "soon" ? "text-amber-600" : "text-foreground"}`}>
                       {fmtInt(r.unreceived_qty)} <span className="font-normal text-muted-foreground">件</span>
                     </td>
-                    <td className="py-3 pr-6 text-right tabular-nums font-semibold whitespace-nowrap">{fmtMoney(r.amount > 0 ? r.amount : r.purchase_qty * r.unit_price)}</td>
-                    <td className="py-3 pl-2 font-mono whitespace-nowrap">{r.delivery_date ? formatDateCN(r.delivery_date) : <span className="text-muted-foreground">未设定</span>}</td>
+                    <td className="py-3 pr-6 text-right tabular-nums font-semibold whitespace-nowrap">{fmtMoney(r.amount)}</td>
+                    <td className="py-3 pl-2 font-mono whitespace-nowrap">{r.earliest_delivery ? formatDateCN(r.earliest_delivery) : <span className="text-muted-foreground">未设定</span>}</td>
                     <td className="py-3">
                       <span className={`px-2 py-0.5 rounded text-[11px] border ${STATUS_LABEL[st].cls}`}>{STATUS_LABEL[st].label}</span>
                     </td>
                     <td className="py-3">
-                      <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={() => setDetailRow(r)}>
+                      <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={() => setDetailStyle(r)}>
                         <Eye className="w-3 h-3" /> 明细
                       </Button>
                     </td>
@@ -637,9 +738,9 @@ export default function SupplierDashboard() {
           </table>
         </div>
 
-        {filteredPending.length > 0 && (
+        {filteredStyles.length > 0 && (
           <div className="flex items-center justify-between mt-4 text-[11px] text-muted-foreground">
-            <span>共 {filteredPending.length} 条，第 {safePage} / {totalPages} 页</span>
+            <span>共 {filteredStyles.length} 个款式，第 {safePage} / {totalPages} 页</span>
             <div className="flex items-center gap-1">
               <Button variant="outline" size="sm" className="h-7 text-[11px]" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>上一页</Button>
               <Button variant="outline" size="sm" className="h-7 text-[11px]" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>下一页</Button>
@@ -648,29 +749,105 @@ export default function SupplierDashboard() {
         )}
       </Card>
 
-      {/* 款号详情抽屉 */}
-      <Sheet open={!!detailRow} onOpenChange={(o) => !o && setDetailRow(null)}>
-        <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+      {/* 款式详情抽屉（SKU + 关联采购单） */}
+      <Sheet open={!!detailStyle} onOpenChange={(o) => !o && setDetailStyle(null)}>
+        <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto">
           <SheetHeader>
-            <SheetTitle>{detailRow?.style_no} · {detailRow?.sku_no}</SheetTitle>
-            <SheetDescription>{detailRow?.product_name}</SheetDescription>
+            <SheetTitle>{detailStyle?.style_no}</SheetTitle>
+            <SheetDescription>{detailStyle?.product_name} · {detailStyle?.supplier_name}</SheetDescription>
           </SheetHeader>
-          {detailRow && (
-            <div className="mt-4 space-y-3 text-sm">
-              <div className="grid grid-cols-2 gap-2">
-                <div><span className="text-muted-foreground">供应商：</span>{detailRow.supplier_name || "-"}</div>
-                <div><span className="text-muted-foreground">采购单号：</span>{detailRow.external_po_id || "-"}</div>
-                <div><span className="text-muted-foreground">采购日期：</span>{formatDateCN(detailRow.po_date)}</div>
-                <div><span className="text-muted-foreground">协议到货：</span>{detailRow.delivery_date ? formatDateCN(detailRow.delivery_date) : "未设定"}</div>
-                <div><span className="text-muted-foreground">采购数量：</span>{fmtInt(detailRow.purchase_qty)} 件</div>
-                <div><span className="text-muted-foreground">已入库：</span>{fmtInt(detailRow.received_qty)} 件</div>
-                <div><span className="text-muted-foreground">待入库：</span>{fmtInt(detailRow.unreceived_qty)} 件</div>
-                <div><span className="text-muted-foreground">单价：</span>{fmtMoney(detailRow.unit_price)}</div>
-                <div><span className="text-muted-foreground">采购金额：</span>{fmtMoney(detailRow.amount > 0 ? detailRow.amount : detailRow.purchase_qty * detailRow.unit_price)}</div>
-                <div><span className="text-muted-foreground">状态：</span>{STATUS_LABEL[pendingStatus(detailRow, todayYmd)].label}</div>
+          {detailStyle && (() => {
+            const rate = detailStyle.purchase_qty > 0 ? Math.round((detailStyle.received_qty / detailStyle.purchase_qty) * 100) : 0;
+            // 关联采购单聚合
+            const poMap = new Map<string, { po_date: string | null; delivery: string | null; purchase: number; received: number; unreceived: number }>();
+            for (const it of detailStyle.items) {
+              const k = it.external_po_id || "-";
+              const cur = poMap.get(k) ?? { po_date: it.po_date, delivery: it.delivery_date, purchase: 0, received: 0, unreceived: 0 };
+              cur.purchase += it.purchase_qty;
+              cur.received += it.received_qty;
+              cur.unreceived += it.unreceived_qty;
+              if (it.delivery_date && (!cur.delivery || it.delivery_date < cur.delivery)) cur.delivery = it.delivery_date;
+              poMap.set(k, cur);
+            }
+            return (
+              <div className="mt-4 space-y-5 text-sm">
+                <div className="grid grid-cols-3 gap-3 p-3 rounded-md bg-muted/40">
+                  <div><div className="text-[11px] text-muted-foreground">采购总数</div><div className="font-semibold tabular-nums">{fmtInt(detailStyle.purchase_qty)} 件</div></div>
+                  <div><div className="text-[11px] text-muted-foreground">已入库</div><div className="font-semibold tabular-nums">{fmtInt(detailStyle.received_qty)} 件 / {rate}%</div></div>
+                  <div><div className="text-[11px] text-muted-foreground">待入库</div><div className="font-semibold tabular-nums">{fmtInt(detailStyle.unreceived_qty)} 件</div></div>
+                  <div><div className="text-[11px] text-muted-foreground">采购金额</div><div className="font-semibold tabular-nums">{fmtMoney(detailStyle.amount)}</div></div>
+                  <div><div className="text-[11px] text-muted-foreground">最早交期</div><div className="font-semibold font-mono">{detailStyle.earliest_delivery ? formatDateCN(detailStyle.earliest_delivery) : "未设定"}</div></div>
+                  <div><div className="text-[11px] text-muted-foreground">状态</div><div><span className={`px-2 py-0.5 rounded text-[11px] border ${STATUS_LABEL[detailStyle.status].cls}`}>{STATUS_LABEL[detailStyle.status].label}</span></div></div>
+                </div>
+
+                <div>
+                  <h4 className="text-[12px] font-semibold mb-2">SKU 明细（{detailStyle.items.length}）</h4>
+                  <div className="overflow-x-auto border rounded-md">
+                    <table className="w-full text-[11px]">
+                      <thead className="bg-muted/50 text-muted-foreground">
+                        <tr className="text-left">
+                          <th className="px-2 py-2 font-normal">SKU</th>
+                          <th className="px-2 py-2 font-normal">颜色/尺码</th>
+                          <th className="px-2 py-2 font-normal text-right">采购</th>
+                          <th className="px-2 py-2 font-normal text-right">已入</th>
+                          <th className="px-2 py-2 font-normal text-right">待入</th>
+                          <th className="px-2 py-2 font-normal text-right">单价</th>
+                          <th className="px-2 py-2 font-normal text-right">金额</th>
+                          <th className="px-2 py-2 font-normal">交期</th>
+                          <th className="px-2 py-2 font-normal">采购单</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailStyle.items.map((it) => (
+                          <tr key={it.id} className="border-t">
+                            <td className="px-2 py-1.5 font-mono">{it.sku_no || "-"}</td>
+                            <td className="px-2 py-1.5 text-muted-foreground truncate max-w-[140px]">{it.product_name || "-"}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums">{fmtInt(it.purchase_qty)}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums">{fmtInt(it.received_qty)}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{fmtInt(it.unreceived_qty)}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums">{fmtMoney(it.unit_price)}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums">{fmtMoney(it.amount > 0 ? it.amount : it.purchase_qty * it.unit_price)}</td>
+                            <td className="px-2 py-1.5 font-mono whitespace-nowrap">{it.delivery_date ? formatDateCN(it.delivery_date) : "-"}</td>
+                            <td className="px-2 py-1.5 font-mono text-muted-foreground">{it.external_po_id || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-[12px] font-semibold mb-2">关联采购单（{poMap.size}）</h4>
+                  <div className="overflow-x-auto border rounded-md">
+                    <table className="w-full text-[11px]">
+                      <thead className="bg-muted/50 text-muted-foreground">
+                        <tr className="text-left">
+                          <th className="px-2 py-2 font-normal">采购单号</th>
+                          <th className="px-2 py-2 font-normal">采购日期</th>
+                          <th className="px-2 py-2 font-normal">协议到货</th>
+                          <th className="px-2 py-2 font-normal text-right">采购</th>
+                          <th className="px-2 py-2 font-normal text-right">已入</th>
+                          <th className="px-2 py-2 font-normal text-right">待入</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from(poMap.entries()).map(([poNo, v]) => (
+                          <tr key={poNo} className="border-t">
+                            <td className="px-2 py-1.5 font-mono">{poNo}</td>
+                            <td className="px-2 py-1.5 font-mono whitespace-nowrap">{v.po_date ? formatDateCN(v.po_date) : "-"}</td>
+                            <td className="px-2 py-1.5 font-mono whitespace-nowrap">{v.delivery ? formatDateCN(v.delivery) : "-"}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums">{fmtInt(v.purchase)}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums">{fmtInt(v.received)}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{fmtInt(v.unreceived)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </SheetContent>
       </Sheet>
 
