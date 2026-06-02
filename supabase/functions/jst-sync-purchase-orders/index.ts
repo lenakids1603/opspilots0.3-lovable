@@ -630,7 +630,7 @@ async function syncPurchaseOrdersSegment(
               color: propMap["颜色"] ?? propMap["color"] ?? "",
               size: propMap["尺码"] ?? propMap["size"] ?? "",
               spec: props, purchase_qty: qty, unit_price: price, amount: qty * price,
-              delivery_date: it.delivery_date ? new Date(it.delivery_date).toISOString() : null,
+              delivery_date: parseJstBeijingDateTime(it.delivery_date),
               item_remark: it.remark ?? "", raw: it,
             };
             const conflict = poiId ? "external_poi_id" : "external_po_id,sku_no,style_no";
