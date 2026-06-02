@@ -111,7 +111,13 @@ function usePurchaseLogs() {
     queryKey: ["jst_sync_logs", "purchase"],
     queryFn: async () => {
       const { data, error } = await supabase.from("jst_sync_logs").select("*")
-        .in("sync_type", ["purchase_orders", "purchase_receipts", "purchase"])
+        .in("sync_type", [
+          "purchase_orders",
+          "purchase_inbound_orders",
+          "purchase_receipts",
+          "purchase_in",
+          "purchase",
+        ])
         .order("started_at", { ascending: false }).limit(100);
       if (error) throw error;
       return data ?? [];
