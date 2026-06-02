@@ -24,6 +24,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import {
   AlertTriangle, RefreshCw, ChevronDown, FileText, Boxes, Package,
   Warehouse, LineChart, Truck, Wrench, Search, Clock, Info, Stethoscope,
@@ -181,6 +182,23 @@ function useRuns() {
   });
 }
 
+function usePurchaseLogs() {
+  return useQuery({
+    queryKey: ["jst_sync_logs", "purchase"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("jst_sync_logs")
+        .select("*")
+        .in("sync_type", ["purchase_orders", "purchase_receipts", "purchase"])
+        .order("started_at", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      return data ?? [];
+    },
+    refetchInterval: 5000,
+  });
+}
+
 // ============================================================
 // Main page
 // ============================================================
@@ -248,11 +266,13 @@ export default function JstDataIntegrationPage() {
   const metricsQ = useMetrics();
   const errorsQ = useErrors();
   const runsQ = useRuns();
+  const purchaseLogsQ = usePurchaseLogs();
 
   const [keyword, setKeyword] = useState("");
   const [triggerFilter, setTriggerFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [detailLog, setDetailLog] = useState<any | null>(null);
 
   // ------------------------------------------------------------
   // 触发同步：base_archive / shop / supplier / warehouse 走真实 Edge Function；
@@ -325,8 +345,15 @@ export default function JstDataIntegrationPage() {
         description: `${d.label} — ${d.message}${d.log_id ? `（日志 ${d.log_id.slice(0, 8)}）` : ""}`,
       });
       qc.invalidateQueries({ queryKey: ["jst_sync_runs"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_logs", "purchase"] });
       qc.invalidateQueries({ queryKey: ["jst_sync_modules"] });
       qc.invalidateQueries({ queryKey: ["jst_sync_metrics"] });
+      qc.invalidateQueries({ queryKey: ["purchase_orders"] });
+      qc.invalidateQueries({ queryKey: ["purchase_order_items"] });
+      qc.invalidateQueries({ queryKey: ["purchase_receipts"] });
+      qc.invalidateQueries({ queryKey: ["purchase_receipt_items"] });
+      // 跳转到日志区
+      setTimeout(() => document.getElementById("jst-sync-logs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
     },
     onError: (e: any) => toast({ title: "采购同步失败", description: e.message, variant: "destructive" }),
   });
@@ -360,6 +387,27 @@ export default function JstDataIntegrationPage() {
   const metrics = metricsQ.data ?? {};
   const errors = errorsQ.data ?? [];
   const runs = runsQ.data ?? [];
+  const purchaseLogs = purchaseLogsQ.data ?? [];
+
+  // 将 jst_sync_logs(采购) 归一化为日志行结构
+  const purchaseLogRows = useMemo(() => purchaseLogs.map((p: any) => {
+    const fetched = (p.fetched_orders_count ?? 0) + (p.fetched_items_count ?? 0) + (p.fetched_receipts_count ?? 0);
+    return {
+      id: `plog-${p.id}`,
+      _source: "purchase_log" as const,
+      _raw: p,
+      module_key: p.sync_type,
+      trigger_type: "manual",
+      started_at: p.started_at,
+      status: p.status === "success" ? "ok" : p.status === "running" ? "running" : p.status === "partial" ? "warn" : "error",
+      inserted_count: fetched,
+      updated_count: 0,
+      failed_count: p.status === "error" ? 1 : 0,
+      duration_ms: p.ended_at ? new Date(p.ended_at).getTime() - new Date(p.started_at).getTime() : null,
+      current_total_summary: p.message ?? "",
+      error_message: p.error_detail ?? "",
+    };
+  }), [purchaseLogs]);
 
   const globalMetric = metrics["global_status"];
   const globalExtra = (globalMetric?.metric_extra ?? {}) as Record<string, any>;
@@ -370,10 +418,17 @@ export default function JstDataIntegrationPage() {
   );
 
   const filteredLogs = useMemo(() => {
-    return runs.filter((l) => {
+    const allLogs: any[] = [...runs.map((r: any) => ({ ...r, _source: "run" })), ...purchaseLogRows];
+    allLogs.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+    return allLogs.filter((l) => {
+      const isPurchaseLog = l._source === "purchase_log";
       const mod = modules.find((m) => m.module_key === l.module_key);
-      const groupLabel = mod ? (CATEGORY_LABEL[mod.category] ?? mod.category) : "";
-      const moduleName = mod?.module_name ?? l.module_key;
+      const groupLabel = isPurchaseLog
+        ? CATEGORY_LABEL.purchase
+        : (mod ? (CATEGORY_LABEL[mod.category] ?? mod.category) : "");
+      const moduleName = isPurchaseLog
+        ? (l.module_key === "purchase_orders" ? "采购单" : l.module_key === "purchase_receipts" ? "采购入库单" : "采购与入库")
+        : (mod?.module_name ?? l.module_key);
       const triggerLabel = TRIGGER_LABEL[l.trigger_type] ?? l.trigger_type;
 
       if (triggerFilter !== "all" && triggerLabel !== triggerFilter) return false;
@@ -385,7 +440,7 @@ export default function JstDataIntegrationPage() {
       }
       return true;
     });
-  }, [runs, modules, triggerFilter, groupFilter, statusFilter, keyword]);
+  }, [runs, purchaseLogRows, modules, triggerFilter, groupFilter, statusFilter, keyword]);
 
   const isLoading = modulesQ.isLoading || metricsQ.isLoading || errorsQ.isLoading || runsQ.isLoading;
 
@@ -1037,9 +1092,15 @@ export default function JstDataIntegrationPage() {
                       没有匹配的日志
                     </TableCell>
                   </TableRow>
-                ) : filteredLogs.map((l) => {
+                ) : filteredLogs.map((l: any) => {
+                  const isPurchase = l._source === "purchase_log";
                   const mod = modules.find((m) => m.module_key === l.module_key);
-                  const groupLabel = mod ? (CATEGORY_LABEL[mod.category] ?? mod.category) : "—";
+                  const groupLabel = isPurchase
+                    ? CATEGORY_LABEL.purchase
+                    : (mod ? (CATEGORY_LABEL[mod.category] ?? mod.category) : "—");
+                  const moduleName = isPurchase
+                    ? (l.module_key === "purchase_orders" ? "采购单" : l.module_key === "purchase_receipts" ? "采购入库单" : "采购与入库")
+                    : (mod?.module_name ?? l.module_key);
                   const s = asStatus(l.status === "running" ? "ok" : l.status);
                   return (
                     <TableRow key={l.id}>
@@ -1048,22 +1109,24 @@ export default function JstDataIntegrationPage() {
                         <Badge variant="outline" className="font-normal">{TRIGGER_LABEL[l.trigger_type] ?? l.trigger_type}</Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground">{groupLabel}</TableCell>
-                      <TableCell>{mod?.module_name ?? l.module_key}</TableCell>
+                      <TableCell>{moduleName}</TableCell>
                       <TableCell>
                         {l.status === "running"
                           ? <Badge variant="secondary" className="bg-sky-100 text-sky-700">运行中</Badge>
                           : <StatusBadge value={s} />}
                       </TableCell>
-                      <TableCell className="text-xs">{l.inserted_count}</TableCell>
-                      <TableCell className="text-xs">{l.updated_count}</TableCell>
-                      <TableCell className={`text-xs ${l.failed_count > 0 ? "text-rose-600" : ""}`}>{l.failed_count}</TableCell>
+                      <TableCell className="text-xs">{l.inserted_count ?? 0}</TableCell>
+                      <TableCell className="text-xs">{l.updated_count ?? 0}</TableCell>
+                      <TableCell className={`text-xs ${(l.failed_count ?? 0) > 0 ? "text-rose-600" : ""}`}>{l.failed_count ?? 0}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{l.current_total_summary || "—"}</TableCell>
                       <TableCell className="text-xs">{fmtDuration(l.duration_ms)}</TableCell>
                       <TableCell className="text-xs text-rose-600 max-w-[200px] truncate" title={l.error_message ?? ""}>
                         {l.error_message || "-"}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="sm">{l.status === "error" ? "重试" : "详情"}</Button>
+                        <Button variant="ghost" size="sm" onClick={() => setDetailLog(l)}>
+                          详情
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );
@@ -1086,6 +1149,39 @@ export default function JstDataIntegrationPage() {
           页面中的 GMV、GSV、退款金额等经营指标均为指定时间范围内的累计值，不代表本次同步新增金额。
         </div>
       </div>
+
+      <Sheet open={!!detailLog} onOpenChange={(o) => !o && setDetailLog(null)}>
+        <SheetContent className="w-[640px] sm:max-w-[640px] overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>同步日志详情</SheetTitle>
+            <SheetDescription>
+              {detailLog?._source === "purchase_log" ? "来源:jst_sync_logs(采购与入库)" : "来源:jst_sync_runs"}
+            </SheetDescription>
+          </SheetHeader>
+          {detailLog && (
+            <div className="space-y-3 mt-4 text-xs">
+              <div className="grid grid-cols-2 gap-2">
+                <div><span className="text-muted-foreground">开始:</span> {fmtDateTime(detailLog.started_at)}</div>
+                <div><span className="text-muted-foreground">状态:</span> {detailLog.status}</div>
+                <div><span className="text-muted-foreground">模块:</span> {detailLog.module_key}</div>
+                <div><span className="text-muted-foreground">耗时:</span> {fmtDuration(detailLog.duration_ms)}</div>
+              </div>
+              {detailLog.error_message && (
+                <div>
+                  <div className="font-medium mb-1">错误详情</div>
+                  <pre className="bg-rose-50 text-rose-700 p-2 rounded whitespace-pre-wrap break-all">{detailLog.error_message}</pre>
+                </div>
+              )}
+              <div>
+                <div className="font-medium mb-1">原始记录</div>
+                <pre className="bg-muted p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">
+{JSON.stringify(detailLog._raw ?? detailLog, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   Warehouse, Receipt, Building2, Package, Headphones,
-  Database, Settings, ChevronDown, ChevronRight, LogOut, LayoutDashboard, TrendingUp,
+  Database, Settings, ChevronDown, ChevronRight, LogOut, LayoutDashboard, TrendingUp, ShoppingCart,
 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -40,6 +40,12 @@ const GROUPS: Group[] = [
   {
     title: "仓库系统", icon: Warehouse,
     items: [{ title: "到货登记", url: "/warehouse/arrivals" }],
+  },
+  {
+    title: "采购系统", icon: ShoppingCart,
+    items: [
+      { title: "采购单管理", url: "/purchase/orders" },
+    ],
   },
   {
     title: "供应商系统", icon: Building2,
