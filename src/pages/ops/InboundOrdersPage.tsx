@@ -276,7 +276,7 @@ export default function InboundOrdersPage() {
   const onSearch = () => { setPage(0); setFilters(draft); };
   const onReset = () => { const d = defaultFilters(); setDraft(d); setFilters(d); setPage(0); };
 
-  const applyQuickRange = (kind: "7d" | "30d" | "month" | "all") => {
+  const applyQuickRange = (kind: "today" | "7d" | "30d" | "month" | "all") => {
     const end = todayCN();
     let start = "";
     let endDate = end;
