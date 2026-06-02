@@ -181,6 +181,23 @@ function useRuns() {
   });
 }
 
+function usePurchaseLogs() {
+  return useQuery({
+    queryKey: ["jst_sync_logs", "purchase"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("jst_sync_logs")
+        .select("*")
+        .in("sync_type", ["purchase_orders", "purchase_receipts", "purchase"])
+        .order("started_at", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      return data ?? [];
+    },
+    refetchInterval: 5000,
+  });
+}
+
 // ============================================================
 // Main page
 // ============================================================
