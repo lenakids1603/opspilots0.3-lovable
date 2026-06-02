@@ -620,8 +620,8 @@ export default function SupplierDashboard() {
                     <td className={`py-3 text-right tabular-nums font-semibold ${st === "overdue" ? "text-rose-600" : st === "soon" ? "text-amber-600" : "text-foreground"}`}>
                       {fmtInt(r.unreceived_qty)} <span className="font-normal text-muted-foreground">件</span>
                     </td>
-                    <td className="py-3 text-right tabular-nums font-semibold">{fmtMoney(r.amount > 0 ? r.amount : r.purchase_qty * r.unit_price)}</td>
-                    <td className="py-3 font-mono whitespace-nowrap">{r.delivery_date ? formatDateCN(r.delivery_date) : <span className="text-muted-foreground">未设定</span>}</td>
+                    <td className="py-3 pr-6 text-right tabular-nums font-semibold whitespace-nowrap">{fmtMoney(r.amount > 0 ? r.amount : r.purchase_qty * r.unit_price)}</td>
+                    <td className="py-3 pl-2 font-mono whitespace-nowrap">{r.delivery_date ? formatDateCN(r.delivery_date) : <span className="text-muted-foreground">未设定</span>}</td>
                     <td className="py-3">
                       <span className={`px-2 py-0.5 rounded text-[11px] border ${STATUS_LABEL[st].cls}`}>{STATUS_LABEL[st].label}</span>
                     </td>
