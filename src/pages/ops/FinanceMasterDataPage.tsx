@@ -616,12 +616,16 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
   const [bindShop, setBindShop] = useState<AnyRow | null>(null);
   useDebouncedReset([q, pf, ent, stf, bindState, pageSize], setPage);
 
+  const [bindingsByShop, setBindingsByShop] = useState<Map<string, AnyRow[]>>(new Map());
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const [accountsShop, setAccountsShop] = useState<AnyRow | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     const [{ data: es }, { data: ps }, { data: bs }] = await Promise.all([
       supabase.from("business_entities").select("id,name,entity_type").is("deleted_at", null).order("name"),
       supabase.from("platforms").select("id,name,code").is("deleted_at", null).order("name"),
-      supabase.from("bank_accounts").select("id,entity_id,bank_name,account_no_masked,purpose,is_default").is("deleted_at", null),
+      supabase.from("bank_accounts").select("id,account_holder_name,account_name,bank_name,account_number,account_no_masked,account_type,usage_type,is_default,owner_entity_id,related_entity_id").is("deleted_at", null),
     ]);
     setEntities(es ?? []); setPlatforms(ps ?? []); setBanks(bs ?? []);
 
@@ -640,17 +644,31 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
     setLoading(false);
     if (error) { toast({ title: "加载失败", description: error.message, variant: "destructive" }); return; }
     setRows(data ?? []); setTotal(count ?? 0);
+
+    const ids = (data ?? []).map((r: any) => r.id);
+    if (ids.length) {
+      const { data: bnd } = await supabase.from("shop_bank_account_bindings")
+        .select("*").in("shop_id", ids).eq("status", "active");
+      const m = new Map<string, AnyRow[]>();
+      (bnd ?? []).forEach((b: any) => {
+        const arr = m.get(b.shop_id) ?? [];
+        arr.push(b); m.set(b.shop_id, arr);
+      });
+      setBindingsByShop(m);
+    } else setBindingsByShop(new Map());
   }, [q, pf, ent, stf, bindState, page, pageSize, sortKey, sortAsc]);
   useEffect(() => { load(); }, [load]);
 
   const entityMap = useMemo(() => new Map(entities.map(e => [e.id, e])), [entities]);
   const platformMap = useMemo(() => new Map(platforms.map(p => [p.id, p])), [platforms]);
+  const bankMap = useMemo(() => new Map(banks.map(b => [b.id, b])), [banks]);
   const banksByEntity = useMemo(() => {
     const m = new Map<string, AnyRow[]>();
     banks.forEach(b => {
-      if (!b.entity_id) return;
-      const arr = m.get(b.entity_id) ?? [];
-      arr.push(b); m.set(b.entity_id, arr);
+      const key = b.owner_entity_id || b.related_entity_id;
+      if (!key) return;
+      const arr = m.get(key) ?? [];
+      arr.push(b); m.set(key, arr);
     });
     return m;
   }, [banks]);
@@ -671,6 +689,7 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
   };
 
   const openBind = (r: AnyRow) => { setBindShop(r); setBindOpen(true); };
+  const openAccounts = (r: AnyRow) => { setAccountsShop(r); setAccountsOpen(true); };
   const unbind = async (r: AnyRow) => {
     const { error } = await supabase.from("shops").update({ entity_id: null }).eq("id", r.id);
     if (error) toast({ title: "解除失败", description: error.message, variant: "destructive" });
@@ -680,7 +699,7 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
   return (
     <Card className="overflow-hidden mt-4">
       <div className="px-4 py-3 border-b bg-muted/10 text-[12px] text-muted-foreground">
-        店铺资料来自聚水潭同步，平台信息由聚水潭自动提供。本页只维护店铺对应的内部经营主体，用于后续财务流水、开票、账户额度和店铺归属统计。
+        店铺资料来自聚水潭同步。本页维护店铺对应的经营主体，以及店铺与银行账户的绑定关系（一个店铺可绑定多个账户，账户与店铺为多对多）。
       </div>
       <FilterRow>
         <Input placeholder="搜索店铺名 / JST 店铺ID" value={q} onChange={e => setQ(e.target.value)} className="h-9 w-64" />
@@ -708,65 +727,57 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
         <table className="w-full text-[12.5px]">
           <thead className="bg-muted/40 text-muted-foreground">
             <tr className="text-left">
-              {([
-                { label: "JST 店铺 ID", key: "jst_shop_id" },
-                { label: "店铺名称", key: "name" },
-                { label: "平台", key: "platform_type" },
-                { label: "所属经营主体", key: "entity_id" },
-                { label: "主体银行账户", key: null },
-                { label: "授权状态", key: "auth_status" },
-                { label: "店铺状态", key: "shop_status_raw" },
-                { label: "最后同步", key: "last_synced_at" },
-                { label: "操作", key: null },
-              ] as { label: string; key: string | null }[]).map(h => {
-                const sortable = !!h.key;
-                const active = sortable && sortKey === h.key;
-                return (
-                  <th
-                    key={h.label}
-                    className={`px-3 py-2.5 font-normal whitespace-nowrap ${sortable ? "cursor-pointer select-none hover:text-foreground" : ""}`}
-                    onClick={() => {
-                      if (!sortable) return;
-                      if (sortKey === h.key) setSortAsc(v => !v);
-                      else { setSortKey(h.key as string); setSortAsc(true); }
-                    }}
-                  >
-                    {h.label}{active ? (sortAsc ? " ↑" : " ↓") : sortable ? " ↕" : ""}
-                  </th>
-                );
-              })}
+              {(["店铺名称","平台","经营主体","默认收款账户","绑定账户数","店铺状态","最后同步","操作"]).map(h =>
+                <th key={h} className="px-3 py-2.5 font-normal whitespace-nowrap">{h}</th>
+              )}
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={9} className="text-center py-8 text-muted-foreground">加载中...</td></tr>}
+            {loading && <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">加载中...</td></tr>}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={9}>
-                <EmptyHint msg="暂无店铺数据。请先在【数据中心 / 聚水潭数据接入详情】同步店铺资料，或检查聚水潭店铺同步是否已写入 shops 表。" />
+              <tr><td colSpan={8}>
+                <EmptyHint msg="暂无店铺数据。请先在【数据中心 / 聚水潭数据接入详情】同步店铺资料。" />
               </td></tr>
             )}
             {rows.map(r => {
               const entity = r.entity_id ? entityMap.get(r.entity_id) : null;
-              const eBanks = r.entity_id ? (banksByEntity.get(r.entity_id) ?? []) : [];
-              const bankSummary = eBanks.length === 0 ? "-"
-                : eBanks.slice(0, 2).map(b => `${b.bank_name ?? ""} ${b.account_no_masked ?? ""}`.trim()).join(" / ")
-                  + (eBanks.length > 2 ? ` +${eBanks.length - 2}` : "");
+              const shopBindings = bindingsByShop.get(r.id) ?? [];
+              const defaultCollection = shopBindings.find(b => b.binding_type === "collection" && b.is_default)
+                ?? shopBindings.find(b => b.binding_type === "collection");
+              const defBank = defaultCollection ? bankMap.get(defaultCollection.bank_account_id) : null;
               const platformName = r.platform_type || platformMap.get(r.platform_id)?.name || "-";
               return (
                 <tr key={r.id} className="border-t hover:bg-muted/30">
-                  <td className="px-3 py-2.5 font-mono text-[11.5px] text-muted-foreground">{r.jst_shop_id ?? "-"}</td>
-                  <td className="px-3 py-2.5"><div className="font-medium">{r.name}</div></td>
+                  <td className="px-3 py-2.5">
+                    <div className="font-medium">{r.name}</div>
+                    <div className="text-[11px] text-muted-foreground font-mono">{r.jst_shop_id ?? ""}</div>
+                  </td>
                   <td className="px-3 py-2.5">{platformName}</td>
                   <td className="px-3 py-2.5">{entity ? entity.name : <span className="text-amber-600">未绑定</span>}</td>
-                  <td className="px-3 py-2.5 text-[12px] text-muted-foreground">{bankSummary}</td>
-                  <td className="px-3 py-2.5">{r.auth_status || "-"}</td>
+                  <td className="px-3 py-2.5 text-[12px]">
+                    {defBank ? (
+                      <div>
+                        <div>{defBank.account_holder_name || defBank.account_name}</div>
+                        <div className="text-[11px] text-muted-foreground font-mono">{defBank.bank_name} · {defBank.account_number || defBank.account_no_masked}</div>
+                      </div>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    {shopBindings.length > 0
+                      ? <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">{shopBindings.length}</span>
+                      : <span className="text-muted-foreground">0</span>}
+                  </td>
                   <td className="px-3 py-2.5">{r.shop_status_raw || "-"}</td>
                   <td className="px-3 py-2.5 text-[11.5px] text-muted-foreground">{r.last_synced_at ? new Date(r.last_synced_at).toLocaleString("zh-CN") : "-"}</td>
                   <td className="px-3 py-2.5 whitespace-nowrap">
-                    <button onClick={() => openBind(r)} className="text-[12px] text-primary hover:underline mr-3">
+                    <button onClick={() => openAccounts(r)} className="text-[12px] text-primary hover:underline mr-3">
+                      {shopBindings.length > 0 ? "查看/管理账户" : "绑定账户"}
+                    </button>
+                    <button onClick={() => openBind(r)} className="text-[12px] text-muted-foreground hover:underline mr-3">
                       {r.entity_id ? "更换主体" : "绑定主体"}
                     </button>
                     {r.entity_id && (
-                      <button onClick={() => unbind(r)} className="text-[12px] text-muted-foreground hover:underline">解除</button>
+                      <button onClick={() => unbind(r)} className="text-[12px] text-muted-foreground hover:underline">解除主体</button>
                     )}
                   </td>
                 </tr>
@@ -784,6 +795,13 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
         shop={bindShop}
         entities={entities}
         banksByEntity={banksByEntity}
+        onSaved={load}
+      />
+      <ShopBankBindingsDrawer
+        open={accountsOpen}
+        onOpenChange={setAccountsOpen}
+        shop={accountsShop}
+        banks={banks}
         onSaved={load}
       />
     </Card>
