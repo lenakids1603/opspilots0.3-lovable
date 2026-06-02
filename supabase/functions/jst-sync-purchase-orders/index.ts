@@ -1311,13 +1311,13 @@ async function tickInboundJob(jobId: string) {
 
   // 同步更新父日志,保持老界面不被卡死
   await admin.from("jst_sync_logs").update({
-    status: finalStatus === "partial" ? "running" : finalStatus,
+    status: finalStatus,
     ended_at: tail.ended_at,
     fetched_receipts_count: totalMain,
     fetched_items_count: totalItem,
     heartbeat_at: new Date().toISOString(),
     message: tail.message,
-    error_detail: lastError || null,
+    error_detail: lastError || "",
   }).eq("id", job.parent_log_id);
 
   return { status: finalStatus, job: { ...job, ...tail } };
@@ -1399,13 +1399,8 @@ Deno.serve(async (req) => {
     if (action === "tick_inbound_job") {
       const jobId = String(body.job_id ?? "");
       if (!jobId) throw new Error("缺少 job_id");
-      // 同步执行一次 tick,但限制时间预算,让前端可立即看到进度
+      // 同步执行一次 tick；若未完成必须落库为 partial，由前端加锁后触发下一次 tick
       const result = await tickInboundJob(jobId);
-      // 如果还没跑完,后台再触发一次,加速进度
-      if (result.status === "partial") {
-        // @ts-ignore
-        EdgeRuntime.waitUntil(tickInboundJob(jobId).catch((e) => console.error("chained tick", (e as Error).message)));
-      }
       return new Response(JSON.stringify({ ok: true, status: result.status, job: result.job }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
