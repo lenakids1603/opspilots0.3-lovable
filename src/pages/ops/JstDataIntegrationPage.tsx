@@ -265,11 +265,13 @@ export default function JstDataIntegrationPage() {
   const metricsQ = useMetrics();
   const errorsQ = useErrors();
   const runsQ = useRuns();
+  const purchaseLogsQ = usePurchaseLogs();
 
   const [keyword, setKeyword] = useState("");
   const [triggerFilter, setTriggerFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [detailLog, setDetailLog] = useState<any | null>(null);
 
   // ------------------------------------------------------------
   // 触发同步：base_archive / shop / supplier / warehouse 走真实 Edge Function；
