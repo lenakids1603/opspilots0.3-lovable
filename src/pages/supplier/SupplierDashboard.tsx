@@ -289,7 +289,7 @@ const ZONE_STYLE: Record<Zone, { fill: string; text: string; soft: string }> = {
   future: { fill: "bg-emerald-500", text: "text-white", soft: "text-emerald-600" },
 };
 const CHEVRON_CLIP = "polygon(10px 0, 100% 0, calc(100% - 10px) 50%, 100% 100%, 10px 100%, 0 50%)";
-const MAX_STYLES = 4;
+const MAX_STYLES = 5;
 
 function Timeline({
   items, selectedYmd, onSelect, onShowAll,
@@ -342,12 +342,12 @@ function Timeline({
 
         return (
           <div key={d.ymd} className="flex flex-col items-stretch flex-1 min-w-0">
-            <div className="h-[88px] px-0.5 flex flex-col justify-end items-center gap-0.5">
+            <div className="min-h-[120px] px-1 pb-1.5 flex flex-col justify-end items-center gap-1">
               {visible.map((s) => (
                 <div
                   key={s.style_no}
-                  className={`text-[10px] font-mono tabular-nums leading-tight truncate w-full text-center ${z.soft}`}
-                  title={`${s.style_no} · ${s.qty}件`}
+                  className={`text-[13px] font-mono font-semibold tabular-nums leading-tight truncate w-full text-center ${z.soft}`}
+                  title={`${s.style_no} · ${fmtInt(s.qty)}件`}
                 >
                   {s.style_no}
                 </div>
@@ -356,7 +356,8 @@ function Timeline({
                 <button
                   type="button"
                   onClick={() => onShowAll(d.ymd, styles)}
-                  className="text-[9px] text-muted-foreground leading-tight hover:underline"
+                  title={styles.slice(MAX_STYLES).map(s => `${s.style_no} · ${fmtInt(s.qty)}件`).join("\n")}
+                  className="text-[11px] font-medium text-muted-foreground leading-tight hover:underline hover:text-foreground"
                 >
                   +{extra} 个款号
                 </button>
@@ -582,8 +583,8 @@ export default function SupplierDashboard() {
                 <th className="py-2.5 font-normal text-right">采购数</th>
                 <th className="py-2.5 font-normal text-right">已入库</th>
                 <th className="py-2.5 font-normal text-right">待入库</th>
-                <th className="py-2.5 font-normal text-right">采购金额</th>
-                <th className="py-2.5 font-normal">交付日期</th>
+                <th className="py-2.5 pr-6 font-normal text-right">采购金额</th>
+                <th className="py-2.5 pl-2 font-normal">交付日期</th>
                 <th className="py-2.5 font-normal">交付状态</th>
                 <th className="py-2.5 font-normal">操作</th>
               </tr>
@@ -619,8 +620,8 @@ export default function SupplierDashboard() {
                     <td className={`py-3 text-right tabular-nums font-semibold ${st === "overdue" ? "text-rose-600" : st === "soon" ? "text-amber-600" : "text-foreground"}`}>
                       {fmtInt(r.unreceived_qty)} <span className="font-normal text-muted-foreground">件</span>
                     </td>
-                    <td className="py-3 text-right tabular-nums font-semibold">{fmtMoney(r.amount > 0 ? r.amount : r.purchase_qty * r.unit_price)}</td>
-                    <td className="py-3 font-mono whitespace-nowrap">{r.delivery_date ? formatDateCN(r.delivery_date) : <span className="text-muted-foreground">未设定</span>}</td>
+                    <td className="py-3 pr-6 text-right tabular-nums font-semibold whitespace-nowrap">{fmtMoney(r.amount > 0 ? r.amount : r.purchase_qty * r.unit_price)}</td>
+                    <td className="py-3 pl-2 font-mono whitespace-nowrap">{r.delivery_date ? formatDateCN(r.delivery_date) : <span className="text-muted-foreground">未设定</span>}</td>
                     <td className="py-3">
                       <span className={`px-2 py-0.5 rounded text-[11px] border ${STATUS_LABEL[st].cls}`}>{STATUS_LABEL[st].label}</span>
                     </td>
