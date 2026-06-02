@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import {
-  LayoutGrid, ClipboardList, Tag, Wallet, Trophy, MessageSquareWarning, LogOut, Phone, Mail,
+  LayoutGrid, ClipboardList, Tag, Wallet, Trophy, MessageSquareWarning, LogOut,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
