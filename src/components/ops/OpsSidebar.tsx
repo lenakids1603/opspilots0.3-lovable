@@ -1,7 +1,7 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   Warehouse, Receipt, Building2, Package, Headphones,
-  Database, Settings, ChevronDown, ChevronRight, LogOut, LayoutDashboard, TrendingUp,
+  Database, Settings, ChevronDown, ChevronRight, LogOut, LayoutDashboard, TrendingUp, ShoppingCart,
 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
