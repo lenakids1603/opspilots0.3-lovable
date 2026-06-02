@@ -30,8 +30,8 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 interface Props {
-  /** Optional callback fired when a job reaches a terminal state (success/failed/cancelled) */
-  onJobFinished?: () => void;
+  /** Optional callback fired when a job reaches a terminal state (success/failed/cancelled). Receives the job row. */
+  onJobFinished?: (job: any) => void;
   /** Title shown in the card header */
   title?: string;
   /** Whether to show built-in start buttons (1/7/30 days). Default true. */
@@ -174,7 +174,7 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
       requestTick(jobId);
     }
     if (status === "success" || status === "failed" || status === "cancelled") {
-      onJobFinished?.();
+      onJobFinished?.(j);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, nextPage, isResumable, jobId]);
