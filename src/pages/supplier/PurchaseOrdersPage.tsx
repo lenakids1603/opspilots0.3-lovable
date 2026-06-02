@@ -102,11 +102,12 @@ function StatusBadge({ s, label }: { s: WarehouseStatus | string; label?: string
 function rangeToDates(range: string): { start?: string; end?: string } {
   if (range === "all") return {};
   const now = new Date();
-  if (range === "7d") return { start: new Date(now.getTime() - 7 * 86400000).toISOString() };
-  if (range === "30d") return { start: new Date(now.getTime() - 30 * 86400000).toISOString() };
+  const end = now.toISOString();
+  if (range === "7d") return { start: new Date(now.getTime() - 7 * 86400000).toISOString(), end };
+  if (range === "30d") return { start: new Date(now.getTime() - 30 * 86400000).toISOString(), end };
   if (range === "month") {
     const s = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    return { start: s };
+    return { start: s, end };
   }
   return {};
 }
@@ -117,7 +118,7 @@ export default function SupplierPurchaseOrdersPage() {
   const supplierName = (profile as any)?.full_name ?? (profile as any)?.username ?? "供应商账号";
 
   const [tab, setTab] = useState<"po" | "style">("po");
-  const [dateRange, setDateRange] = useState("all");
+  const [dateRange, setDateRange] = useState("30d");
   const [keyword, setKeyword] = useState("");
   const [warehouseFilter, setWarehouseFilter] = useState<"all" | WarehouseStatus>("all");
   const [expandedPO, setExpandedPO] = useState<string | null>(null);
@@ -275,7 +276,7 @@ function useSortAndPage<T>(rows: T[], defaultSortKey: keyof T, defaultDir: SortD
   const [sortKey, setSortKey] = useState<keyof T>(defaultSortKey);
   const [sortDir, setSortDir] = useState<SortDir>(defaultDir);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(20);
 
   // Reset page when rows change (filter/tab switch)
   useEffect(() => { setPage(1); }, [rows]);
@@ -337,7 +338,7 @@ function Pagination({ page, pageCount, pageSize, total, setPage, setPageSize }: 
             onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
             className="h-7 px-2 rounded border border-border bg-white text-[12px]"
           >
-            {[25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+            {[20, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
         <div className="flex items-center gap-0.5">
@@ -357,7 +358,6 @@ function POTable({ rows, onDetail }: { rows: OrderRow[]; expanded?: string | nul
   const { sortKey, sortDir, onSort, page, setPage, pageSize, setPageSize, pageCount, total, pageRows } = useSortAndPage<OrderRow>(rows, "po_date", "desc");
   if (rows.length === 0) return <EmptyState />;
   // Auto-hide columns where ALL values are empty (but 0 is valid)
-  const hasExpected = rows.some((r) => !!r.expected_delivery_date);
   const hasLatest = rows.some((r) => !!r.latest_receipt_at);
 
   return (
@@ -375,7 +375,6 @@ function POTable({ rows, onDetail }: { rows: OrderRow[]; expanded?: string | nul
               <SortTh<OrderRow> k="total_received_qty" currentKey={sortKey} dir={sortDir} onSort={onSort} className="text-right">已入库</SortTh>
               <SortTh<OrderRow> k="total_unreceived_qty" currentKey={sortKey} dir={sortDir} onSort={onSort} className="text-right">未入库</SortTh>
               <SortTh<OrderRow> k="total_amount" currentKey={sortKey} dir={sortDir} onSort={onSort} className="text-right">采购金额</SortTh>
-              {hasExpected && <SortTh<OrderRow> k="expected_delivery_date" currentKey={sortKey} dir={sortDir} onSort={onSort}>预计交期</SortTh>}
               {hasLatest && <SortTh<OrderRow> k="latest_receipt_at" currentKey={sortKey} dir={sortDir} onSort={onSort}>最近入库</SortTh>}
               <Th className="min-w-[160px]">入仓进度</Th>
               <SortTh<OrderRow> k="expected_delivery_date" currentKey={sortKey} dir={sortDir} onSort={onSort}>协议到货日期</SortTh>
@@ -402,7 +401,6 @@ function POTable({ rows, onDetail }: { rows: OrderRow[]; expanded?: string | nul
                   <Td className="text-right tabular-nums text-emerald-700">{po.total_received_qty}</Td>
                   <Td className="text-right tabular-nums text-rose-600">{po.total_unreceived_qty}</Td>
                   <Td className="text-right tabular-nums">{fmtMoney(po.total_amount)}</Td>
-                  {hasExpected && <Td>{fmtDate(po.expected_delivery_date)}</Td>}
                   {hasLatest && <Td>{fmtDateTime(po.latest_receipt_at)}</Td>}
                   <Td>
                     <div className="flex items-center gap-2 min-w-[150px]">
