@@ -42,7 +42,8 @@ function ymdToUTCRange(startYmd: string, endYmd: string) {
 }
 
 // ============ Queries ============
-const EXCLUDED_STATUSES = ["Delete", "delete", "deleted", "已删除"];
+const EXCLUDED_STATUSES = ["Delete", "delete", "deleted"];
+const EXCLUDED_IN = `(${EXCLUDED_STATUSES.join(",")})`;
 
 function usePurchaseStats(startYmd: string, endYmd: string) {
   return useQuery({
