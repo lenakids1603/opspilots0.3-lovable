@@ -30,8 +30,8 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 interface Props {
-  /** Optional callback fired when a job reaches a terminal state (success/failed/cancelled) */
-  onJobFinished?: () => void;
+  /** Optional callback fired when a job reaches a terminal state (success/failed/cancelled). Receives the job row. */
+  onJobFinished?: (job: any) => void;
   /** Title shown in the card header */
   title?: string;
   /** Whether to show built-in start buttons (1/7/30 days). Default true. */
