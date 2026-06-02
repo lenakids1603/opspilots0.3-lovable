@@ -1221,7 +1221,11 @@ async function tickInboundJob(jobId: string) {
     return { status: "success", job };
   }
 
-  await updateJobProgress(jobId, { status: "running", message: `开始处理,当前窗口 ${(job.current_window_index ?? 0) + 1}/${windows.length}` });
+  await updateJobProgress(jobId, {
+    status: "running",
+    ended_at: null,
+    message: `开始处理,当前窗口 ${(job.current_window_index ?? 0) + 1}/${windows.length}`,
+  });
 
   const budgetMs = (job.time_budget_seconds ?? INBOUND_JOB_CONFIG.timeBudgetSeconds) * 1000;
   const maxPages = job.max_pages_per_run ?? INBOUND_JOB_CONFIG.maxPagesPerRun;
