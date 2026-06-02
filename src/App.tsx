@@ -24,6 +24,7 @@ import FinanceMasterDataPage from "./pages/ops/FinanceMasterDataPage";
 import JstSyncPage from "./pages/ops/JstSyncPage";
 import JstProductSyncPage from "./pages/ops/JstProductSyncPage";
 import JstDataIntegrationPage from "./pages/ops/JstDataIntegrationPage";
+import PurchaseOrderManagementPage from "./pages/ops/PurchaseOrderManagementPage";
 import SupplierDashboard from "./pages/supplier/SupplierDashboard";
 import SupplierPurchaseOrdersPage from "./pages/supplier/PurchaseOrdersPage";
 import SupplierPlaceholder from "./pages/supplier/SupplierPlaceholder";
