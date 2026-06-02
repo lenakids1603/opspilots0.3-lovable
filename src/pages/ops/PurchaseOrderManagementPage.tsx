@@ -136,9 +136,9 @@ function usePurchaseStats(filters: Filters) {
   });
 }
 
-function usePurchaseOrders(filters: Filters, page: number) {
+function usePurchaseOrders(filters: Filters, page: number, sortKey: PoSortKey, sortDir: SortDir) {
   return useQuery({
-    queryKey: ["purchase_orders", filters, page],
+    queryKey: ["purchase_orders", filters, page, sortKey, sortDir],
     queryFn: async () => {
       let q = supabase.from("purchase_orders").select("*", { count: "exact" });
       q = applyPoFilters(q, filters);
@@ -157,8 +157,11 @@ function usePurchaseOrders(filters: Filters, page: number) {
         q = q.in("id", ids);
       }
 
-      q = q.order("po_date", { ascending: false, nullsFirst: false })
-           .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
+      q = q.order(sortKey, { ascending: sortDir === "asc", nullsFirst: false });
+      if (sortKey !== "external_po_id") {
+        q = q.order("external_po_id", { ascending: false, nullsFirst: false });
+      }
+      q = q.range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
       const { data, count, error } = await q;
       if (error) throw error;
       return { rows: data ?? [], count: count ?? 0 };
