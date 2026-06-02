@@ -140,17 +140,43 @@ export function ShopMappingsCard() {
 
 
 
-  const rows = mappingsQ.data ?? [];
+  const batchIgnoreMut = useMutation({
+    mutationFn: async (input: { ids: string[]; reason: string }) => {
+      const { error } = await (supabase as any).from("jst_shop_mappings")
+        .update({ mapping_status: "ignored", ignore_reason: input.reason, ignored_at: new Date().toISOString() })
+        .in("id", input.ids);
+      if (error) throw error;
+    },
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ["jst_shop_mappings"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_metrics"] });
+      setSelectedIds(new Set());
+      setBatchIgnoreOpen(false);
+      toast({ title: `已批量忽略 ${vars.ids.length} 个店铺` });
+    },
+    onError: (e: any) => toast({ title: "批量忽略失败", description: e.message, variant: "destructive" }),
+  });
 
-  // 质量分析:已忽略店铺视为业务上已处理,不计入风险;主体/平台/重复绑定仅针对已映射店铺
+  const rows = mappingsQ.data ?? [];
+  const shopById = useMemo(() => new Map((shopsQ.data ?? []).map((s: any) => [s.id, s])), [shopsQ.data]);
+
+  // 双层语义:processing_status(mapped/ignored/pending) + reporting_status(ready/incomplete/ignored)
+  // ready = mapped + 主体 + 平台 + 关联 shop 启用且参与统计 (is_ignored=false 且 status='active')
   const quality = useMemo(() => {
     const total = rows.length;
     const mappedRows = rows.filter(r => r.mapping_status === "mapped");
     const mapped = mappedRows.length;
     const ignored = rows.filter(r => r.mapping_status === "ignored").length;
     const pending = total - mapped - ignored;
-    const noEntity = mappedRows.filter(r => !r.matched_business_entity_id).length;
-    const noPlatform = mappedRows.filter(r => !r.matched_platform_id).length;
+
+    // 仅"已映射且关联 shop 启用且参与统计"的店铺需要完整资料
+    const participating = mappedRows.filter(r => {
+      const s: any = r.matched_shop_id ? shopById.get(r.matched_shop_id) : null;
+      return s && s.is_ignored === false && (s.status ?? "active") === "active";
+    });
+    const noEntity = participating.filter(r => !r.matched_business_entity_id).length;
+    const noPlatform = participating.filter(r => !r.matched_platform_id).length;
+    const ready = participating.filter(r => r.matched_business_entity_id && r.matched_platform_id).length;
 
     const shopCount = new Map<string, number>();
     mappedRows.forEach(r => {
@@ -160,12 +186,24 @@ export function ShopMappingsCard() {
     const dupCount = mappedRows.filter(r => r.matched_shop_id && dupShopIds.has(r.matched_shop_id)).length;
 
     const processedRate = total > 0 ? Math.round(((mapped + ignored) / total) * 100) : 0;
-    const needsAttention = pending > 0 || noEntity > 0 || noPlatform > 0 || dupCount > 0;
-    // 兼容旧字段
+    const allowSummary = pending === 0 && noEntity === 0 && noPlatform === 0 && dupCount === 0;
+    const needsAttention = !allowSummary;
     const unmapped = pending;
     const completeness = processedRate;
-    return { total, mapped, unmapped, pending, ignored, noEntity, noPlatform, dupCount, completeness, processedRate, needsAttention, dupShopIds };
-  }, [rows]);
+    return { total, mapped, ready, unmapped, pending, ignored, noEntity, noPlatform, dupCount, completeness, processedRate, needsAttention, allowSummary, dupShopIds };
+  }, [rows, shopById]);
+
+  const selectableRows = rows.filter(r => r.mapping_status !== "ignored");
+  const allSelected = selectableRows.length > 0 && selectableRows.every(r => selectedIds.has(r.id));
+  const toggleAll = () => {
+    if (allSelected) setSelectedIds(new Set());
+    else setSelectedIds(new Set(selectableRows.map(r => r.id)));
+  };
+  const toggleOne = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedIds(next);
+  };
 
   return (
     <Card>
