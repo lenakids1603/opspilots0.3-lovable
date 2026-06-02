@@ -42,6 +42,12 @@ const GROUPS: Group[] = [
     items: [{ title: "到货登记", url: "/warehouse/arrivals" }],
   },
   {
+    title: "采购系统", icon: ShoppingCart,
+    items: [
+      { title: "采购单管理", url: "/purchase/orders" },
+    ],
+  },
+  {
     title: "供应商系统", icon: Building2,
     items: [
       { title: "供应商总览", url: "/suppliers/overview" },
