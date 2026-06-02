@@ -38,8 +38,10 @@ export function JstConnectionCheckCard() {
         body: { action: "connection_test" },
       });
       if (error) {
-        setResult({ ok: false, error: error.message });
-        toast.error("连接检测失败");
+        // Edge Function 调用本身失败（登录态失效 / 网络 / 函数崩溃），
+        // 此时不会有 present 字段，绝不能据此判断凭证是否缺失。
+        setResult({ ok: false, error: error.message, transport_failed: true } as CheckResult);
+        toast.error("无法调用 Edge Function（通常是登录态失效，请重新登录后再试）");
       } else {
         setResult(data as CheckResult);
         const res = data as CheckResult;
@@ -50,16 +52,19 @@ export function JstConnectionCheckCard() {
         qc.invalidateQueries({ queryKey: ["jst_sync_errors"] });
       }
     } catch (e: any) {
-      setResult({ ok: false, error: String(e?.message ?? e) });
+      setResult({ ok: false, error: String(e?.message ?? e), transport_failed: true } as CheckResult);
     } finally {
       setLoading(false);
     }
   };
 
+  const hasPresent = !!result?.present;
   const present = result?.present ?? {};
-  const missingRequired = REQUIRED.filter((k) => result && !present[k]);
-  const credsMissing = !result ? false : missingRequired.length > 0;
-  const isWarning = result?.status === "warning" || (!!result && !result.ok && !credsMissing && result.sample_shop_count === 0);
+  const missingRequired = hasPresent ? REQUIRED.filter((k) => !present[k]) : [];
+  const credsMissing = hasPresent && missingRequired.length > 0;
+  const transportFailed = !!(result as any)?.transport_failed;
+  const isWarning = result?.status === "warning" || (!!result && !result.ok && hasPresent && !credsMissing && result.sample_shop_count === 0);
+
   const diagnosticsPayload = result?.diagnostics
     ? { diagnostics: result.diagnostics, sanitized_response: result.sanitized_response }
     : null;
