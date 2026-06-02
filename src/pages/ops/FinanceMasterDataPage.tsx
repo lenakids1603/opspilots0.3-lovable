@@ -636,6 +636,8 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
           <option value="">全部绑定状态</option>
           <option value="bound">已绑定主体</option>
           <option value="unbound">未绑定主体</option>
+          <option value="missing_entity">缺主体（待补）</option>
+          <option value="missing_platform">缺平台（待补）</option>
         </select>
         <select value={stf} onChange={e => setStf(e.target.value)} className="h-9 rounded-md border px-2 text-[13px]">
           <option value="">全部状态</option><option value="active">运营中</option><option value="disabled">停用</option>
