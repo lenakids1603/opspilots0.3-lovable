@@ -61,6 +61,8 @@ const EMPTY_FILTERS: Filters = {
   warehouseStatus: "all",
 };
 
+const DELETED_STATUSES = "(Delete,delete,Deleted,deleted,已删除)";
+
 function applyPoFilters(q: any, f: Filters) {
   // 北京时区日期 → UTC ISO 区间，避免 new Date("YYYY-MM-DD") 按 UTC 解析丢掉北京当日凌晨 0-8 点。
   if (f.startDate) { const r = beijingDayRangeToUTC(f.startDate); if (r) q = q.gte("po_date", r.gte); }
@@ -69,7 +71,45 @@ function applyPoFilters(q: any, f: Filters) {
   if (f.poNo) q = q.ilike("external_po_id", `%${f.poNo}%`);
   if (f.status !== "all") q = q.eq("status", f.status);
   if (f.warehouseStatus !== "all") q = q.eq("warehouse_status", f.warehouseStatus);
+  // 默认排除聚水潭已删除采购单
+  q = q.not("status", "in", DELETED_STATUSES);
   return q;
+}
+
+type SortDir = "asc" | "desc";
+type PoSortKey =
+  | "external_po_id" | "supplier_name" | "po_date" | "status"
+  | "total_purchase_qty" | "total_received_qty" | "total_unreceived_qty"
+  | "total_amount" | "updated_at" | "warehouse_status";
+
+type StyleSortKey =
+  | "latest_po_date" | "style_no" | "product_name" | "suppliers"
+  | "po_count" | "sku_count" | "purchase_qty" | "received_qty"
+  | "unreceived_qty" | "amount" | "warehouse_status";
+
+function SortHead<K extends string>({
+  k, currentKey, dir, onSort, children, align,
+}: {
+  k: K; currentKey: K; dir: SortDir;
+  onSort: (k: K) => void; children: React.ReactNode; align?: "left" | "right";
+}) {
+  const active = k === currentKey;
+  const Icon = !active ? ChevronsUpDown : dir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <TableHead className={align === "right" ? "text-right" : ""}>
+      <button
+        type="button"
+        onClick={() => onSort(k)}
+        className={cn(
+          "inline-flex items-center gap-1 select-none hover:text-foreground transition cursor-pointer",
+          active ? "text-foreground font-semibold" : "text-muted-foreground"
+        )}
+      >
+        <span>{children}</span>
+        <Icon className={cn("w-3 h-3", active ? "opacity-90" : "opacity-50")} />
+      </button>
+    </TableHead>
+  );
 }
 
 function usePurchaseStats(filters: Filters) {
