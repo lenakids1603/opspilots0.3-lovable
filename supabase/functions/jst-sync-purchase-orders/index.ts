@@ -1390,11 +1390,6 @@ Deno.serve(async (req) => {
         requestedRange,
         createdBy: caller.uid,
       });
-      // 后台立刻 tick 一次,前端会继续轮询
-      // @ts-ignore EdgeRuntime is provided by Supabase edge runtime
-      EdgeRuntime.waitUntil(tickInboundJob(job.id).catch((e) => {
-        console.error("initial tick error", (e as Error).message);
-      }));
       return new Response(JSON.stringify({ ok: true, job_id: job.id, parent_log_id: job.parent_log_id, total_windows: job.total_windows }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
