@@ -947,7 +947,7 @@ const INBOUND_JOB_CONFIG = {
   pageSize: 50,
   maxPagesPerRun: 3,
   timeBudgetSeconds: 45,
-  staleMs: 3 * 60_000, // 3 分钟无心跳判定为 stalled
+  staleMs: 2 * 60_000, // 2 分钟无心跳判定为 stalled
 };
 
 function buildInboundWindows(from: Date, to: Date, maxDays: number) {
@@ -973,8 +973,8 @@ async function markStaleInboundJobs() {
     .from("jst_sync_jobs")
     .update({
       status: "stalled",
-      ended_at: new Date().toISOString(),
-      message: "任务超过 3 分钟无心跳,已标记为 stalled,可点击「继续同步」从断点恢复",
+      ended_at: null,
+      message: "任务超过 2 分钟无心跳,已标记为 stalled,可点击「继续同步」从断点恢复",
       error_detail: "stalled: heartbeat exceeded threshold",
     })
     .in("status", ["running", "pending"])
@@ -1041,9 +1041,15 @@ async function createInboundJob(opts: {
 }
 
 async function updateJobProgress(jobId: string, patch: Record<string, unknown>) {
+  const normalizedPatch = {
+    ...patch,
+    message: patch.message ?? "",
+    error_detail: patch.error_detail ?? "",
+    heartbeat_at: new Date().toISOString(),
+  };
   const { error } = await admin
     .from("jst_sync_jobs")
-    .update({ ...patch, heartbeat_at: new Date().toISOString() })
+    .update(normalizedPatch)
     .eq("id", jobId);
   if (error) console.error("updateJobProgress error", error.message);
 }
@@ -1185,6 +1191,7 @@ async function processInboundPage(args: {
 
 async function tickInboundJob(jobId: string) {
   const tickStart = Date.now();
+  await markStaleInboundJobs();
   const { data: job, error: loadErr } = await admin
     .from("jst_sync_jobs")
     .select("*")
@@ -1192,7 +1199,15 @@ async function tickInboundJob(jobId: string) {
     .maybeSingle();
   if (loadErr) throw loadErr;
   if (!job) throw new Error("任务不存在");
-  if (["success", "failed", "cancelled"].includes(job.status)) {
+  if (["success", "cancelled"].includes(job.status)) {
+    return { status: job.status, job };
+  }
+  const heartbeatAt = job.heartbeat_at ? new Date(job.heartbeat_at).getTime() : 0;
+  const staleRunning = job.status === "running" && (!heartbeatAt || Date.now() - heartbeatAt > INBOUND_JOB_CONFIG.staleMs);
+  if (job.status === "running" && !staleRunning) {
+    return { status: "running", job };
+  }
+  if (job.status === "failed" && !job.has_next && !(job.next_page_index > 0)) {
     return { status: job.status, job };
   }
 
@@ -1206,7 +1221,11 @@ async function tickInboundJob(jobId: string) {
     return { status: "success", job };
   }
 
-  await updateJobProgress(jobId, { status: "running", message: `开始处理,当前窗口 ${(job.current_window_index ?? 0) + 1}/${windows.length}` });
+  await updateJobProgress(jobId, {
+    status: "running",
+    ended_at: null,
+    message: `开始处理,当前窗口 ${(job.current_window_index ?? 0) + 1}/${windows.length}`,
+  });
 
   const budgetMs = (job.time_budget_seconds ?? INBOUND_JOB_CONFIG.timeBudgetSeconds) * 1000;
   const maxPages = job.max_pages_per_run ?? INBOUND_JOB_CONFIG.maxPagesPerRun;
@@ -1241,14 +1260,20 @@ async function tickInboundJob(jobId: string) {
       const movedNext = !result.hasNext || result.apiCount === 0;
       const newWindowIndex = movedNext ? windowIndex + 1 : windowIndex;
       const newPageIndex = movedNext ? 1 : pageIndex + 1;
+      const moreAfterThisPage = !(movedNext && newWindowIndex >= windows.length);
+      const shouldPauseAfterThisPage = moreAfterThisPage && (
+        pagesThisRun >= maxPages || Date.now() - tickStart > Math.max(0, budgetMs - 5000)
+      );
 
       await updateJobProgress(jobId, {
+        status: moreAfterThisPage ? (shouldPauseAfterThisPage ? "partial" : "running") : "success",
+        ended_at: moreAfterThisPage ? null : new Date().toISOString(),
         current_window_index: newWindowIndex,
         current_window_from: windows[newWindowIndex]?.from ?? win.from,
         current_window_to: windows[newWindowIndex]?.to ?? win.to,
         current_page_index: pageIndex,
         next_page_index: newPageIndex,
-        has_next: !(movedNext && newWindowIndex >= windows.length),
+        has_next: moreAfterThisPage,
         total_api_count: totalApi,
         total_order_upserted: totalMain,
         total_item_upserted: totalItem,
@@ -1259,6 +1284,7 @@ async function tickInboundJob(jobId: string) {
 
       windowIndex = newWindowIndex;
       pageIndex = newPageIndex;
+      if (shouldPauseAfterThisPage) break;
     } catch (err) {
       lastError = sanitizeMsg((err as Error).message ?? "").slice(0, 500);
       totalFailed++;
@@ -1290,19 +1316,19 @@ async function tickInboundJob(jobId: string) {
       : lastError
         ? `任务失败 · 窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页 · ${lastError}`
         : `本次 tick 已处理 ${pagesThisRun} 页,等待继续 · 当前窗口 ${windowIndex + 1}/${windows.length} 下一页=${pageIndex}`,
-    error_detail: lastError || null,
+    error_detail: lastError || "",
   };
   await updateJobProgress(jobId, tail);
 
   // 同步更新父日志,保持老界面不被卡死
   await admin.from("jst_sync_logs").update({
-    status: finalStatus === "partial" ? "running" : finalStatus,
+    status: finalStatus,
     ended_at: tail.ended_at,
     fetched_receipts_count: totalMain,
     fetched_items_count: totalItem,
     heartbeat_at: new Date().toISOString(),
     message: tail.message,
-    error_detail: lastError || null,
+    error_detail: lastError || "",
   }).eq("id", job.parent_log_id);
 
   return { status: finalStatus, job: { ...job, ...tail } };
@@ -1371,11 +1397,6 @@ Deno.serve(async (req) => {
         requestedRange,
         createdBy: caller.uid,
       });
-      // 后台立刻 tick 一次,前端会继续轮询
-      // @ts-ignore EdgeRuntime is provided by Supabase edge runtime
-      EdgeRuntime.waitUntil(tickInboundJob(job.id).catch((e) => {
-        console.error("initial tick error", (e as Error).message);
-      }));
       return new Response(JSON.stringify({ ok: true, job_id: job.id, parent_log_id: job.parent_log_id, total_windows: job.total_windows }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -1384,13 +1405,8 @@ Deno.serve(async (req) => {
     if (action === "tick_inbound_job") {
       const jobId = String(body.job_id ?? "");
       if (!jobId) throw new Error("缺少 job_id");
-      // 同步执行一次 tick,但限制时间预算,让前端可立即看到进度
+      // 同步执行一次 tick；若未完成必须落库为 partial，由前端加锁后触发下一次 tick
       const result = await tickInboundJob(jobId);
-      // 如果还没跑完,后台再触发一次,加速进度
-      if (result.status === "partial") {
-        // @ts-ignore
-        EdgeRuntime.waitUntil(tickInboundJob(jobId).catch((e) => console.error("chained tick", (e as Error).message)));
-      }
       return new Response(JSON.stringify({ ok: true, status: result.status, job: result.job }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

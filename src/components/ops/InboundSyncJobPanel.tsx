@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "@/hooks/use-toast";
 import { RefreshCw, PlayCircle, XCircle, Activity } from "lucide-react";
+
+const STALE_RUNNING_MS = 2 * 60_000;
 
 const fmtInt = (n: any) => (n == null ? "-" : Number(n).toLocaleString("zh-CN"));
 const fmtDT = (s: any) => {
@@ -23,6 +26,7 @@ const STATUS_COLOR: Record<string, string> = {
   stalled: "bg-amber-100 text-amber-700",
   failed: "bg-rose-100 text-rose-700",
   cancelled: "bg-slate-100 text-slate-700",
+  waiting_next_tick: "bg-blue-100 text-blue-700",
 };
 
 interface Props {
@@ -37,6 +41,8 @@ interface Props {
 export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任务", showStartButtons = true }: Props) {
   const qc = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
+  const [tickError, setTickError] = useState<string | null>(null);
+  const isTickingRef = useRef(false);
 
   // Restore the latest unfinished job on mount
   const lastJobQ = useQuery({
@@ -55,7 +61,7 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
   });
   useEffect(() => {
     const j: any = lastJobQ.data;
-    if (!jobId && j && ["pending", "running", "partial", "stalled"].includes(j.status)) {
+    if (!jobId && j && ["pending", "running", "partial", "waiting_next_tick", "stalled", "failed"].includes(j.status)) {
       setJobId(j.id);
     }
   }, [lastJobQ.data, jobId]);
@@ -113,9 +119,24 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
       if (data?.ok === false) throw new Error(data?.error ?? "继续失败");
       return data;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["inbound_job", jobId] }),
-    onError: (e: any) => toast({ title: "继续同步失败", description: e.message, variant: "destructive" }),
+    onSuccess: () => {
+      setTickError(null);
+      qc.invalidateQueries({ queryKey: ["inbound_job", jobId] });
+    },
+    onError: (e: any) => {
+      setTickError(e.message);
+      toast({ title: "继续同步失败", description: e.message, variant: "destructive" });
+    },
+    onSettled: () => {
+      isTickingRef.current = false;
+    },
   });
+
+  const requestTick = useCallback((id: string) => {
+    if (isTickingRef.current || tickMut.isPending) return;
+    isTickingRef.current = true;
+    tickMut.mutate(id);
+  }, [tickMut]);
 
   const cancelMut = useMutation({
     mutationFn: async (id: string) => {
@@ -128,21 +149,35 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
     onSuccess: () => qc.invalidateQueries({ queryKey: ["inbound_job", jobId] }),
   });
 
-  // auto-tick partial / notify on finish
-  const status: string | undefined = (jobQ.data as any)?.status;
-  const nextPage: number | undefined = (jobQ.data as any)?.next_page_index;
+  const j: any = jobQ.data;
+  const status: string | undefined = j?.status;
+  const nextPage: number | undefined = j?.next_page_index;
+  const heartbeatMs = j?.heartbeat_at ? new Date(j.heartbeat_at).getTime() : 0;
+  const isRunningStale = status === "running" && (!heartbeatMs || Date.now() - heartbeatMs > STALE_RUNNING_MS);
+  const hasMoreWork = !!j && (j.has_next === true || (j.current_window_index ?? 0) < Math.max((j.total_windows ?? 1) - 1, 0));
+  const isResumable = !!j && hasMoreWork && (
+    status === "pending" ||
+    status === "partial" ||
+    status === "waiting_next_tick" ||
+    status === "stalled" ||
+    (status === "failed" && ((j.next_page_index ?? 0) > 0 || j.has_next === true)) ||
+    isRunningStale
+  );
+  const totalWindows = Math.max(Number(j?.total_windows ?? 1), 1);
+  const currentWindowNumber = Math.min(Number(j?.current_window_index ?? 0) + 1, totalWindows);
+  const progressValue = status === "success" ? 100 : Math.max(1, Math.min(99, Math.round((currentWindowNumber / totalWindows) * 100)));
+
+  // auto-tick resumable states / notify on finish
   useEffect(() => {
-    if (!status) return;
-    if (status === "partial" && !tickMut.isPending) {
-      tickMut.mutate(jobId!);
+    if (!status || !jobId) return;
+    if (isResumable) {
+      requestTick(jobId);
     }
     if (status === "success" || status === "failed" || status === "cancelled") {
       onJobFinished?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, nextPage]);
-
-  const j: any = jobQ.data;
+  }, [status, nextPage, isResumable, jobId]);
 
   return (
     <Card>
@@ -176,23 +211,32 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
           <div className="rounded border p-3 space-y-2 text-xs bg-muted/30">
             <div className="flex items-center gap-2 flex-wrap">
               <Badge className={STATUS_COLOR[j.status] ?? "bg-slate-100 text-slate-700"}>{j.status}</Badge>
+              {isRunningStale && <Badge variant="destructive">无心跳，可继续</Badge>}
               <span className="font-mono text-muted-foreground">job {String(j.id).slice(0, 8)}…</span>
               <Badge variant="outline">{j.requested_range || "custom"}</Badge>
               <span className="text-muted-foreground">
-                窗口 {(j.current_window_index ?? 0) + 1}/{j.total_windows || 1} · 当前页 {j.current_page_index || j.next_page_index || 0} · 下一页 {j.next_page_index ?? "-"} · page_size {j.page_size}
+                窗口 {currentWindowNumber}/{totalWindows} · 当前页 {j.current_page_index || j.next_page_index || 0} · 下一页 {j.next_page_index ?? "-"} · page_size {j.page_size}
               </span>
               <div className="flex-1" />
-              {(j.status === "partial" || j.status === "stalled" || (j.status === "failed" && j.has_next)) && (
-                <Button size="sm" variant="outline" onClick={() => tickMut.mutate(j.id)} disabled={tickMut.isPending}>
-                  <PlayCircle className="w-4 h-4 mr-1" />继续同步
+              {isResumable && (
+                <Button size="sm" variant="default" onClick={() => requestTick(j.id)} disabled={tickMut.isPending || isTickingRef.current}>
+                  <PlayCircle className="w-4 h-4 mr-1" />{tickMut.isPending || isTickingRef.current ? "续跑中..." : "继续同步"}
                 </Button>
               )}
-              {["pending", "running", "partial", "stalled"].includes(j.status) && (
+              {["pending", "running", "partial", "waiting_next_tick", "stalled"].includes(j.status) && (
                 <Button size="sm" variant="ghost" onClick={() => cancelMut.mutate(j.id)}>
                   <XCircle className="w-4 h-4 mr-1" />取消任务
                 </Button>
               )}
               <Button size="sm" variant="ghost" onClick={() => setJobId(null)}>关闭</Button>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-muted-foreground">
+                <span>窗口进度 {currentWindowNumber}/{totalWindows}</span>
+                <span>{progressValue}%</span>
+              </div>
+              <Progress value={progressValue} className="h-2" />
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1 text-muted-foreground">
@@ -216,6 +260,9 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
             )}
             {j.error_detail && (
               <div className="text-rose-600 whitespace-pre-wrap break-all">error_detail：{j.error_detail}</div>
+            )}
+            {tickError && (
+              <div className="text-rose-600 whitespace-pre-wrap break-all">tick_error：{tickError}</div>
             )}
           </div>
         )}
