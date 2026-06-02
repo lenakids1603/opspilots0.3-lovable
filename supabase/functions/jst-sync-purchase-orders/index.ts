@@ -1284,6 +1284,7 @@ async function tickInboundJob(jobId: string) {
 
       windowIndex = newWindowIndex;
       pageIndex = newPageIndex;
+      if (shouldPauseAfterThisPage) break;
     } catch (err) {
       lastError = sanitizeMsg((err as Error).message ?? "").slice(0, 500);
       totalFailed++;
