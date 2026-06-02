@@ -583,8 +583,8 @@ export default function SupplierDashboard() {
                 <th className="py-2.5 font-normal text-right">采购数</th>
                 <th className="py-2.5 font-normal text-right">已入库</th>
                 <th className="py-2.5 font-normal text-right">待入库</th>
-                <th className="py-2.5 font-normal text-right">采购金额</th>
-                <th className="py-2.5 font-normal">交付日期</th>
+                <th className="py-2.5 pr-6 font-normal text-right">采购金额</th>
+                <th className="py-2.5 pl-2 font-normal">交付日期</th>
                 <th className="py-2.5 font-normal">交付状态</th>
                 <th className="py-2.5 font-normal">操作</th>
               </tr>
