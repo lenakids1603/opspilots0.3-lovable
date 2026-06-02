@@ -424,14 +424,14 @@ function Timeline({
 
 // ============ Status helpers ============
 type PendingStatus = "overdue" | "soon" | "producing" | "partial" | "done";
-function pendingStatus(r: PendingRow, todayYmd: string): PendingStatus {
-  if (r.unreceived_qty <= 0) return "done";
-  if (!r.delivery_date) return r.received_qty > 0 ? "partial" : "producing";
-  const dYmd = beijingYMD(r.delivery_date);
+function statusForStyle(unreceived: number, received: number, earliestDelivery: string | null, todayYmd: string): PendingStatus {
+  if (unreceived <= 0) return "done";
+  if (!earliestDelivery) return received > 0 ? "partial" : "producing";
+  const dYmd = beijingYMD(earliestDelivery);
   if (dYmd < todayYmd) return "overdue";
   const diffDays = Math.floor((new Date(dYmd + "T00:00:00+08:00").getTime() - new Date(todayYmd + "T00:00:00+08:00").getTime()) / 86400000);
   if (diffDays <= 3) return "soon";
-  if (r.received_qty > 0) return "partial";
+  if (received > 0) return "partial";
   return "producing";
 }
 const STATUS_LABEL: Record<PendingStatus, { label: string; cls: string }> = {
@@ -441,6 +441,11 @@ const STATUS_LABEL: Record<PendingStatus, { label: string; cls: string }> = {
   partial:   { label: "部分入库", cls: "bg-violet-50 text-violet-700 border-violet-200" },
   done:      { label: "已完成", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
 };
+
+// 款号 fallback
+function getStyleKey(it: PendingItem): string {
+  return (it.style_no || it.sku_no || "(无款号)").trim();
+}
 
 // ============ Main page ============
 export default function SupplierDashboard() {
