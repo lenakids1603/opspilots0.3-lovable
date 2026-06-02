@@ -25,6 +25,7 @@ const fmtMoney = (n: number | null | undefined) => "¥" + (Number(n ?? 0)).toLoc
 import { formatDateCN, formatDateTimeCN, beijingDayRangeToUTC, beijingYMD } from "@/lib/datetime";
 const fmtDate = (d?: string | null) => formatDateCN(d);
 const fmtDateTime = (d?: string | null) => formatDateTimeCN(d);
+const fmtDateTimeMin = (d?: string | null) => formatDateTimeCN(d, { withSeconds: false });
 
 const WAREHOUSE_STATUS_LABEL: Record<string, string> = {
   not_received: "未入库",
@@ -467,7 +468,6 @@ export default function PurchaseOrderManagementPage() {
                     <SortHead<PoSortKey> k="total_received_qty" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">已入库</SortHead>
                     <SortHead<PoSortKey> k="total_unreceived_qty" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">未入库</SortHead>
                     <SortHead<PoSortKey> k="total_amount" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort} align="right">采购金额</SortHead>
-                    <SortHead<PoSortKey> k="updated_at" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>最近同步</SortHead>
                     <SortHead<PoSortKey> k="warehouse_status" currentKey={poSortKey} dir={poSortDir} onSort={onPoSort}>入库状态</SortHead>
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
@@ -476,7 +476,7 @@ export default function PurchaseOrderManagementPage() {
                   {ordersQ.isLoading ? (
                     <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">加载中…</TableCell></TableRow>
                   ) : (ordersQ.data?.rows.length ?? 0) === 0 ? (
-                    <TableRow><TableCell colSpan={11} className="text-center py-10 text-muted-foreground">
+                    <TableRow><TableCell colSpan={10} className="text-center py-10 text-muted-foreground">
                       <Inbox className="w-6 h-6 inline mr-2 opacity-50" />
                       暂无采购单数据,请先执行聚水潭采购同步
                     </TableCell></TableRow>
@@ -484,13 +484,12 @@ export default function PurchaseOrderManagementPage() {
                     <TableRow key={po.id}>
                       <TableCell className="font-mono text-xs">{po.external_po_id}</TableCell>
                       <TableCell>{po.supplier_name ?? "—"}</TableCell>
-                      <TableCell>{fmtDate(po.po_date)}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">{fmtDateTimeMin(po.po_date)}</TableCell>
                       <TableCell><Badge variant="outline">{po.status_label ?? po.status ?? "—"}</Badge></TableCell>
                       <TableCell className="text-right tabular-nums">{Number(po.total_purchase_qty ?? 0)}</TableCell>
                       <TableCell className="text-right tabular-nums text-emerald-600">{Number(po.total_received_qty ?? 0)}</TableCell>
                       <TableCell className="text-right tabular-nums text-amber-600">{Number(po.total_unreceived_qty ?? 0)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtMoney(po.total_amount)}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{fmtDateTime(po.updated_at)}</TableCell>
                       <TableCell>
                         <Badge variant="secondary" className={WAREHOUSE_STATUS_TONE[po.warehouse_status ?? "not_received"] ?? ""}>
                           {WAREHOUSE_STATUS_LABEL[po.warehouse_status ?? "not_received"] ?? "—"}
@@ -539,7 +538,7 @@ export default function PurchaseOrderManagementPage() {
                     </TableCell></TableRow>
                   ) : styleQ.data!.rows.map((s: any) => (
                     <TableRow key={s.style_no}>
-                      <TableCell className="text-xs">{fmtDate(s.latest_po_date)}</TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">{fmtDateTimeMin(s.latest_po_date)}</TableCell>
                       <TableCell className="font-mono text-xs">{s.style_no}</TableCell>
                       <TableCell>{s.product_name}</TableCell>
                       <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate" title={s.suppliers}>{s.suppliers}</TableCell>
@@ -584,7 +583,7 @@ export default function PurchaseOrderManagementPage() {
             <div className="space-y-4 mt-4 text-sm">
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div><span className="text-muted-foreground">供应商:</span> {selectedPo.supplier_name ?? "—"}</div>
-                <div><span className="text-muted-foreground">采购日期:</span> {fmtDate(selectedPo.po_date)}</div>
+                <div><span className="text-muted-foreground">采购日期:</span> {fmtDateTimeMin(selectedPo.po_date)}</div>
                 <div><span className="text-muted-foreground">状态:</span> {selectedPo.status_label ?? selectedPo.status}</div>
                 <div><span className="text-muted-foreground">入库状态:</span> {WAREHOUSE_STATUS_LABEL[selectedPo.warehouse_status] ?? "—"}</div>
                 <div><span className="text-muted-foreground">采购件数:</span> {selectedPo.total_purchase_qty}</div>
@@ -592,7 +591,10 @@ export default function PurchaseOrderManagementPage() {
                 <div><span className="text-muted-foreground">未入库:</span> {selectedPo.total_unreceived_qty}</div>
                 <div><span className="text-muted-foreground">采购金额:</span> {fmtMoney(selectedPo.total_amount)}</div>
                 <div><span className="text-muted-foreground">原始单号:</span> {selectedPo.external_po_id}</div>
-                <div><span className="text-muted-foreground">最近同步:</span> {fmtDateTime(selectedPo.updated_at)}</div>
+                <div><span className="text-muted-foreground">JST 修改时间:</span> {fmtDateTime(selectedPo.jst_modified_at)}</div>
+                <div><span className="text-muted-foreground">同步时间:</span> {fmtDateTime(selectedPo.updated_at)}</div>
+                <div><span className="text-muted-foreground">创建时间:</span> {fmtDateTime(selectedPo.created_at)}</div>
+                <div><span className="text-muted-foreground">更新时间:</span> {fmtDateTime(selectedPo.updated_at)}</div>
               </div>
               <div>
                 <div className="text-xs font-medium mb-2">采购明细</div>
