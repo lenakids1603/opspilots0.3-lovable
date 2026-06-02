@@ -53,7 +53,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   ignored:  { label: "已忽略", cls: "bg-muted text-muted-foreground" },
 };
 
-const IGNORE_PRESETS = ["历史测试店铺", "已关闭店铺", "非本公司店铺", "不参与统计", "重复店铺"];
+const IGNORE_PRESETS = ["历史废弃店铺", "店铺已关闭", "个体户已注销", "测试店铺", "不参与当前统计", "其他"];
 
 export function ShopMappingsCard() {
   const { toast } = useToast();
