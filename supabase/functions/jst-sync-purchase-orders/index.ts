@@ -602,7 +602,7 @@ async function syncPurchaseOrdersSegment(
             status: po.status ?? "", status_label: po.status ?? "",
             raw_receive_status: po.receive_status ?? "",
             remark: po.remark ?? "",
-            jst_modified_at: po.modified ? new Date(po.modified).toISOString() : null,
+            jst_modified_at: parseJstBeijingDateTime(po.modified),
             raw: po,
           };
           const { data: upPo, error: upErr } = await admin.from("purchase_orders")
