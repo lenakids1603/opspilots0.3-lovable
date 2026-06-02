@@ -1260,14 +1260,20 @@ async function tickInboundJob(jobId: string) {
       const movedNext = !result.hasNext || result.apiCount === 0;
       const newWindowIndex = movedNext ? windowIndex + 1 : windowIndex;
       const newPageIndex = movedNext ? 1 : pageIndex + 1;
+      const moreAfterThisPage = !(movedNext && newWindowIndex >= windows.length);
+      const shouldPauseAfterThisPage = moreAfterThisPage && (
+        pagesThisRun >= maxPages || Date.now() - tickStart > Math.max(0, budgetMs - 5000)
+      );
 
       await updateJobProgress(jobId, {
+        status: moreAfterThisPage ? (shouldPauseAfterThisPage ? "partial" : "running") : "success",
+        ended_at: moreAfterThisPage ? null : new Date().toISOString(),
         current_window_index: newWindowIndex,
         current_window_from: windows[newWindowIndex]?.from ?? win.from,
         current_window_to: windows[newWindowIndex]?.to ?? win.to,
         current_page_index: pageIndex,
         next_page_index: newPageIndex,
-        has_next: !(movedNext && newWindowIndex >= windows.length),
+        has_next: moreAfterThisPage,
         total_api_count: totalApi,
         total_order_upserted: totalMain,
         total_item_upserted: totalItem,
