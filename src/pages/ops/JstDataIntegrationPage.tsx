@@ -957,7 +957,9 @@ export default function JstDataIntegrationPage() {
                   const isPurchase = l._source === "purchase_log";
                   const mod = modules.find((m) => m.module_key === l.module_key);
                   const moduleName = isPurchase
-                    ? (l.module_key === "purchase_orders" ? "采购单" : l.module_key === "purchase_receipts" ? "采购入库单" : "采购与入库")
+                    ? (l.module_key === "purchase_orders" ? "采购单"
+                      : (l.module_key === "purchase_inbound_orders" || l.module_key === "purchase_in" || l.module_key === "purchase_receipts") ? "采购入库单"
+                      : "采购与入库")
                     : (mod?.module_name ?? l.module_key);
                   const s = asStatus(l.status === "running" ? "ok" : l.status);
                   return (
