@@ -174,7 +174,7 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
       requestTick(jobId);
     }
     if (status === "success" || status === "failed" || status === "cancelled") {
-      onJobFinished?.();
+      onJobFinished?.(j);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, nextPage, isResumable, jobId]);
