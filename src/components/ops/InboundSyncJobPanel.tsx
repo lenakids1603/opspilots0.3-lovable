@@ -41,6 +41,8 @@ interface Props {
 export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任务", showStartButtons = true }: Props) {
   const qc = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
+  const [tickError, setTickError] = useState<string | null>(null);
+  const isTickingRef = useRef(false);
 
   // Restore the latest unfinished job on mount
   const lastJobQ = useQuery({
@@ -117,9 +119,24 @@ export function InboundSyncJobPanel({ onJobFinished, title = "入库单同步任
       if (data?.ok === false) throw new Error(data?.error ?? "继续失败");
       return data;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["inbound_job", jobId] }),
-    onError: (e: any) => toast({ title: "继续同步失败", description: e.message, variant: "destructive" }),
+    onSuccess: () => {
+      setTickError(null);
+      qc.invalidateQueries({ queryKey: ["inbound_job", jobId] });
+    },
+    onError: (e: any) => {
+      setTickError(e.message);
+      toast({ title: "继续同步失败", description: e.message, variant: "destructive" });
+    },
+    onSettled: () => {
+      isTickingRef.current = false;
+    },
   });
+
+  const requestTick = useCallback((id: string) => {
+    if (isTickingRef.current || tickMut.isPending) return;
+    isTickingRef.current = true;
+    tickMut.mutate(id);
+  }, [tickMut]);
 
   const cancelMut = useMutation({
     mutationFn: async (id: string) => {
