@@ -467,7 +467,8 @@ export default function SupplierDashboard() {
 
   // 当前供应商名称（供应商账号）
   const { profile } = useAuth();
-  const supplierNameQ = useCurrentSupplierName(profile?.supplier_id ?? null);
+  const supplierId = (profile as any)?.supplier_id ?? null;
+  const supplierNameQ = useCurrentSupplierName(supplierId);
 
   const purchaseQ = usePurchaseStats(startYmd, endYmd);
   const inboundQ = useInboundStats(startYmd, endYmd);
