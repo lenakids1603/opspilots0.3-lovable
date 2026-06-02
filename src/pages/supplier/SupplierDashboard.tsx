@@ -700,7 +700,7 @@ export default function SupplierDashboard() {
                 <tr><td colSpan={10} className="py-10 text-center text-rose-600">读取失败：{(pendingQ.error as any).message}</td></tr>
               ) : pageRows.length === 0 ? (
                 <tr><td colSpan={10} className="py-12 text-center text-muted-foreground">
-                  <Inbox className="w-6 h-6 inline mr-2 opacity-50" />未来 7 天暂无待交付款式
+                  <Inbox className="w-6 h-6 inline mr-2 opacity-50" />过去 5 天至未来 7 天暂无待交付款式
                 </td></tr>
               ) : pageRows.map((r) => {
                 const st = r.status;
