@@ -516,17 +516,17 @@ export default function InboundOrdersPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>入库日期</TableHead>
-              <TableHead>入库单号</TableHead>
-              <TableHead>采购单号</TableHead>
-              <TableHead>供应商</TableHead>
-              <TableHead>仓库</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead className="text-right">入库件数</TableHead>
-              <TableHead className="text-right">入库金额</TableHead>
-              <TableHead className="text-right">明细行数</TableHead>
-              <TableHead>JST 修改时间</TableHead>
-              <TableHead>同步时间</TableHead>
+              <SortHead sortKey="io_date" currentKey={sortKey} dir={sortDir} onSort={onSort}>入库日期</SortHead>
+              <SortHead sortKey="external_io_id" currentKey={sortKey} dir={sortDir} onSort={onSort}>入库单号</SortHead>
+              <SortHead sortKey="external_po_id" currentKey={sortKey} dir={sortDir} onSort={onSort}>采购单号</SortHead>
+              <SortHead sortKey="supplier_name" currentKey={sortKey} dir={sortDir} onSort={onSort}>供应商</SortHead>
+              <SortHead sortKey="warehouse_name" currentKey={sortKey} dir={sortDir} onSort={onSort}>仓库</SortHead>
+              <SortHead sortKey="status" currentKey={sortKey} dir={sortDir} onSort={onSort}>状态</SortHead>
+              <SortHead sortKey="item_qty" currentKey={sortKey} dir={sortDir} onSort={onSort} align="right">入库件数</SortHead>
+              <SortHead sortKey="item_amt" currentKey={sortKey} dir={sortDir} onSort={onSort} align="right">入库金额</SortHead>
+              <SortHead sortKey="item_count" currentKey={sortKey} dir={sortDir} onSort={onSort} align="right">明细行数</SortHead>
+              <SortHead sortKey="jst_modified_at" currentKey={sortKey} dir={sortDir} onSort={onSort}>JST 修改时间</SortHead>
+              <SortHead sortKey="updated_at" currentKey={sortKey} dir={sortDir} onSort={onSort}>同步时间</SortHead>
               <TableHead>异常</TableHead>
               <TableHead>操作</TableHead>
             </TableRow>
