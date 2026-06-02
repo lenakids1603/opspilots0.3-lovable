@@ -386,6 +386,27 @@ export default function JstDataIntegrationPage() {
   const metrics = metricsQ.data ?? {};
   const errors = errorsQ.data ?? [];
   const runs = runsQ.data ?? [];
+  const purchaseLogs = purchaseLogsQ.data ?? [];
+
+  // 将 jst_sync_logs(采购) 归一化为日志行结构
+  const purchaseLogRows = useMemo(() => purchaseLogs.map((p: any) => {
+    const fetched = (p.fetched_orders_count ?? 0) + (p.fetched_items_count ?? 0) + (p.fetched_receipts_count ?? 0);
+    return {
+      id: `plog-${p.id}`,
+      _source: "purchase_log" as const,
+      _raw: p,
+      module_key: p.sync_type,
+      trigger_type: "manual",
+      started_at: p.started_at,
+      status: p.status === "success" ? "ok" : p.status === "running" ? "running" : p.status === "partial" ? "warn" : "error",
+      inserted_count: fetched,
+      updated_count: 0,
+      failed_count: p.status === "error" ? 1 : 0,
+      duration_ms: p.ended_at ? new Date(p.ended_at).getTime() - new Date(p.started_at).getTime() : null,
+      current_total_summary: p.message ?? "",
+      error_message: p.error_detail ?? "",
+    };
+  }), [purchaseLogs]);
 
   const globalMetric = metrics["global_status"];
   const globalExtra = (globalMetric?.metric_extra ?? {}) as Record<string, any>;
