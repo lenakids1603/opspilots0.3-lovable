@@ -136,27 +136,29 @@ export function ShopMappingsCard() {
 
   const rows = mappingsQ.data ?? [];
 
-  // 质量分析
+  // 质量分析:已忽略店铺视为业务上已处理,不计入风险;主体/平台/重复绑定仅针对已映射店铺
   const quality = useMemo(() => {
     const total = rows.length;
-    const mapped = rows.filter(r => r.mapping_status === "mapped").length;
-    const unmapped = rows.filter(r => r.mapping_status === "unmapped").length;
+    const mappedRows = rows.filter(r => r.mapping_status === "mapped");
+    const mapped = mappedRows.length;
     const ignored = rows.filter(r => r.mapping_status === "ignored").length;
-    const active = rows.filter(r => r.mapping_status !== "ignored");
-    const noEntity = active.filter(r => !r.matched_business_entity_id).length;
-    const noPlatform = active.filter(r => !r.matched_platform_id).length;
+    const pending = total - mapped - ignored;
+    const noEntity = mappedRows.filter(r => !r.matched_business_entity_id).length;
+    const noPlatform = mappedRows.filter(r => !r.matched_platform_id).length;
 
-    // 重复绑定检测:同一 matched_shop_id 出现多次(active)
     const shopCount = new Map<string, number>();
-    active.forEach(r => {
+    mappedRows.forEach(r => {
       if (r.matched_shop_id) shopCount.set(r.matched_shop_id, (shopCount.get(r.matched_shop_id) ?? 0) + 1);
     });
     const dupShopIds = new Set(Array.from(shopCount.entries()).filter(([, n]) => n > 1).map(([id]) => id));
-    const dupCount = active.filter(r => r.matched_shop_id && dupShopIds.has(r.matched_shop_id)).length;
+    const dupCount = mappedRows.filter(r => r.matched_shop_id && dupShopIds.has(r.matched_shop_id)).length;
 
-    const completeness = total > 0 ? Math.round((mapped / total) * 100) : 0;
-    const needsAttention = unmapped > 0 || noEntity > 0 || noPlatform > 0 || dupCount > 0;
-    return { total, mapped, unmapped, ignored, noEntity, noPlatform, dupCount, completeness, needsAttention, dupShopIds };
+    const processedRate = total > 0 ? Math.round(((mapped + ignored) / total) * 100) : 0;
+    const needsAttention = pending > 0 || noEntity > 0 || noPlatform > 0 || dupCount > 0;
+    // 兼容旧字段
+    const unmapped = pending;
+    const completeness = processedRate;
+    return { total, mapped, unmapped, pending, ignored, noEntity, noPlatform, dupCount, completeness, processedRate, needsAttention, dupShopIds };
   }, [rows]);
 
   return (
