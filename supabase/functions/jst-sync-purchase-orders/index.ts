@@ -761,27 +761,40 @@ async function syncPurchaseInSegment(
   }
 }
 
-async function syncRange(fromIso: string, toIso: string, logId: string) {
+type SyncScope = "purchase_orders" | "purchase_inbound_orders" | "both";
+
+async function syncRange(
+  fromIso: string,
+  toIso: string,
+  logId: string,
+  scope: SyncScope = "both",
+) {
+  const doPO = scope === "purchase_orders" || scope === "both";
+  const doIN = scope === "purchase_inbound_orders" || scope === "both";
   let ordersCount = 0, itemsCount = 0, receiptsCount = 0;
   const errors: string[] = [];
   let lastSuccessfulTo: string | null = null;
 
   for (const [winFrom, winTo] of timeWindows(new Date(fromIso), new Date(toIso), 1)) {
     const segAffected = new Set<string>();
-    let poOk = false, inOk = false;
-    try {
-      const r = await syncPurchaseOrdersSegment(winFrom, winTo, logId, segAffected);
-      ordersCount += r.orders; itemsCount += r.items;
-      poOk = true;
-    } catch (e) {
-      errors.push(`PO ${fmt(winFrom)}: ${(e as Error).message}`);
+    let poOk = !doPO, inOk = !doIN;
+    if (doPO) {
+      try {
+        const r = await syncPurchaseOrdersSegment(winFrom, winTo, logId, segAffected);
+        ordersCount += r.orders; itemsCount += r.items;
+        poOk = true;
+      } catch (e) {
+        errors.push(`PO ${fmt(winFrom)}: ${(e as Error).message}`);
+      }
     }
-    try {
-      const r = await syncPurchaseInSegment(winFrom, winTo, logId, segAffected);
-      receiptsCount += r.receipts;
-      inOk = true;
-    } catch (e) {
-      errors.push(`IN ${fmt(winFrom)}: ${(e as Error).message}`);
+    if (doIN) {
+      try {
+        const r = await syncPurchaseInSegment(winFrom, winTo, logId, segAffected);
+        receiptsCount += r.receipts;
+        inOk = true;
+      } catch (e) {
+        errors.push(`IN ${fmt(winFrom)}: ${(e as Error).message}`);
+      }
     }
 
     // 每段结束后立即对本段涉及的 PO 做聚合刷新,避免主表 total_* 字段长期为 0
@@ -794,11 +807,17 @@ async function syncRange(fromIso: string, toIso: string, logId: string) {
     }
 
     // 每段成功后立即推进游标,避免下次重跑已完成的日期
+    // 不同 scope 使用独立游标,避免互相覆盖
     if (poOk && inOk) {
       lastSuccessfulTo = winTo.toISOString();
+      const stateKey = scope === "purchase_orders"
+        ? "purchase_orders_last_sync"
+        : scope === "purchase_inbound_orders"
+          ? "purchase_inbound_orders_last_sync"
+          : "purchase_orders_last_sync";
       try {
         await admin.from("jst_sync_state").upsert({
-          key: "purchase_orders_last_sync",
+          key: stateKey,
           value: { last_modified_at: lastSuccessfulTo },
           updated_at: new Date().toISOString(),
         });
@@ -809,13 +828,16 @@ async function syncRange(fromIso: string, toIso: string, logId: string) {
   }
 
   const status = errors.length === 0 ? "success" : (ordersCount + receiptsCount > 0 ? "partial_failed" : "failed");
+  const summaryParts: string[] = [];
+  if (doPO) summaryParts.push(`采购单 ${ordersCount}、明细 ${itemsCount}`);
+  if (doIN) summaryParts.push(`入库单 ${receiptsCount}`);
   await admin.from("jst_sync_logs").update({
     status,
     ended_at: new Date().toISOString(),
     fetched_orders_count: ordersCount,
     fetched_items_count: itemsCount,
     fetched_receipts_count: receiptsCount,
-    message: `${errors.length ? "部分成功 / 部分失败。" : "全部同步成功。"}汇总:单 ${ordersCount}、明细 ${itemsCount}、入库 ${receiptsCount}${errors.length ? `,失败段 ${errors.length}` : ""}${lastSuccessfulTo ? `;游标已推进至 ${lastSuccessfulTo}` : ""}`,
+    message: `${errors.length ? "部分成功 / 部分失败。" : "全部同步成功。"}scope=${scope};汇总:${summaryParts.join("、")}${errors.length ? `,失败段 ${errors.length}` : ""}${lastSuccessfulTo ? `;游标已推进至 ${lastSuccessfulTo}` : ""}`,
     error_detail: errors.length ? sanitizeMsg(errors.join(" | ")).slice(0, 1500) : null,
   }).eq("id", logId);
 
