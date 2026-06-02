@@ -1295,20 +1295,31 @@ function ImportDialog({
         }
         return out;
       };
-      const [ents, bks, shs, pls, cats] = await Promise.all([
+      const [ents, bks, shs, pls, cats, bnds] = await Promise.all([
         fetchAll("business_entities", "id,name,code,legal_person,entity_type"),
-        fetchAll("bank_accounts", "id,entity_id,account_no_masked,bank_name"),
+        fetchAll("bank_accounts", "id,account_number,account_no_masked,bank_name,account_holder_name"),
         fetchAll("shops", "id,name,platform_id,entity_id"),
         fetchAll("platforms", "id,name,code"),
         fetchAll("cash_tx_categories", "id,direction,name"),
+        (async () => {
+          const out: any[] = []; let from = 0; const step = 1000;
+          while (true) {
+            const { data, error } = await supabase.from("shop_bank_account_bindings").select("id,shop_id,bank_account_id,binding_type").range(from, from + step - 1);
+            if (error) throw error;
+            out.push(...(data ?? []));
+            if (!data || data.length < step) break;
+            from += step;
+          }
+          return out;
+        })(),
       ]);
       const buf = await file.arrayBuffer();
       const p = parseAccountWorkbook(buf, {
-        entities: ents as any, banks: bks as any, shops: shs as any, platforms: pls as any, categories: cats as any,
+        entities: ents as any, banks: bks as any, shops: shs as any, platforms: pls as any, categories: cats as any, bindings: bnds as any,
       });
-      const total = p.entities.length + p.banks.length + p.shops.length + p.categories.length;
+      const total = p.entities.length + p.banks.length + p.shops.length + p.bindings.length + p.categories.length;
       if (total === 0) {
-        toast({ title: "未识别到任何数据", description: "请检查 Sheet 名是否为：经营主体 / 银行账户 / 店铺 / 收支分类", variant: "destructive" });
+        toast({ title: "未识别到任何数据", description: "请检查 Sheet 名是否为：经营主体 / 银行账户 / 店铺 / 店铺账户绑定 / 收支分类", variant: "destructive" });
       }
       setPreview(p);
     } catch (e: any) {
