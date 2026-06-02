@@ -1505,15 +1505,20 @@ async function tickInboundJob(jobId: string) {
   await updateJobProgress(jobId, tail);
 
   // 同步更新父日志,保持老界面不被卡死
-  await admin.from("jst_sync_logs").update({
+  const parentLogPatch: Record<string, unknown> = {
     status: finalStatus,
     ended_at: tail.ended_at,
-    fetched_receipts_count: totalMain,
     fetched_items_count: totalItem,
     heartbeat_at: new Date().toISOString(),
     message: tail.message,
     error_detail: lastError || "",
-  }).eq("id", job.parent_log_id);
+  };
+  if (job.sync_type === "purchase_orders") {
+    parentLogPatch.fetched_orders_count = totalMain;
+  } else {
+    parentLogPatch.fetched_receipts_count = totalMain;
+  }
+  await admin.from("jst_sync_logs").update(parentLogPatch).eq("id", job.parent_log_id);
 
   return { status: finalStatus, job: { ...job, ...tail } };
 }
