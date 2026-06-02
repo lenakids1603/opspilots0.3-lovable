@@ -583,7 +583,7 @@ export default function PurchaseOrderManagementPage() {
             <div className="space-y-4 mt-4 text-sm">
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div><span className="text-muted-foreground">供应商:</span> {selectedPo.supplier_name ?? "—"}</div>
-                <div><span className="text-muted-foreground">采购日期:</span> {fmtDate(selectedPo.po_date)}</div>
+                <div><span className="text-muted-foreground">采购日期:</span> {fmtDateTimeMin(selectedPo.po_date)}</div>
                 <div><span className="text-muted-foreground">状态:</span> {selectedPo.status_label ?? selectedPo.status}</div>
                 <div><span className="text-muted-foreground">入库状态:</span> {WAREHOUSE_STATUS_LABEL[selectedPo.warehouse_status] ?? "—"}</div>
                 <div><span className="text-muted-foreground">采购件数:</span> {selectedPo.total_purchase_qty}</div>
@@ -591,7 +591,10 @@ export default function PurchaseOrderManagementPage() {
                 <div><span className="text-muted-foreground">未入库:</span> {selectedPo.total_unreceived_qty}</div>
                 <div><span className="text-muted-foreground">采购金额:</span> {fmtMoney(selectedPo.total_amount)}</div>
                 <div><span className="text-muted-foreground">原始单号:</span> {selectedPo.external_po_id}</div>
-                <div><span className="text-muted-foreground">最近同步:</span> {fmtDateTime(selectedPo.updated_at)}</div>
+                <div><span className="text-muted-foreground">JST 修改时间:</span> {fmtDateTime(selectedPo.jst_modified_at)}</div>
+                <div><span className="text-muted-foreground">同步时间:</span> {fmtDateTime(selectedPo.updated_at)}</div>
+                <div><span className="text-muted-foreground">创建时间:</span> {fmtDateTime(selectedPo.created_at)}</div>
+                <div><span className="text-muted-foreground">更新时间:</span> {fmtDateTime(selectedPo.updated_at)}</div>
               </div>
               <div>
                 <div className="text-xs font-medium mb-2">采购明细</div>
