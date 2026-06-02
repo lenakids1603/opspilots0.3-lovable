@@ -808,34 +808,43 @@ export default function JstDataIntegrationPage() {
             {/* ====== 采购API ====== */}
             <TabsContent value="purchase" className="m-0 p-5 space-y-3">
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" disabled={purchaseSyncMut.isPending}
-                  onClick={() => purchaseSyncMut.mutate({ label: "同步采购单（增量）" })}>
+                <Button size="sm" disabled={poBusy}
+                  onClick={() => purchaseSyncMut.mutate({ scope: "purchase_orders", label: "同步采购单（增量）" })}>
                   <ShoppingCart className="w-3.5 h-3.5 mr-1" />
-                  {purchaseSyncMut.isPending ? "同步中..." : "同步采购单"}
+                  {poBusy ? "同步中..." : "同步采购单"}
                 </Button>
-                <Button size="sm" variant="outline" disabled={purchaseSyncMut.isPending}
-                  onClick={() => purchaseSyncMut.mutate({ days: 7, label: "最近 7 天采购" })}>最近 7 天</Button>
-                <Button size="sm" variant="outline" disabled={purchaseSyncMut.isPending}
-                  onClick={() => purchaseSyncMut.mutate({ days: 30, label: "最近 30 天采购" })}>最近 30 天</Button>
+                <Button size="sm" variant="outline" disabled={poBusy}
+                  onClick={() => purchaseSyncMut.mutate({ scope: "purchase_orders", days: 7, label: "最近 7 天采购单" })}>最近 7 天</Button>
+                <Button size="sm" variant="outline" disabled={poBusy}
+                  onClick={() => purchaseSyncMut.mutate({ scope: "purchase_orders", days: 30, label: "最近 30 天采购单" })}>最近 30 天</Button>
                 <Badge variant="default" className="ml-1">已接入</Badge>
               </div>
               <div className="text-xs text-muted-foreground">
-                采购单写入 purchase_orders / purchase_order_items，日志在 jst_sync_logs。
+                从聚水潭同步采购单数据，用于采购跟踪、供应商下单记录、采购金额统计。日志类型：<code>purchase_orders</code>。
               </div>
             </TabsContent>
 
             {/* ====== 入库API ====== */}
             <TabsContent value="receipt" className="m-0 p-5 space-y-3">
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" disabled={purchaseSyncMut.isPending}
-                  onClick={() => purchaseSyncMut.mutate({ label: "同步采购入库单（增量）" })}>
-                  <PackageCheck className="w-3.5 h-3.5 mr-1" /> 同步采购入库单
+                <Button size="sm" disabled={inBusy}
+                  onClick={() => purchaseSyncMut.mutate({ scope: "purchase_inbound_orders", label: "同步采购入库单（增量）" })}>
+                  <PackageCheck className="w-3.5 h-3.5 mr-1" />
+                  {inBusy ? "同步中..." : "同步采购入库单"}
                 </Button>
-                <Button size="sm" variant="outline" disabled title="入库差异校验暂未接入">入库差异校验（暂未接入）</Button>
+                <Button size="sm" variant="outline" disabled={inBusy}
+                  onClick={() => purchaseSyncMut.mutate({ scope: "purchase_inbound_orders", days: 7, label: "最近 7 天入库单" })}>最近 7 天</Button>
+                <Button size="sm" variant="outline" disabled={inBusy}
+                  onClick={() => purchaseSyncMut.mutate({ scope: "purchase_inbound_orders", days: 30, label: "最近 30 天入库单" })}>最近 30 天</Button>
+                <Button size="sm" variant="outline" disabled title="入库差异校验暂未接入">
+                  入库差异校验（暂未接入）
+                </Button>
                 <Badge variant="default" className="ml-1">已接入</Badge>
               </div>
-              <div className="text-xs text-muted-foreground">
-                与采购同步共享 Edge Function；财务应付参考后续接入。
+              <div className="text-xs text-muted-foreground space-y-1">
+                <div>从聚水潭同步采购入库单 / 入库记录，用于仓库到货、实际入库数量、供应商应付金额核对。</div>
+                <div>入库单同步与采购单同步已拆分，入库数据主要用于到货核对和供应商应付核算。日志类型：<code>purchase_inbound_orders</code>。</div>
+                <div className="text-muted-foreground/80">入库差异校验：用于后续对比采购数量、仓库实际入库数量、供应商送货数量。</div>
               </div>
             </TabsContent>
 
