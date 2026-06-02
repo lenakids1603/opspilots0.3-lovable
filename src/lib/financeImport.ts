@@ -540,15 +540,14 @@ export async function exportAllMasterData() {
     主体简称: e.code, 法人: e.legal_person, 年度流水额度: e.annual_flow_limit,
     状态: e.status === "active" ? "启用" : "停用", 备注: e.remark,
   }));
+  const bindCountByBank = new Map<string, number>();
+  bindings.forEach((b: any) => { if (b.status === "active") bindCountByBank.set(b.bank_account_id, (bindCountByBank.get(b.bank_account_id) ?? 0) + 1); });
   const bankRows = banks.filter((b: any) => !b.deleted_at).map((b: any) => ({
     开户名: b.account_holder_name || b.account_name,
     账户类型: ACCOUNT_TYPE_LABEL[b.account_type] ?? b.account_type,
     开户银行: b.bank_name, 银行账号: b.account_number || b.account_no_masked,
-    账户法定归属主体: entMap.get(b.owner_entity_id) ?? "",
-    关联主体: entMap.get(b.related_entity_id) ?? "",
-    关联人: b.related_person_name ?? "",
-    用途: USAGE_LABEL[b.usage_type] ?? b.usage_type,
-    当前余额: b.current_balance, 是否默认: b.is_default ? "是" : "否",
+    绑定店铺数: bindCountByBank.get(b.id) ?? 0,
+    当前余额: b.current_balance,
     状态: b.status === "active" ? "启用" : "停用", 备注: b.remark,
   }));
   const shopRows = shops.filter((s: any) => !s.deleted_at).map((s: any) => ({
