@@ -344,8 +344,15 @@ export default function JstDataIntegrationPage() {
         description: `${d.label} — ${d.message}${d.log_id ? `（日志 ${d.log_id.slice(0, 8)}）` : ""}`,
       });
       qc.invalidateQueries({ queryKey: ["jst_sync_runs"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_logs", "purchase"] });
       qc.invalidateQueries({ queryKey: ["jst_sync_modules"] });
       qc.invalidateQueries({ queryKey: ["jst_sync_metrics"] });
+      qc.invalidateQueries({ queryKey: ["purchase_orders"] });
+      qc.invalidateQueries({ queryKey: ["purchase_order_items"] });
+      qc.invalidateQueries({ queryKey: ["purchase_receipts"] });
+      qc.invalidateQueries({ queryKey: ["purchase_receipt_items"] });
+      // 跳转到日志区
+      setTimeout(() => document.getElementById("jst-sync-logs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
     },
     onError: (e: any) => toast({ title: "采购同步失败", description: e.message, variant: "destructive" }),
   });
