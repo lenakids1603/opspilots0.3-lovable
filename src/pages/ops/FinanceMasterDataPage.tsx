@@ -1329,33 +1329,63 @@ function ImportDialog({
     }
   };
 
+  const setBankAcctType = (rowIdx: number, val: "corporate" | "personal") => {
+    if (!preview) return;
+    const next = { ...preview, banks: preview.banks.slice() };
+    const r = { ...next.banks[rowIdx] };
+    const d = { ...r.data };
+    d.account_type = val;
+    // Adjust holder defaults if previously pending
+    if (val === "corporate") {
+      d.account_holder_name = d.account_holder_name || d.owner_entity_name || "";
+    } else {
+      d.account_holder_name = d.related_person_name || d.account_holder_name || "";
+    }
+    r.data = d;
+    r.needsAccountType = false;
+    next.banks[rowIdx] = r;
+    setPreview(next);
+  };
+
+  const bulkSetAcctType = (val: "corporate" | "personal") => {
+    if (!preview) return;
+    const banks = preview.banks.map(r => {
+      if (!r.needsAccountType) return r;
+      const d = { ...r.data, account_type: val };
+      if (val === "corporate") d.account_holder_name = d.account_holder_name || d.owner_entity_name || "";
+      else d.account_holder_name = d.related_person_name || d.account_holder_name || "";
+      return { ...r, data: d, needsAccountType: false };
+    });
+    setPreview({ ...preview, banks });
+  };
+
+  const pendingAcctCount = preview?.banks.filter(r => r.needsAccountType).length ?? 0;
+
   const commit = async () => {
     if (!preview) return;
+    if (pendingAcctCount > 0) {
+      toast({ title: "请先确认账户类型", description: `还有 ${pendingAcctCount} 行未选择账户类型`, variant: "destructive" });
+      return;
+    }
     setCommitting(true);
     const errors: ImportError[] = [];
     let nCount = 0, uCount = 0, sCount = 0;
-
     const pushErr = (r: PreviewRow, msg: string, result = "失败") =>
       errors.push({ sheet: r.sheet, rowNum: r.rowNum, message: msg, raw: r.raw, result });
 
     try {
-      const processRows = async (
-        rows: PreviewRow[],
-        table: string,
-        transform: (data: any) => any,
-      ) => {
+      const processRows = async (rows: PreviewRow[], table: string, transform: (data: any) => any) => {
         for (const r of rows) {
           if (r.status === "error") { pushErr(r, r.message ?? "解析错误"); continue; }
           if (r.status === "skip") { sCount++; pushErr(r, r.message ?? "已跳过", "跳过"); continue; }
           const payload = transform(r.data);
-          if (payload === null) continue; // skipped due to unresolved fk
+          if (payload === null) continue;
           const { __id, ...body } = payload;
           const res = r.status === "update"
             ? await supabase.from(table as any).update(body).eq("id", __id)
             : await supabase.from(table as any).insert(body);
           if (res.error) {
-            const msg = res.error.message.includes("duplicate key")
-              ? "数据库已存在同样的记录（被唯一约束拦截）" : res.error.message;
+            const msg = res.error.message.includes("duplicate key") ? "数据库已存在同样的记录（被唯一约束拦截）" : res.error.message;
             pushErr(r, `${r.status === "update" ? "更新" : "新增"}失败: ${msg}`);
           } else {
             if (r.status === "update") uCount++; else nCount++;
@@ -1366,39 +1396,89 @@ function ImportDialog({
       // 1) entities
       await processRows(preview.entities, "business_entities", (d: any) => d);
 
-      // refetch entities/banks for FK resolution
+      // refetch entities for FK resolution
       const { data: allEnts } = await supabase.from("business_entities").select("id,name").is("deleted_at", null);
       const entIdByName = new Map<string, string>((allEnts ?? []).map((e: any) => [String(e.name).trim().toLowerCase(), e.id]));
+      const resolveEnt = (name?: string | null) => name ? (entIdByName.get(String(name).trim().toLowerCase()) ?? null) : null;
 
       // 2) banks
       await processRows(preview.banks, "bank_accounts", (d: any) => {
-        const { entityName, ...rest } = d;
-        const eid = entIdByName.get(String(entityName).trim().toLowerCase());
-        if (!eid) { return null; }
-        return { ...rest, entity_id: eid, __id: d.__id };
+        const owner_entity_id = resolveEnt(d.owner_entity_name);
+        const related_entity_id = resolveEnt(d.related_entity_name);
+        if (d.account_type === "corporate" && !owner_entity_id) return null;
+        const { owner_entity_name, related_entity_name, ...rest } = d;
+        return {
+          ...rest,
+          owner_entity_id,
+          related_entity_id,
+          entity_id: owner_entity_id ?? related_entity_id ?? null, // legacy mirror
+          account_name: d.account_holder_name, // legacy mirror
+          __id: d.__id,
+        };
       });
-      // log fk-fail rows
       preview.banks.forEach(r => {
-        if (r.status === "new" || r.status === "update") {
-          const eid = entIdByName.get(String(r.data.entityName).trim().toLowerCase());
-          if (!eid) pushErr(r, `经营主体【${r.data.entityName}】未找到`);
+        if ((r.status === "new" || r.status === "update") && r.data.account_type === "corporate") {
+          if (!resolveEnt(r.data.owner_entity_name)) pushErr(r, `归属主体【${r.data.owner_entity_name ?? ""}】未找到`);
         }
       });
 
-      const { data: allBanks } = await supabase.from("bank_accounts").select("id,account_no_masked").is("deleted_at", null);
+      // refetch banks for binding resolution
+      const { data: allBanks } = await supabase.from("bank_accounts").select("id,account_number,account_no_masked").is("deleted_at", null);
       const bankIdByAcc = new Map<string, string>();
-      (allBanks ?? []).forEach((b: any) => { if (b.account_no_masked) bankIdByAcc.set(String(b.account_no_masked).replace(/\s+/g, ""), b.id); });
+      (allBanks ?? []).forEach((b: any) => {
+        const a = String(b.account_number || b.account_no_masked || "").replace(/\s+/g, "");
+        if (a) bankIdByAcc.set(a, b.id);
+      });
 
       // 3) shops
       await processRows(preview.shops, "shops", (d: any) => {
-        const { entityName, platformName, defaultAccountNo, ...rest } = d;
-        const eid = entIdByName.get(String(entityName).trim().toLowerCase());
+        const { entityName, platformName, ...rest } = d;
+        const eid = resolveEnt(entityName);
         if (!eid) return null;
-        const default_bank_account_id = defaultAccountNo ? bankIdByAcc.get(String(defaultAccountNo).replace(/\s+/g, "")) ?? null : null;
-        return { ...rest, entity_id: eid, default_bank_account_id, __id: d.__id };
+        return { ...rest, entity_id: eid, __id: d.__id };
       });
 
-      // 4) categories
+      // refetch shops for binding resolution
+      const { data: allShops } = await supabase.from("shops").select("id,name,platform_id").is("deleted_at", null);
+      const shopIdByKey = new Map<string, string>();
+      (allShops ?? []).forEach((s: any) => shopIdByKey.set(`${s.platform_id}|${String(s.name).trim().toLowerCase()}`, s.id));
+
+      // 4) bindings (upsert by shop_id+bank_account_id+binding_type)
+      const { data: allBindings } = await supabase.from("shop_bank_account_bindings").select("id,shop_id,bank_account_id,binding_type");
+      const bindByKey = new Map<string, string>();
+      (allBindings ?? []).forEach((b: any) => bindByKey.set(`${b.shop_id}|${b.bank_account_id}|${b.binding_type}`, b.id));
+
+      for (const r of preview.bindings) {
+        if (r.status === "error") { pushErr(r, r.message ?? "解析错误"); continue; }
+        if (r.status === "skip") { sCount++; pushErr(r, r.message ?? "已跳过", "跳过"); continue; }
+        const d = r.data;
+        const shop_id = shopIdByKey.get(`${d.platform_id}|${String(d.shopName).trim().toLowerCase()}`);
+        const bank_account_id = bankIdByAcc.get(String(d.accountNo).replace(/\s+/g, ""));
+        if (!shop_id) { pushErr(r, `找不到店铺【${d.shopName}】`); continue; }
+        if (!bank_account_id) { pushErr(r, `找不到银行账号【${d.accountNo}】`); continue; }
+        const key = `${shop_id}|${bank_account_id}|${d.binding_type}`;
+        const existingId = bindByKey.get(key);
+        // If is_default, clear other defaults for same shop+binding_type first
+        if (d.is_default) {
+          await supabase.from("shop_bank_account_bindings")
+            .update({ is_default: false })
+            .eq("shop_id", shop_id).eq("binding_type", d.binding_type);
+        }
+        const body: any = {
+          shop_id, bank_account_id, platform_id: d.platform_id,
+          binding_type: d.binding_type, is_default: d.is_default,
+          status: d.status, remark: d.remark ?? "",
+        };
+        if (d.effective_from) body.effective_from = d.effective_from;
+        if (d.effective_to) body.effective_to = d.effective_to;
+        const res = existingId
+          ? await supabase.from("shop_bank_account_bindings").update(body).eq("id", existingId)
+          : await supabase.from("shop_bank_account_bindings").insert(body);
+        if (res.error) pushErr(r, `${existingId ? "更新" : "新增"}失败: ${res.error.message}`);
+        else { if (existingId) uCount++; else nCount++; }
+      }
+
+      // 5) categories
       await processRows(preview.categories, "cash_tx_categories", (d: any) => d);
 
       setLastErrors(errors);
@@ -1426,14 +1506,14 @@ function ImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-5xl max-h-[88vh] overflow-y-auto">
         <DialogHeader><DialogTitle>导入财务基础资料</DialogTitle></DialogHeader>
 
         {!preview && (
           <div className="py-6 space-y-3">
             <div className="text-[13px] text-muted-foreground space-y-1">
-              <div>请使用【下载模板】生成的 .xlsx 文件，包含 Sheet：经营主体 / 银行账户 / 店铺 / 收支分类。</div>
-              <div>导入会自动识别已有数据并去重：相同主体名称+类型 / 银行账号 / 平台+店铺名 / 方向+分类名 视为同一条。</div>
+              <div>请使用【下载模板】生成的 .xlsx，支持 Sheet：经营主体 / 银行账户 / 店铺 / 店铺账户绑定 / 收支分类。</div>
+              <div>兼容旧账户明细表 Sheet1（个体户/店铺/银行账户/绑定）与 Sheet2（运营公司/投流账户）。</div>
               <div>解析后会展示新增 / 更新 / 跳过 / 错误预览，点击【确认导入】才会写入数据库。</div>
             </div>
             <input ref={fileRef} type="file" accept=".xlsx,.xls"
@@ -1445,9 +1525,19 @@ function ImportDialog({
 
         {preview && (
           <div className="space-y-4">
+            {pendingAcctCount > 0 && (
+              <div className="border border-amber-300 bg-amber-50 rounded-md p-3 text-[12px] text-amber-800 flex items-center justify-between gap-3">
+                <div>检测到 {pendingAcctCount} 个银行账户未确定账户类型（来自旧账户明细表）。请逐行选择，或批量设置。</div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => bulkSetAcctType("corporate")}>全部按对公账户</Button>
+                  <Button size="sm" variant="outline" onClick={() => bulkSetAcctType("personal")}>全部按个人账户</Button>
+                </div>
+              </div>
+            )}
             <PreviewSection title="经营主体" rows={preview.entities} stat={stat(preview.entities)} />
-            <PreviewSection title="银行账户" rows={preview.banks} stat={stat(preview.banks)} />
+            <PreviewSection title="银行账户" rows={preview.banks} stat={stat(preview.banks)} onSetAcctType={setBankAcctType} />
             <PreviewSection title="店铺" rows={preview.shops} stat={stat(preview.shops)} />
+            <PreviewSection title="店铺账户绑定" rows={preview.bindings} stat={stat(preview.bindings)} />
             <PreviewSection title="收支分类" rows={preview.categories} stat={stat(preview.categories)} />
             {lastErrors.length > 0 && (
               <div className="border border-rose-200 bg-rose-50 rounded-md p-3 text-[12px] text-rose-700">
@@ -1462,7 +1552,9 @@ function ImportDialog({
           {preview && (
             <>
               <Button variant="ghost" onClick={() => { setPreview(null); setLastErrors([]); if (fileRef.current) fileRef.current.value = ""; }}>重新选择</Button>
-              <Button onClick={commit} disabled={committing}>{committing ? "导入中..." : "确认导入"}</Button>
+              <Button onClick={commit} disabled={committing || pendingAcctCount > 0}>
+                {committing ? "导入中..." : pendingAcctCount > 0 ? `请先确认 ${pendingAcctCount} 行账户类型` : "确认导入"}
+              </Button>
             </>
           )}
           {!preview && <Button variant="ghost" onClick={() => onOpenChange(false)}>取消</Button>}
@@ -1472,7 +1564,10 @@ function ImportDialog({
   );
 }
 
-function PreviewSection({ title, rows, stat }: { title: string; rows: PreviewRow[]; stat: { n: number; u: number; s: number; e: number } }) {
+function PreviewSection({ title, rows, stat, onSetAcctType }: {
+  title: string; rows: PreviewRow[]; stat: { n: number; u: number; s: number; e: number };
+  onSetAcctType?: (rowIdx: number, val: "corporate" | "personal") => void;
+}) {
   if (rows.length === 0) return null;
   return (
     <div className="border rounded-md overflow-hidden">
@@ -1485,12 +1580,12 @@ function PreviewSection({ title, rows, stat }: { title: string; rows: PreviewRow
           <span className="text-rose-600">错误 {stat.e}</span>
         </div>
       </div>
-      <div className="max-h-56 overflow-y-auto">
+      <div className="max-h-64 overflow-y-auto">
         <table className="w-full text-[12px]">
           <tbody>
-            {rows.slice(0, 100).map((r, i) => (
+            {rows.slice(0, 200).map((r, i) => (
               <tr key={i} className="border-t">
-                <td className="px-3 py-1.5 w-20 align-top">
+                <td className="px-3 py-1.5 w-16 align-top">
                   <span className={`text-[11px] px-1.5 py-0.5 rounded ${
                     r.status === "new" ? "bg-emerald-50 text-emerald-700"
                     : r.status === "update" ? "bg-blue-50 text-blue-700"
@@ -1500,13 +1595,28 @@ function PreviewSection({ title, rows, stat }: { title: string; rows: PreviewRow
                     {r.status === "new" ? "新增" : r.status === "update" ? "更新" : r.status === "skip" ? "跳过" : "错误"}
                   </span>
                 </td>
-                <td className="px-3 py-1.5 w-32 text-muted-foreground align-top">{r.sheet} · 第 {r.rowNum} 行</td>
+                <td className="px-3 py-1.5 w-28 text-muted-foreground align-top">{r.sheet} · 第 {r.rowNum} 行</td>
+                {onSetAcctType && (
+                  <td className="px-3 py-1.5 w-36 align-top">
+                    {r.status === "error" || r.status === "skip" ? <span className="text-muted-foreground">-</span> : (
+                      <select
+                        className={`text-[11px] border rounded px-1.5 py-0.5 ${r.needsAccountType ? "border-amber-400 bg-amber-50" : ""}`}
+                        value={r.needsAccountType ? "" : (r.data.account_type ?? "")}
+                        onChange={(e) => onSetAcctType(i, e.target.value as "corporate" | "personal")}
+                      >
+                        {r.needsAccountType && <option value="">请选择</option>}
+                        <option value="corporate">对公账户</option>
+                        <option value="personal">个人账户</option>
+                      </select>
+                    )}
+                  </td>
+                )}
                 <td className="px-3 py-1.5 align-top text-[11px] text-muted-foreground">{r.message ?? ""}</td>
                 <td className="px-3 py-1.5 align-top truncate max-w-md text-[11px]">{JSON.stringify(r.raw)}</td>
               </tr>
             ))}
-            {rows.length > 100 && (
-              <tr><td colSpan={4} className="px-3 py-2 text-[11px] text-muted-foreground">仅显示前 100 行（共 {rows.length} 行）</td></tr>
+            {rows.length > 200 && (
+              <tr><td colSpan={5} className="px-3 py-2 text-[11px] text-muted-foreground">仅显示前 200 行（共 {rows.length} 行）</td></tr>
             )}
           </tbody>
         </table>
