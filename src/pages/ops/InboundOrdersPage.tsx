@@ -15,11 +15,12 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
-import { Search, RefreshCw, Download, Activity, FileJson, PlayCircle, XCircle } from "lucide-react";
+import { Search, Download, Activity, FileJson } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import {
   formatDateCN, formatDateTimeCN, beijingDayRangeToUTC, todayCN, beijingYMD,
 } from "@/lib/datetime";
+import { InboundSyncJobPanel } from "@/components/ops/InboundSyncJobPanel";
 
 const PAGE_SIZE = 20;
 const fmtMoney = (n: number | null | undefined) =>
