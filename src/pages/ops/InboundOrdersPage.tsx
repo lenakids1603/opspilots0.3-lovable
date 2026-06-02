@@ -398,6 +398,7 @@ export default function InboundOrdersPage() {
           <Button size="sm" variant="outline" onClick={onReset}>重置</Button>
           <div className="h-5 w-px bg-border mx-1" />
           <span className="text-xs text-muted-foreground">快捷范围：</span>
+          <Button size="sm" variant="outline" onClick={() => applyQuickRange("today")}>今天</Button>
           <Button size="sm" variant="outline" onClick={() => applyQuickRange("7d")}>最近 7 天</Button>
           <Button size="sm" variant="outline" onClick={() => applyQuickRange("30d")}>最近 30 天</Button>
           <Button size="sm" variant="outline" onClick={() => applyQuickRange("month")}>本月</Button>
