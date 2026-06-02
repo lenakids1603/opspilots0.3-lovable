@@ -558,8 +558,14 @@ export default function SupplierDashboard() {
       {/* Header */}
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
+          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2 flex-wrap">
             工作台首页 <span className="text-muted-foreground font-medium text-base">Dashboard</span>
+            {supplierNameQ.data?.name && (
+              <Badge className="bg-emerald-600 hover:bg-emerald-600 text-white text-[11px] ml-1">
+                供应商：{supplierNameQ.data.name}
+                {supplierNameQ.data.code ? <span className="ml-1 opacity-80 font-mono">({supplierNameQ.data.code})</span> : null}
+              </Badge>
+            )}
           </h1>
           <p className="text-[12px] text-muted-foreground mt-1">
             数据最后统计更新时间：
