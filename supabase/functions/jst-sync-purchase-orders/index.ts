@@ -659,7 +659,7 @@ async function syncPurchaseInSegment(
   parentLogId: string,
   affectedPoIds: Set<string>,
 ): Promise<{ receipts: number; pages: number }> {
-  const segId = await insertSegmentLog("purchase_in", winFrom.toISOString(), winTo.toISOString(), parentLogId);
+  const segId = await insertSegmentLog("purchase_inbound_orders", winFrom.toISOString(), winTo.toISOString(), parentLogId);
   const startedAt = Date.now();
   let receipts = 0, receiptItems = 0, page = 1, pages = 0, dbOk = 0, dbFailed = 0;
   let finalized = false;
