@@ -338,7 +338,7 @@ function Pagination({ page, pageCount, pageSize, total, setPage, setPageSize }: 
             onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
             className="h-7 px-2 rounded border border-border bg-white text-[12px]"
           >
-            {[25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+            {[20, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
         <div className="flex items-center gap-0.5">
