@@ -880,8 +880,8 @@ export default function JstDataIntegrationPage() {
               </div>
               {renderScopeStats(inboundLatest, "入库单")}
               <div className="text-xs text-muted-foreground space-y-1">
-                <div>从聚水潭同步采购入库单 / 入库记录，用于仓库到货、实际入库数量、供应商应付金额核对。</div>
-                <div>入库单同步与采购单同步已拆分，入库数据主要用于到货核对和供应商应付核算。日志类型：<code>purchase_inbound_orders</code>。本按钮仅触发入库单同步，不会附带同步采购单。</div>
+                <div>同步聚水潭采购入库单数据，用于仓库到货、实际入库数量和供应商应付核对。</div>
+                <div>入库单同步与采购单同步已拆分，入库数据主要用于到货核对和供应商应付核算。日志类型：<code>purchase_inbound_orders</code>（保持不变）。本按钮仅触发入库单同步，不会附带同步采购单。</div>
                 <div className="text-muted-foreground/80">入库差异校验：用于后续对比采购数量、仓库实际入库数量、供应商送货数量。</div>
               </div>
             </TabsContent>
