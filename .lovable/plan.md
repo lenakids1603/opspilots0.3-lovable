@@ -1,92 +1,82 @@
+## 目标
 
-## 背景
+在现有 `/data-center/jst-integration` 页面的「售后API」模块内，接入聚水潭售后同步功能。仅做同步层与最小化 UI 改造，不做分析页。
 
-数据库当前已有 `purchase_receipts` 和 `purchase_receipt_items` 两张表，结构基本能覆盖入库单需求（io_date / external_io_id / external_po_id / supplier_name / warehouse_name / status / jst_modified_at / raw 等）。但目前：
+---
 
-- 没有独立的「入库单」页面，只能在 JST 同步页/采购单管理页里看到聚合数据
-- 最新 io_date 仅到 2026/5/27，5/31 以后的入库单没拉进来
-- 同步日志只显示成功数量，不显示 API 返回 vs 数据库实际写入数量，问题定位困难
+## 一、数据库 migration（一次性提交）
 
-为避免数据迁移成本，**复用现有 `purchase_receipts` / `purchase_receipt_items` 表**，不新建 `jst_purchase_inbound_orders`。如果你坚持表名独立，告诉我后我再换。
+新增 4 张表 + GRANT + RLS（沿用现有 `is_ops_internal` / `has_ops_role admin` 规则，与 jst_* 系列一致）。
 
-## 一、菜单与路由
+1. **`jst_refund_orders`** — 退货退款单主表（`as_id` 唯一）
+2. **`jst_refund_order_items`** — 退货退款单明细（`refund_order_id` cascade；幂等键：`as_id + COALESCE(asi_id, sku_id||'|'||outer_oi_id)`，用部分唯一索引实现）
+3. **`jst_aftersale_received_orders`** — 销售退仓主表（`as_id` 唯一）
+4. **`jst_aftersale_received_items`** — 销售退仓明细（cascade）
 
-`src/components/ops/OpsSidebar.tsx`：「仓库系统」组下新增「入库单」放在「到货登记」之前。
+字段按用户给出的列表落地，全部带 `raw_data jsonb`、`synced_at/created_at/updated_at`。
 
-`src/App.tsx` 新增路由 `/warehouse/inbound-orders` → `InboundOrdersPage`。
+RLS：`is_ops_internal` 读，`admin` 全权限；GRANT 给 `authenticated` + `service_role`，不给 `anon`。
 
-## 二、新增页面 `src/pages/ops/InboundOrdersPage.tsx`
+复用现有 `jst_sync_logs` / `jst_sync_jobs` 表，不新建日志体系。`sync_type` 新增两个取值：`refund_orders`、`aftersale_received`（只是 text 取值约定，无 schema 变更）。
 
-**顶部统计卡片（按北京时间）**
-- 今日入库单数 / 今日入库件数 / 今日入库金额
-- 本月入库件数 / 本月入库金额
-- 待核对入库单（暂以 `purchase_order_id IS NULL` 计）
-- 异常入库单（明细行数为 0 或主表数量与明细汇总不一致）
-- 查询失败显示「读取失败」而非 0
+---
 
-**筛选区**
-- 入库日期范围（默认最近 7 天，北京时间 → UTC 用 `beijingRangeToUTC`）
-- 供应商（下拉，来源 ops_suppliers）
-- 仓库名（文本，来源 purchase_receipts.warehouse_name distinct）
-- 入库单号 / 采购单号 / 款号/SKU
-- 入库状态、是否有关联采购单、是否有明细、是否异常
-- 按钮：查询 / 重置 / 同步最近 1/7/30 天 / 导出 CSV
+## 二、Edge Functions
 
-**主表（分页 20 条/页）**
-列：入库日期、入库单号、聚水潭入库 ID、采购单号、供应商、仓库、入库类型、状态、入库件数、入库金额、明细行数、创建时间、JST 修改时间、同步时间（updated_at）、异常标记、操作（查看详情 / 原始 JSON / 重新同步该单 / 关联采购单）
+新增两个独立函数（结构对齐已有 `jst-sync-purchase-orders`，复用 token / 代理 / 签名逻辑）：
 
-**右侧抽屉详情**（统一用 `Sheet` 组件，不用 Dialog）
-- A 基础信息
-- B 入库明细表格（款号/SKU/颜色/尺码/数量/单价/金额/采购单号/采购明细 ID）
-- C 与采购单对比（如有 `purchase_order_id`，查询 purchase_order_items 汇总采购/已入库/本次/未入库/进度/超收/少收）
-- D 原始 JSON（pretty）
+- **`supabase/functions/jst-sync-refund-orders/index.ts`**
+  - 调聚水潭 `/open/refund/list/query`（按 `modified` 字段时间区间）
+  - 主表 upsert by `as_id`，明细 upsert by 幂等键
+  - 支持 `days | start_time | end_time | manual` 入参，默认 1 天
+  - page_size 取接口最大，循环到 `has_next=false`
+  - 写 `jst_sync_logs`，累计 `total_api_count / orders / items / failed`
 
-## 三、同步诊断面板
+- **`supabase/functions/jst-sync-aftersale-received/index.ts`**
+  - 调聚水潭 `/open/aftersale/received/query`（销售退仓 / 实际收货）
+  - 同样的分页/幂等/日志结构
 
-页面右上角「诊断」按钮 → 弹抽屉，查询展示：
-- 最近一次 `purchase_inbound_orders` 同步：开始/结束/耗时/API 返回数/主表 upsert 数/明细 upsert 数/失败数/错误
-- 数据库最新入库单 io_date / jst_modified_at
-- 最近 7 天主表 / 明细记录数
-- 主表有但明细为空的入库单数
-- 明细中 purchase_order_id IS NULL 的明细数（未关联采购单）
+两个函数都用现有 JST secrets（已配置：`JST_APP_KEY` / `JST_APP_SECRET` / `JST_ACCESS_TOKEN` / `JST_PROXY_*`）。
 
-## 四、Edge Function 修复 `supabase/functions/jst-sync-purchase-orders/index.ts`
+错误（签名、token、IP 白名单、权限）全部写入 `jst_sync_logs.error_message`，前端 toast 提示。
 
-针对入库单同步 (`scope='purchase_inbound_orders'`)：
+---
 
-1. **打印关键日志到 `jst_sync_logs.message / error_detail`**：请求开始/结束时间（UTC + 北京）、传给 JST 的字段名、API 返回总数、主表 upsert 成功/失败、明细 upsert 成功/失败、第一条与最后一条 io_date 和 modified
-2. **统计改为数据库实际 upsert 数量**，不再用 API 返回数量充数
-3. **API 返回 > 0 但写入 0** 时，写入 `status='partial'` 并将错误堆栈写入 `error_detail`
-4. **增量游标统一用 `jst_modified_at`**，业务展示用 `io_date`
-5. **北京时间窗口转 UTC** 修正：days=1 表示北京今日 00:00 起，转 UTC 减 8h；不要让北京 6/2 的单因为窗口算错被排除
-6. **类型字段统一为 `purchase_inbound_orders`**，删除旧的 `purchase_receipts` / `purchase_in` 写入路径（读路径仍 fallback 兼容历史日志）
+## 三、前端改造（仅改 `JstDataIntegrationPage.tsx` 的「售后API」tab）
 
-## 五、同步日志详情抽屉增强
+替换原 `售后API（暂未接入）` 占位为两张卡片：
 
-`JstDataIntegrationPage.tsx` 已有同步日志详情，扩展为展示：
-批次 ID / sync_type / 触发人 / 起止时间 / 耗时 / 请求范围 / 请求参数 / JST 返回数 / 主表新增更新 / 明细新增更新 / 失败 / 错误堆栈 / 前 3 条 raw JSON 预览。
-数据来源：`jst_sync_logs.message`（JSON 字符串）+ `error_detail`。
+- **卡片 A：退货退款单** — 状态 badge / 已同步记录数（`count(jst_refund_orders)`）/ 最近同步时间 / 最近状态 / 4 个按钮（1天/7天/30天/自定义范围）
+- **卡片 B：销售退仓** — 同上，数据源 `jst_aftersale_received_orders`
 
-## 六、不做的事
+按钮通过 `supabase.functions.invoke()` 调用对应 edge function；运行中显示 spinner，结束后刷新统计与日志。
 
-- 不新建 `jst_purchase_inbound_orders` / `_items` 表，复用 `purchase_receipts` / `_items`
-- 不改采购单同步逻辑、不动权限模型（沿用现有 `is_ops_internal` RLS）
-- 不实现「关联采购单」的写入功能（只放占位按钮 + toast），因为这涉及业务规则待定
-- 不实现金额计算（当前明细表已有 `cost_price / cost_amount`，直接展示，缺失显示 -）
+**顶部「销售/退款」统计卡片**：改为读取 `jst_refund_orders` 记录数 + 取 refund/aftersale 两类最新 `ended_at` 作为「最近同步时间」，状态来自最近一次日志。
 
-## 验收
+**自动同步计划区域**：新增两行展示（仅 UI 展示，不实际安装 cron）：
+- 退货退款单 — 每天 03:10，最近 2 天
+- 销售退仓 — 每天 03:30，最近 2 天
 
-- 侧栏「仓库系统 / 入库单」可点击
-- 点「同步最近 1 天」→ 触发已有 `jst-sync-dispatch` (scope=purchase_inbound_orders, days=1)
-- 同步完成后列表立即刷新出今日聚水潭入库单
-- 同步日志详情能看到 JST 返回数 vs 数据库写入数
-- 若 JST 返回 0 / 写入 0 / 筛选条件遮挡，诊断面板能分别说明
+如果现有自动同步计划列表是从某张配置表读取的，则向该表 insert 两条记录；若是硬编码列表，则在数组里追加两项。具体接入位置在实现阶段确认。
 
-## 技术细节
+不引入新页面、不动其他 tab。
 
-- 路由：`/warehouse/inbound-orders`
-- 表：复用 `purchase_receipts` (主) + `purchase_receipt_items` (明细)
-- 日期：统一用 `src/lib/datetime.ts` 的 `formatDateCN / formatDateTimeCN / beijingRangeToUTC`
-- 抽屉：`@/components/ui/sheet`
-- 触发同步：复用现有 `jst-sync-dispatch` edge function，`module_key=purchase`、`scope=['purchase_inbound_orders']`、`extra.days`
-- 文件改动估计：新建 1 个页面文件 (~600 行)、改 OpsSidebar、App.tsx、JstDataIntegrationPage 日志详情、jst-sync-purchase-orders edge function 入库部分
+---
+
+## 四、不做
+
+- 不做退款原因/SKU/供应商分析
+- 不做补偿同步 cron（先只做手动 + UI 展示的每日计划）
+- 不改采购单/入库单/库存模块
+- 不删除任何现有功能
+
+---
+
+## 五、执行顺序
+
+1. 提交 migration（创建 4 表 + GRANT + RLS）→ 等用户批准
+2. 写两个 edge function（自动部署）
+3. 改 `JstDataIntegrationPage.tsx`：售后 tab + 顶部统计卡 + 自动计划展示
+4. 手动点同步按钮验证 → 检查 `jst_sync_logs` 与数据表行数
+
+确认后我就按这个顺序开始。
