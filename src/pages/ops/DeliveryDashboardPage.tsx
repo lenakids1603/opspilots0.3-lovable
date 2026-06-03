@@ -29,6 +29,7 @@ import {
   formatDateCN, formatDateTimeCN, beijingYMD, beijingDayRangeToUTC,
 } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
+import { evaluateDelivery, DELIVERY_COMPLETION_TOLERANCE_RATE } from "@/lib/deliveryTolerance";
 
 const fmtInt = (n?: number | null) => Number(n ?? 0).toLocaleString("zh-CN");
 const fmtMoney = (n?: number | null) =>
@@ -68,7 +69,8 @@ interface RawItem {
   product_image_url: string | null;
   purchase_qty: number;
   received_qty: number;
-  unreceived_qty: number;
+  unreceived_qty: number;       // = effective_pending_qty（已应用容差/超交/手动完结）
+  raw_unreceived_qty?: number;  // 原始差异（不应用容差）
   amount: number;
   unit_price: number;
   delivery_date: string | null;
@@ -76,11 +78,13 @@ interface RawItem {
   supplier_name: string;
   po_status: string;
   po_date: string | null;
+  _completion_type?: string;
+  _is_completed?: boolean;
 }
 
 function useDeliveryItems() {
   return useQuery({
-    queryKey: ["ops_delivery_items_v1"],
+    queryKey: ["ops_delivery_items_v2"],
     queryFn: async (): Promise<RawItem[]> => {
       const todayYmd = beijingYMD(new Date());
       const today = new Date(todayYmd + "T00:00:00+08:00");
@@ -102,24 +106,41 @@ function useDeliveryItems() {
         .not("purchase_orders.status", "in", EXCLUDED_IN)
         .limit(10000);
       if (error) throw error;
-      return (data ?? []).map((r: any) => ({
-        id: r.id,
-        external_po_id: r.external_po_id ?? "",
-        style_no: r.style_no ?? "",
-        sku_no: r.sku_no ?? "",
-        product_name: r.product_name ?? "",
-        product_image_url: r.product_image_url ?? null,
-        purchase_qty: Number(r.purchase_qty ?? 0),
-        received_qty: Number(r.received_qty ?? 0),
-        unreceived_qty: Number(r.unreceived_qty ?? 0),
-        amount: Number(r.amount ?? 0),
-        unit_price: Number(r.unit_price ?? 0),
-        delivery_date: r.delivery_date,
-        supplier_id: r.purchase_orders?.supplier_id ?? null,
-        supplier_name: r.purchase_orders?.supplier_name ?? "(未匹配供应商)",
-        po_status: r.purchase_orders?.status ?? "",
-        po_date: r.purchase_orders?.po_date ?? null,
-      }));
+      // 应用「交付容差 / 超交 / 手动完结」过滤：
+      // 只保留 effective_pending_qty > 0 的明细。
+      return (data ?? [])
+        .map((r: any) => {
+          const purchase_qty = Number(r.purchase_qty ?? 0);
+          const received_qty = Number(r.received_qty ?? 0);
+          const t = evaluateDelivery({
+            purchase_qty,
+            received_qty,
+            manual_delivery_closed: (r as any).manual_delivery_closed,
+          });
+          return {
+            id: r.id,
+            external_po_id: r.external_po_id ?? "",
+            style_no: r.style_no ?? "",
+            sku_no: r.sku_no ?? "",
+            product_name: r.product_name ?? "",
+            product_image_url: r.product_image_url ?? null,
+            purchase_qty,
+            received_qty,
+            // 用「有效待入库」替换原始 unreceived_qty，看板所有模块基于该字段统计
+            unreceived_qty: t.effective_pending_qty,
+            raw_unreceived_qty: Number(r.unreceived_qty ?? Math.max(purchase_qty - received_qty, 0)),
+            amount: Number(r.amount ?? 0),
+            unit_price: Number(r.unit_price ?? 0),
+            delivery_date: r.delivery_date,
+            supplier_id: r.purchase_orders?.supplier_id ?? null,
+            supplier_name: r.purchase_orders?.supplier_name ?? "(未匹配供应商)",
+            po_status: r.purchase_orders?.status ?? "",
+            po_date: r.purchase_orders?.po_date ?? null,
+            _completion_type: t.completion_type,
+            _is_completed: t.is_delivery_completed,
+          } as RawItem;
+        })
+        .filter((it: RawItem) => !it._is_completed && it.unreceived_qty > 0);
     },
     staleTime: 60_000,
   });
@@ -500,6 +521,8 @@ export default function DeliveryDashboardPage() {
             数据更新时间：<span className="font-mono text-foreground">{formatDateTimeCN(new Date())}</span>
             <span className="mx-2">·</span>
             当前查询区间 <span className="font-mono">{rangeBounds.start} ~ {rangeBounds.end}</span>（已逾期始终展示）
+            <span className="mx-2">·</span>
+            <span className="text-[11px]">交付完成容差 <span className="font-mono text-foreground">{Math.round(DELIVERY_COMPLETION_TOLERANCE_RATE * 100)}%</span>（达标后不再显示）</span>
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap text-[12px]">
