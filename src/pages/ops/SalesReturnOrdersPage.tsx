@@ -583,19 +583,21 @@ export default function SalesReturnOrdersPage() {
                   <TableHeader><TableRow>
                     <TableHead>SKU</TableHead><TableHead>商品名称</TableHead>
                     <TableHead>规格</TableHead>
+                    <TableHead>供应商</TableHead>
                     <TableHead className="text-right">件数</TableHead>
                     <TableHead className="text-right">退款数</TableHead>
                     <TableHead className="text-right">金额</TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
                     {(itemsQ.data ?? []).length === 0 && (
-                      <TableRow><TableCell colSpan={6} className="text-center text-rose-600 py-4">无明细（异常）</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={7} className="text-center text-rose-600 py-4">无明细（异常）</TableCell></TableRow>
                     )}
                     {(itemsQ.data ?? []).map((it: any, i: number) => (
                       <TableRow key={it.id ?? i}>
                         <TableCell className="font-mono text-xs">{it.sku_id ?? "-"}</TableCell>
                         <TableCell className="text-xs max-w-[220px] truncate" title={it.name}>{it.name}</TableCell>
                         <TableCell className="text-xs max-w-[180px] truncate" title={it.properties_value}>{it.properties_value ?? "-"}</TableCell>
+                        <TableCell className="text-xs max-w-[140px] truncate" title={it.supplier_name}>{it.supplier_name ?? "-"}</TableCell>
                         <TableCell className="text-right">{fmtInt(it.qty)}</TableCell>
                         <TableCell className="text-right">{fmtInt(it.r_qty)}</TableCell>
                         <TableCell className="text-right">{Number(it.amount) > 0 ? fmtMoney(it.amount) : "-"}</TableCell>
