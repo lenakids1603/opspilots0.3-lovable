@@ -548,8 +548,8 @@ export default function JstDataIntegrationPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        breadcrumb={["数据中心", "聚水潭数据接入详情"]}
-        title="聚水潭数据接入详情"
+        breadcrumb={["数据中心", "聚水潭同步"]}
+        title="聚水潭同步"
         description="按 API 模块管理聚水潭数据接入。基础档案是销售/采购同步的前置条件。"
       />
 
