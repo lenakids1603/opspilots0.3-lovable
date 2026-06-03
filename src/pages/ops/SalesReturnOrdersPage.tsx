@@ -414,7 +414,12 @@ export default function SalesReturnOrdersPage() {
     queryFn: async () => {
       const { data } = await supabase.from("jst_aftersale_received_items")
         .select("*").eq("as_id", detailRow!.as_id);
-      return data ?? [];
+      const rows = (data ?? []) as any[];
+      const supMap = await resolveSupplierBySku(rows.map(r => r.sku_id ?? ""));
+      for (const r of rows) {
+        if (!r.supplier_name) r.supplier_name = supMap.get(r.sku_id ?? "") || "";
+      }
+      return rows;
     },
   });
 
