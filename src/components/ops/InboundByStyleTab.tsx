@@ -190,7 +190,7 @@ function useStyleAggregate(filters: ByStyleFilters) {
       for (const it of filteredItems) {
         const rec = receiptMap.get(it.receipt_id);
         const supplier = (rec?.supplier_name ?? "").trim() || "(未知供应商)";
-        const style = styleOf(it.sku_no, it.product_name);
+        const style = it._style;
         const key = `${style}__${supplier}`;
         let row = styleMap.get(key);
         if (!row) {
