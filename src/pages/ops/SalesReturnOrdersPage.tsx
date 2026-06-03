@@ -472,7 +472,7 @@ export default function SalesReturnOrdersPage() {
                 {listQ.error && <TableRow><TableCell colSpan={13} className="text-center py-12 text-rose-600">读取失败：{(listQ.error as any).message}</TableCell></TableRow>}
                 {!listQ.isLoading && !listQ.error && (listQ.data?.rows.length ?? 0) === 0 && (
                   <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
-                    当前筛选下无销退数据。可点击「同步销售退仓」拉取最新数据。
+                    当前筛选下无销退数据。请前往数据中心同步销售退仓后再查看。
                   </TableCell></TableRow>
                 )}
                 {(listQ.data?.rows ?? []).map((r: any) => (
