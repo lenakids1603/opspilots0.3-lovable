@@ -214,9 +214,7 @@ export default function SalesReturnByStyleTab({ filters, exportRef }: Props) {
     return aggQ.data.items.filter(it => {
       const ord = aggQ.data.orderByAs.get(it.as_id);
       const shop = (ord?.shop_name ?? "").trim() || "(未知店铺)";
-      const sk = it.sku_id ?? "";
-      const style = (aggQ.data && /* mirror logic */ rows.find(r => r.key === detailKey)?.style_no) ?? "";
-      return shop === detailRow.shop_name && (styleFallback(sk, it.name) === style || sk.startsWith(style));
+      return shop === detailRow.shop_name && it._style === detailRow.style_no;
     });
   }, [detailRow, aggQ.data, rows, detailKey]);
 
