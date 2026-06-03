@@ -275,6 +275,38 @@ Deno.serve(async (req) => {
     const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
     const { from, to } = resolveWindow(body);
 
+    // 防重复：关闭超时僵尸 running，再检查是否有未超时的 running
+    const STALE_MIN = 10;
+    const staleCutoff = new Date(Date.now() - STALE_MIN * 60_000).toISOString();
+    await admin.from("jst_sync_logs")
+      .update({
+        status: "timeout_partial",
+        ended_at: new Date().toISOString(),
+        error_detail: `timeout: running > ${STALE_MIN} minutes, marked as stale job`,
+        metadata: { stale_closed: true, stale_closed_at: new Date().toISOString() },
+      })
+      .eq("sync_type", SYNC_TYPE)
+      .eq("status", "running")
+      .lt("started_at", staleCutoff);
+
+    const { data: aliveRunning } = await admin.from("jst_sync_logs")
+      .select("id,started_at")
+      .eq("sync_type", SYNC_TYPE)
+      .eq("status", "running")
+      .gte("started_at", staleCutoff)
+      .order("started_at", { ascending: false })
+      .limit(1);
+    if (aliveRunning && aliveRunning.length > 0) {
+      return new Response(JSON.stringify({
+        ok: false,
+        error: "已有同步任务正在运行，请稍后再试",
+        running_log_id: aliveRunning[0].id,
+        running_started_at: aliveRunning[0].started_at,
+      }), { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+
+
     const { data: log, error: logErr } = await admin.from("jst_sync_logs").insert({
       sync_type: SYNC_TYPE,
       status: "running",
