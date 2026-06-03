@@ -46,6 +46,8 @@ async function runSync(fromIso: string, toIso: string, logId: string) {
   let page = 1, apiCount = 0, orders = 0, items = 0, failed = 0;
   let ordersWithoutItems = 0;
   let detectedItemField: string | null = null;
+  let firstTopKeys: string[] = [];
+  const sampleShapes: any[] = [];
   const errors: string[] = [];
   const errorTypes: Record<string, number> = {};
 
@@ -102,6 +104,16 @@ async function runSync(fromIso: string, toIso: string, logId: string) {
 
           if (itemList.length === 0) {
             ordersWithoutItems++;
+          }
+          if (sampleShapes.length < 5) {
+            if (firstTopKeys.length === 0) firstTopKeys = Object.keys(r);
+            sampleShapes.push({
+              io_id: ioId,
+              item_field: itemField,
+              item_count: itemList.length,
+              top_keys: Object.keys(r).slice(0, 80),
+              first_item_keys: itemList[0] ? Object.keys(itemList[0]).slice(0, 80) : [],
+            });
           }
           for (let idx = 0; idx < itemList.length; idx++) {
             const it = itemList[idx];
@@ -168,6 +180,7 @@ async function runSync(fromIso: string, toIso: string, logId: string) {
       `failed_total=${failed}`,
       `orders_without_items=${ordersWithoutItems}`,
       `detected_item_field=${detectedItemField ?? "(none)"}`,
+      `top_keys=${firstTopKeys.join(",").slice(0, 600)}`,
       `error_types=${JSON.stringify(errorTypes).slice(0, 600)}`,
       `samples=${errors.slice(0, 5).join(" | ").slice(0, 600)}`,
     ];
@@ -178,6 +191,16 @@ async function runSync(fromIso: string, toIso: string, logId: string) {
       fetched_items_count: items,
       message: `销售出库同步完成 · API ${apiCount} 次 · ${orders} 单 / ${items} 明细 · 失败 ${failed}${noItemsNote}`,
       error_detail: failed > 0 ? detailLines.join(" | ").slice(0, 1800) : null,
+      metadata: {
+        final_api_path: `/open/${METHOD_PATH}`,
+        request_fields: { InoutFlds: INOUT_FLDS, InoutItemFlds: INOUT_ITEM_FLDS },
+        detected_item_field: detectedItemField,
+        top_keys: firstTopKeys,
+        samples: sampleShapes,
+        failed_total: failed,
+        orders_without_items: ordersWithoutItems,
+        error_types: errorTypes,
+      },
     }).eq("id", logId);
   } catch (e: any) {
     const err = e as any;
