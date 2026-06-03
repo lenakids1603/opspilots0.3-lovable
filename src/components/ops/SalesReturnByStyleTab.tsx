@@ -157,10 +157,11 @@ function useAgg(filters: SrByStyleFilters) {
       const styleMap = new Map<string, StyleRow>();
       for (const it of filteredItems) {
         const ord = orderByAs.get(it.as_id);
-        const shop = (ord?.shop_name ?? "").trim() || "(未知店铺)";
+        const sid = String(ord?.shop_id ?? "").trim();
+        const shop = (sid && shopMap.get(sid)) || (ord?.shop_name ?? "").trim() || "(未知店铺)";
         const supplier = (it.supplier_name ?? "").trim() || "-";
         const style = it._style;
-        const key = `${style}__${shop}`;
+        const key = `${style}__${shop}__${supplier}`;
         let row = styleMap.get(key);
         if (!row) {
           row = {
