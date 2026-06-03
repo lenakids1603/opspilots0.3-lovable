@@ -124,6 +124,10 @@ function useAgg(filters: SrByStyleFilters) {
         }
       }
 
+      for (const it of allItems) {
+        it._style = skuToStyle.get(it.sku_id ?? "") || styleFallback(it.sku_id, it.name);
+      }
+
       // 按 receipt 维度统计有无明细
       const itemCountByAs = new Map<string, number>();
       for (const it of allItems) itemCountByAs.set(it.as_id, (itemCountByAs.get(it.as_id) ?? 0) + 1);
@@ -146,7 +150,7 @@ function useAgg(filters: SrByStyleFilters) {
         const ord = orderByAs.get(it.as_id);
         const shop = (ord?.shop_name ?? "").trim() || "(未知店铺)";
         const supplier = (it.supplier_name ?? "").trim() || "-";
-        const style = skuToStyle.get(it.sku_id ?? "") || styleFallback(it.sku_id, it.name);
+        const style = it._style;
         const key = `${style}__${shop}`;
         let row = styleMap.get(key);
         if (!row) {
