@@ -29,6 +29,13 @@ const STATUS_COLOR: Record<string, string> = {
   waiting_next_tick: "bg-blue-100 text-blue-700",
 };
 
+export interface SyncPresetButton {
+  label: string;
+  /** body passed to start action (merged with action name). e.g. { hours: 1 } / { days: 3 } / { start_time, end_time, requested_range } */
+  body: Record<string, unknown>;
+  variant?: "default" | "outline";
+}
+
 interface Props {
   onJobFinished?: (job: any) => void;
   title?: string;
@@ -45,6 +52,8 @@ interface Props {
   unitLabel?: string;
   emptyText?: string;
   toastTitle?: string;
+  /** Override the default 1d/7d/30d buttons */
+  presets?: SyncPresetButton[];
 }
 
 export function InboundSyncJobPanel({
@@ -59,7 +68,9 @@ export function InboundSyncJobPanel({
   unitLabel = "入库单",
   emptyText,
   toastTitle,
+  presets,
 }: Props) {
+
   const qc = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
   const [tickError, setTickError] = useState<string | null>(null);
