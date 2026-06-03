@@ -29,7 +29,7 @@ import {
   formatDateCN, formatDateTimeCN, beijingYMD, beijingDayRangeToUTC,
 } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
-import { evaluateDelivery, DELIVERY_COMPLETION_TOLERANCE_RATE } from "@/lib/deliveryTolerance";
+
 
 const fmtInt = (n?: number | null) => Number(n ?? 0).toLocaleString("zh-CN");
 const fmtMoney = (n?: number | null) =>
@@ -37,8 +37,6 @@ const fmtMoney = (n?: number | null) =>
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   });
 
-const EXCLUDED_STATUSES = ["Delete", "delete", "deleted"];
-const EXCLUDED_IN = `(${EXCLUDED_STATUSES.join(",")})`;
 
 type RangeKey = "today" | "week" | "30d" | "custom";
 type StatusKey = "all" | "overdue" | "today" | "week" | "producing" | "partial" | "done";
@@ -82,9 +80,15 @@ interface RawItem {
   _is_completed?: boolean;
 }
 
+// 货期交付看板的唯一过滤规则：
+//   1. 采购单状态 = Confirmed（已确认）
+//   2. 待入库数量 > 0（pending_qty = max(purchase_qty - received_qty, 0)）
+// 不使用 98% 容差、尾差过滤、手动完结等任何复杂逻辑。
+const CONFIRMED_PO_STATUS = "Confirmed";
+
 function useDeliveryItems() {
   return useQuery({
-    queryKey: ["ops_delivery_items_v2"],
+    queryKey: ["ops_delivery_items_v3_confirmed_only"],
     queryFn: async (): Promise<RawItem[]> => {
       const todayYmd = beijingYMD(new Date());
       const today = new Date(todayYmd + "T00:00:00+08:00");
@@ -99,24 +103,17 @@ function useDeliveryItems() {
           purchase_qty, received_qty, unreceived_qty, amount, unit_price, delivery_date,
           purchase_orders!inner(supplier_id, supplier_name, status, po_date)
         `)
-        .gt("unreceived_qty", 0)
         .not("delivery_date", "is", null)
         .gte("delivery_date", gte)
         .lte("delivery_date", lte)
-        .not("purchase_orders.status", "in", EXCLUDED_IN)
+        .eq("purchase_orders.status", CONFIRMED_PO_STATUS)
         .limit(10000);
       if (error) throw error;
-      // 应用「交付容差 / 超交 / 手动完结」过滤：
-      // 只保留 effective_pending_qty > 0 的明细。
       return (data ?? [])
         .map((r: any) => {
           const purchase_qty = Number(r.purchase_qty ?? 0);
           const received_qty = Number(r.received_qty ?? 0);
-          const t = evaluateDelivery({
-            purchase_qty,
-            received_qty,
-            delivery_date: r.delivery_date,
-          });
+          const pending_qty = Math.max(purchase_qty - received_qty, 0);
           return {
             id: r.id,
             external_po_id: r.external_po_id ?? "",
@@ -126,9 +123,7 @@ function useDeliveryItems() {
             product_image_url: r.product_image_url ?? null,
             purchase_qty,
             received_qty,
-            // 用「有效待入库」替换原始 unreceived_qty，看板所有模块基于该字段统计
-            unreceived_qty: t.effective_pending_qty,
-            raw_unreceived_qty: Number(r.unreceived_qty ?? Math.max(purchase_qty - received_qty, 0)),
+            unreceived_qty: pending_qty,
             amount: Number(r.amount ?? 0),
             unit_price: Number(r.unit_price ?? 0),
             delivery_date: r.delivery_date,
@@ -136,15 +131,14 @@ function useDeliveryItems() {
             supplier_name: r.purchase_orders?.supplier_name ?? "(未匹配供应商)",
             po_status: r.purchase_orders?.status ?? "",
             po_date: r.purchase_orders?.po_date ?? null,
-            _completion_type: t.completion_type,
-            _is_completed: t.is_delivery_completed,
           } as RawItem;
         })
-        .filter((it: RawItem) => !it._is_completed && it.unreceived_qty > 0);
+        .filter((it: RawItem) => it.unreceived_qty > 0);
     },
     staleTime: 60_000,
   });
 }
+
 
 function statusOf(it: { unreceived_qty: number; received_qty: number; delivery_date: string | null }, todayYmd: string): ItemStatus {
   if (it.unreceived_qty <= 0) return "done";
@@ -522,7 +516,7 @@ export default function DeliveryDashboardPage() {
             <span className="mx-2">·</span>
             当前查询区间 <span className="font-mono">{rangeBounds.start} ~ {rangeBounds.end}</span>（已逾期始终展示）
             <span className="mx-2">·</span>
-            <span className="text-[11px]">交付完成容差 <span className="font-mono text-foreground">{Math.round(DELIVERY_COMPLETION_TOLERANCE_RATE * 100)}%</span>（达标后不再显示）</span>
+            <span className="text-[11px] text-blue-700">当前仅统计状态为「已确认」的采购单</span>
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap text-[12px]">
