@@ -369,6 +369,7 @@ export default function SalesReturnOrdersPage() {
       const { data } = await supabase.from("jst_aftersale_received_items")
         .select("as_id, sku_id, name, qty, r_qty, amount, supplier_name").in("as_id", slice);
       items.push(...(data ?? []));
+    }
     // 回填供应商
     const supMap = await resolveSupplierBySku(items.map((it: any) => it.sku_id ?? ""));
     for (const it of items) {
