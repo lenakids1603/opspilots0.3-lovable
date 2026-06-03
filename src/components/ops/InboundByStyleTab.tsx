@@ -38,6 +38,7 @@ type AggItem = {
   cost_price: number;
   external_po_id: string | null;
   external_io_id: string | null;
+  _style: string;
 };
 
 type ReceiptMeta = {
