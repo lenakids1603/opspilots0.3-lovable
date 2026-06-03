@@ -147,10 +147,11 @@ function useStyleAggregate(filters: ByStyleFilters) {
       // 2.5) 解析款号：优先 ops_products.style_no，其次 purchase_order_items.style_no，最后 SKU 数字前缀兜底
       const productIds = Array.from(new Set(allItems.map(it => it.product_id).filter(Boolean))) as string[];
       const pidToStyle = new Map<string, string>();
-      for (let i = 0; i < productIds.length; i += 500) {
-        const slice = productIds.slice(i, i + 500);
-        const { data: prods } = await supabase.from("ops_products")
+      for (let i = 0; i < productIds.length; i += QUERY_BATCH_SIZE) {
+        const slice = productIds.slice(i, i + QUERY_BATCH_SIZE);
+        const { data: prods, error: prodErr } = await supabase.from("ops_products")
           .select("id, style_no").in("id", slice);
+        if (prodErr) throw new Error(formatSupabaseError(`商品款号查询失败 [batch ${i}-${i + slice.length}, ids=${slice.length}]`, prodErr));
         for (const p of prods ?? []) {
           if ((p as any).style_no) pidToStyle.set((p as any).id, (p as any).style_no);
         }
@@ -161,10 +162,11 @@ function useStyleAggregate(filters: ByStyleFilters) {
           .map(it => it.sku_no as string)
       ));
       const skuToStyle = new Map<string, string>();
-      for (let i = 0; i < missingSkus.length; i += 500) {
-        const slice = missingSkus.slice(i, i + 500);
-        const { data: poItems } = await supabase.from("purchase_order_items")
+      for (let i = 0; i < missingSkus.length; i += QUERY_BATCH_SIZE) {
+        const slice = missingSkus.slice(i, i + QUERY_BATCH_SIZE);
+        const { data: poItems, error: poErr } = await supabase.from("purchase_order_items")
           .select("sku_no, style_no").in("sku_no", slice).not("style_no", "is", null).limit(slice.length * 5);
+        if (poErr) throw new Error(formatSupabaseError(`采购明细款号查询失败 [batch ${i}-${i + slice.length}, ids=${slice.length}]`, poErr));
         for (const p of poItems ?? []) {
           const sku = (p as any).sku_no; const st = (p as any).style_no;
           if (sku && st && !skuToStyle.has(sku)) skuToStyle.set(sku, st);
