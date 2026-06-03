@@ -26,7 +26,7 @@ export type SrByStyleFilters = {
 
 type Order = {
   id: string; as_id: string; status: string | null; received_date: string | null;
-  modified_at_jst: string | null; warehouse: string | null; shop_name: string | null;
+  modified_at_jst: string | null; warehouse: string | null; shop_name: string | null; shop_id: string | null;
   so_id: string | null; o_id: string | null; outer_as_id: string | null;
 };
 type Item = {
