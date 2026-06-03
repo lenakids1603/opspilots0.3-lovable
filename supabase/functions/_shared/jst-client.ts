@@ -167,7 +167,7 @@ export async function callOpenweb(methodPath: string, biz: Record<string, unknow
   const url = `${OPENWEB_BASE}/open/${methodPath.replace(/^\/+/, "")}`;
   const body = new URLSearchParams(params).toString();
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  const timer = setTimeout(() => ctrl.abort(), 60_000);
   let resp: Response;
   try {
     resp = await proxyFetch(url, {
@@ -176,6 +176,15 @@ export async function callOpenweb(methodPath: string, biz: Record<string, unknow
       body,
       signal: ctrl.signal,
     });
+  } catch (e) {
+    const name = (e as Error).name;
+    const msg = (e as Error).message ?? String(e);
+    if (name === "AbortError" || /abort/i.test(msg)) {
+      const err: any = new Error(`聚水潭 ${methodPath} 请求超时(60s)被中断 url=${url}`);
+      err.code = "ABORTED"; err.aborted = true; err.path = methodPath;
+      throw err;
+    }
+    throw e;
   } finally { clearTimeout(timer); }
   const text = await resp.text();
   let json: any;
