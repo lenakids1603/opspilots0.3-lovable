@@ -167,7 +167,7 @@ export async function callOpenweb(methodPath: string, biz: Record<string, unknow
   const url = `${OPENWEB_BASE}/open/${methodPath.replace(/^\/+/, "")}`;
   const body = new URLSearchParams(params).toString();
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  const timer = setTimeout(() => ctrl.abort(), 60_000);
   let resp: Response;
   try {
     resp = await proxyFetch(url, {
@@ -176,6 +176,15 @@ export async function callOpenweb(methodPath: string, biz: Record<string, unknow
       body,
       signal: ctrl.signal,
     });
+  } catch (e) {
+    const name = (e as Error).name;
+    const msg = (e as Error).message ?? String(e);
+    if (name === "AbortError" || /abort/i.test(msg)) {
+      const err: any = new Error(`聚水潭 ${methodPath} 请求超时(60s)被中断 url=${url}`);
+      err.code = "ABORTED"; err.aborted = true; err.path = methodPath;
+      throw err;
+    }
+    throw e;
   } finally { clearTimeout(timer); }
   const text = await resp.text();
   let json: any;
@@ -189,7 +198,10 @@ export async function callOpenweb(methodPath: string, biz: Record<string, unknow
     return await callOpenweb(methodPath, biz, 2);
   }
   if (!isOk) {
-    throw new Error(`聚水潭 ${methodPath} 失败 code=${code} msg=${msg || text.slice(0, 200)}`);
+    const err: any = new Error(`聚水潭 ${methodPath} 失败 code=${code} msg=${msg || text.slice(0, 200)}`);
+    err.code = code; err.apiMsg = msg; err.path = methodPath; err.url = url;
+    err.requestId = json.request_id ?? json.requestId ?? null;
+    throw err;
   }
   return json.data ?? json;
 }
@@ -220,12 +232,15 @@ export const RATE_DELAY_MS = 260;
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const MAX_PAGE_NO = 200;
 
-// Resolve aftersale time window. Priority: explicit start/end > days > default 1 day.
+// Resolve aftersale time window. Priority: explicit start/end > hours > days > default 1 day.
 export function resolveWindow(body: any): { from: Date; to: Date } {
   const to = body.end_time ? new Date(body.end_time) : new Date();
   let from: Date;
   if (body.start_time) {
     from = new Date(body.start_time);
+  } else if (body.hours != null) {
+    const hours = Number(body.hours);
+    from = new Date(to.getTime() - Math.max(1, hours) * 3600_000);
   } else {
     const days = Number(body.days ?? 1);
     from = new Date(to.getTime() - Math.max(1, days) * 86400_000);
