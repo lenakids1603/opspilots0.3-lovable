@@ -99,6 +99,7 @@ function useAgg(filters: SrByStyleFilters) {
             r_qty: Number((it as any).r_qty ?? 0),
             amount: Number((it as any).amount ?? 0),
             supplier_name: (it as any).supplier_name,
+            _style: "",
           });
         }
       }
