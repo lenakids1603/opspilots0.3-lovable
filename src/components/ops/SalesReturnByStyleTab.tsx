@@ -221,10 +221,15 @@ export default function SalesReturnByStyleTab({ filters, exportRef }: Props) {
   const detailRow = useMemo(() => rows.find(r => r.key === detailKey) ?? null, [rows, detailKey]);
   const detailItems = useMemo(() => {
     if (!detailRow || !aggQ.data) return [] as Item[];
+    const sm = aggQ.data.shopMap;
     return aggQ.data.items.filter(it => {
       const ord = aggQ.data.orderByAs.get(it.as_id);
-      const shop = (ord?.shop_name ?? "").trim() || "(未知店铺)";
-      return shop === detailRow.shop_name && it._style === detailRow.style_no;
+      const sid = String(ord?.shop_id ?? "").trim();
+      const shop = (sid && sm.get(sid)) || (ord?.shop_name ?? "").trim() || "(未知店铺)";
+      const supplier = (it.supplier_name ?? "").trim() || "-";
+      return shop === detailRow.shop_name
+        && it._style === detailRow.style_no
+        && supplier === detailRow.supplier_name;
     });
   }, [detailRow, aggQ.data, rows, detailKey]);
 
