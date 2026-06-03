@@ -28,6 +28,8 @@ import { useToast } from "@/hooks/use-toast";
 import { ShopMappingsCard } from "@/components/ops/ShopMappingsCard";
 import { JstConnectionCheckCard } from "@/components/ops/JstConnectionCheckCard";
 import { InboundSyncJobPanel } from "@/components/ops/InboundSyncJobPanel";
+import { SalesOrdersSyncCard } from "@/components/ops/SalesOrdersSyncCard";
+
 
 
 // ============================================================
