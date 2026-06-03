@@ -90,14 +90,24 @@ function useStyleAggregate(filters: OutboundByStyleFilters) {
       if (!ids.length) return { rows: [] as StyleRow[], items: [] as AggItem[], orderMap };
 
       const allItems: AggItem[] = [];
-      for (let i = 0; i < ids.length; i += 800) {
-        const slice = ids.slice(i, i + 800);
+      const BATCH = 150;
+      for (let i = 0; i < ids.length; i += BATCH) {
+        const slice = ids.slice(i, i + BATCH);
         let iq = supabase.from("jst_outbound_order_items")
           .select("outbound_order_id, io_id, sku_id, i_id, name, color, size, qty")
-          .in("outbound_order_id", slice);
-        if (filters.sku) iq = iq.or(`sku_id.ilike.%${filters.sku}%,i_id.ilike.%${filters.sku}%`);
+          .in("outbound_order_id", slice)
+          .limit(10000);
+        if (filters.sku) {
+          const s = filters.sku.replace(/[,()]/g, "");
+          iq = iq.or(`sku_id.ilike.%${s}%,i_id.ilike.%${s}%`);
+        }
         const { data: items, error: itErr } = await iq;
-        if (itErr) throw itErr;
+        if (itErr) {
+          const e: any = itErr;
+          throw new Error(
+            `明细查询失败 [batch ${i}-${i + slice.length}, ids=${slice.length}]: ${e.message || ""}${e.details ? ` | details=${e.details}` : ""}${e.hint ? ` | hint=${e.hint}` : ""}${e.code ? ` | code=${e.code}` : ""}`,
+          );
+        }
         for (const it of items ?? []) {
           allItems.push({
             outbound_order_id: (it as any).outbound_order_id,
