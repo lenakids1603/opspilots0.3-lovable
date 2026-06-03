@@ -382,6 +382,22 @@ export default function JstDataIntegrationPage() {
     onError: (e: any) => toast({ title: "同步失败", description: e.message, variant: "destructive" }),
   });
 
+  const cancelAllMut = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await (supabase as any).rpc("jst_cancel_all_running_syncs");
+      if (error) throw new Error(error.message);
+      const row = Array.isArray(data) ? data[0] : data;
+      return { logs: row?.cancelled_logs ?? 0, jobs: row?.cancelled_jobs ?? 0 };
+    },
+    onSuccess: (d) => {
+      toast({ title: "已终止运行中的同步", description: `日志 ${d.logs} 条 / 任务 ${d.jobs} 个已标记为终止` });
+      qc.invalidateQueries({ queryKey: ["jst_sync_logs", "purchase"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_runs"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_modules"] });
+    },
+    onError: (e: any) => toast({ title: "终止失败", description: e.message, variant: "destructive" }),
+  });
+
   const pendingScope = purchaseSyncMut.isPending ? (purchaseSyncMut.variables as any)?.scope : null;
   const poBusy = pendingScope === "purchase_orders";
   const inBusy = pendingScope === "purchase_inbound_orders";
