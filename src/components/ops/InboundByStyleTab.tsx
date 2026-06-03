@@ -131,9 +131,43 @@ function useStyleAggregate(filters: ByStyleFilters) {
             cost_price: Number((it as any).cost_price ?? 0),
             external_po_id: (it as any).external_po_id,
             external_io_id: (it as any).external_io_id,
+            _style: "",
           });
         }
       }
+
+      // 2.5) 解析款号：优先 ops_products.style_no，其次 purchase_order_items.style_no，最后 SKU 数字前缀兜底
+      const productIds = Array.from(new Set(allItems.map(it => it.product_id).filter(Boolean))) as string[];
+      const pidToStyle = new Map<string, string>();
+      for (let i = 0; i < productIds.length; i += 500) {
+        const slice = productIds.slice(i, i + 500);
+        const { data: prods } = await supabase.from("ops_products")
+          .select("id, style_no").in("id", slice);
+        for (const p of prods ?? []) {
+          if ((p as any).style_no) pidToStyle.set((p as any).id, (p as any).style_no);
+        }
+      }
+      // 通过采购单明细补充（按 external_po_id + sku_no 维度）
+      const missingSkus = Array.from(new Set(
+        allItems.filter(it => !pidToStyle.get(it.product_id ?? "") && it.sku_no)
+          .map(it => it.sku_no as string)
+      ));
+      const skuToStyle = new Map<string, string>();
+      for (let i = 0; i < missingSkus.length; i += 500) {
+        const slice = missingSkus.slice(i, i + 500);
+        const { data: poItems } = await supabase.from("purchase_order_items")
+          .select("sku_no, style_no").in("sku_no", slice).not("style_no", "is", null).limit(slice.length * 5);
+        for (const p of poItems ?? []) {
+          const sku = (p as any).sku_no; const st = (p as any).style_no;
+          if (sku && st && !skuToStyle.has(sku)) skuToStyle.set(sku, st);
+        }
+      }
+      for (const it of allItems) {
+        const fromProd = it.product_id ? pidToStyle.get(it.product_id) : undefined;
+        const fromSku = it.sku_no ? skuToStyle.get(it.sku_no) : undefined;
+        it._style = fromProd || fromSku || styleFallback(it.sku_no, it.product_name);
+      }
+
 
       // 3) 应用 hasItems / abnormal 过滤（按 receipt 维度的明细情况）
       const receiptItemCount = new Map<string, number>();
