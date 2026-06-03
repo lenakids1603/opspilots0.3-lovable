@@ -683,6 +683,7 @@ export type Database = {
           id: string
           io_id: string
           ioi_id: string | null
+          item_unique_key: string | null
           name: string | null
           oi_id: string | null
           outbound_order_id: string
@@ -703,6 +704,7 @@ export type Database = {
           id?: string
           io_id: string
           ioi_id?: string | null
+          item_unique_key?: string | null
           name?: string | null
           oi_id?: string | null
           outbound_order_id: string
@@ -723,6 +725,7 @@ export type Database = {
           id?: string
           io_id?: string
           ioi_id?: string | null
+          item_unique_key?: string | null
           name?: string | null
           oi_id?: string | null
           outbound_order_id?: string
