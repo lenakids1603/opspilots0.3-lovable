@@ -130,7 +130,7 @@ function useAgg(filters: SrByStyleFilters) {
           const supIds = Array.from(new Set((prods ?? []).map((p: any) => p.supplier_id).filter(Boolean)));
           const supIdToName = new Map<string, string>();
           if (supIds.length) {
-            const { data: sups } = await supabase.from("suppliers").select("id, name").in("id", supIds);
+            const { data: sups } = await supabase.from("ops_suppliers").select("id, name").in("id", supIds);
             for (const s of sups ?? []) supIdToName.set((s as any).id, (s as any).name ?? "");
           }
           for (const p of prods ?? []) {
