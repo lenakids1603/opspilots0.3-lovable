@@ -393,10 +393,10 @@ export default function SalesOrdersListPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {listQ.isLoading && <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">加载中...</TableCell></TableRow>}
-            {listQ.error && <TableRow><TableCell colSpan={13} className="text-center py-12 text-rose-600">读取失败：{(listQ.error as any).message}</TableCell></TableRow>}
+            {listQ.isLoading && <TableRow><TableCell colSpan={12} className="text-center py-12 text-muted-foreground">加载中...</TableCell></TableRow>}
+            {listQ.error && <TableRow><TableCell colSpan={12} className="text-center py-12 text-rose-600">读取失败：{(listQ.error as any).message}</TableCell></TableRow>}
             {!listQ.isLoading && !listQ.error && (listQ.data?.rows.length ?? 0) === 0 && (
-              <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
+              <TableRow><TableCell colSpan={12} className="text-center py-12 text-muted-foreground">
                 暂无订单。请到「聚水潭同步 → 订单 API」发起一次同步，或扩大日期范围。
               </TableCell></TableRow>
             )}
@@ -407,9 +407,8 @@ export default function SalesOrdersListPage() {
                 <TableCell className="text-xs">{r.shop_name || r.shop_id || "-"}</TableCell>
                 <TableCell><Badge variant="outline">{zhStatus(r.status)}</Badge></TableCell>
                 <TableCell><Badge variant="secondary">{r.internal_order_type_name || "待识别"}</Badge></TableCell>
-                <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.created_time, { withSeconds: false })}</TableCell>
-                <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.modified_time, { withSeconds: false })}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.pay_time, { withSeconds: false })}</TableCell>
+                <TableCell><RemainingShipTime planDeliveryDate={r.plan_delivery_date} shipped={!!r.io_id || !!r.io_date} /></TableCell>
                 <TableCell className="text-right tabular-nums">{r.paid_amount > 0 ? fmtMoney(r.paid_amount) : "-"}</TableCell>
                 <TableCell className="text-right">{fmtInt(r.item_count)}</TableCell>
                 <TableCell className="font-mono text-xs">{r.io_id ?? "-"}</TableCell>
