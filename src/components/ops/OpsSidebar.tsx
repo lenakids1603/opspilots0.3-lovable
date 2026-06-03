@@ -60,7 +60,6 @@ const GROUPS: Group[] = [
     items: [
       { title: "供应商总览", url: "/suppliers/overview" },
       { title: "供应商档案", url: "/suppliers" },
-      { title: "采购超时预警", url: "/suppliers/po-alerts" },
     ],
   },
   {
