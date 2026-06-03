@@ -29,7 +29,7 @@ import {
   formatDateCN, formatDateTimeCN, beijingYMD, beijingDayRangeToUTC,
 } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
-import { evaluateDelivery, DELIVERY_COMPLETION_TOLERANCE_RATE } from "@/lib/deliveryTolerance";
+
 
 const fmtInt = (n?: number | null) => Number(n ?? 0).toLocaleString("zh-CN");
 const fmtMoney = (n?: number | null) =>
