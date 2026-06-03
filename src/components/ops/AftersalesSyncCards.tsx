@@ -78,7 +78,7 @@ function SyncCard({ variant }: { variant: Variant }) {
   });
 
   const syncMut = useMutation({
-    mutationFn: async (payload: { days?: number; start_time?: string; end_time?: string }) => {
+    mutationFn: async (payload: { hours?: number; days?: number; start_time?: string; end_time?: string }) => {
       const { data, error } = await supabase.functions.invoke(variant.functionName, {
         body: { ...payload, manual: true },
       });
