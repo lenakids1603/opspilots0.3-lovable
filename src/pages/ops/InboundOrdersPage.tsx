@@ -602,7 +602,7 @@ export default function InboundOrdersPage() {
         </TabsContent>
 
         <TabsContent value="byStyle">
-          <InboundByStyleTab filters={filters} />
+          <InboundByStyleTab filters={filters} exportRef={styleExportRef} hideHeaderExport />
         </TabsContent>
       </Tabs>
 
