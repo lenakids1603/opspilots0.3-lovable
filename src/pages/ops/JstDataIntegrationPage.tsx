@@ -889,7 +889,7 @@ export default function JstDataIntegrationPage() {
               <PlaceholderTab title="出库 API（暂未接入）" hint="后续接入。" />
             </TabsContent>
             <TabsContent value="aftersales" className="m-0">
-              <PlaceholderTab title="售后 API（暂未接入）" hint="后续接入。" />
+              <AftersalesSyncCards />
             </TabsContent>
           </Tabs>
         </CardContent>
