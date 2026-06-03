@@ -351,6 +351,27 @@ export default function SalesOrdersListPage() {
         </div>
       </CardContent></Card>
 
+      {/* 内部分类统计（按当前筛选） */}
+      <Card className="mb-3"><CardContent className="p-3">
+        <div className="text-xs text-muted-foreground mb-2">内部订单分类（按当前筛选范围）</div>
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-2">
+          {TYPE_ORDER.map((t) => (
+            <div key={t.code} className="border rounded p-2">
+              <div className="text-xs text-muted-foreground">{t.name}</div>
+              <div className="text-lg font-semibold tabular-nums">
+                {typeStatsQ.isLoading ? "…" : fmtInt(typeStatsQ.data?.[t.code] ?? 0)}
+              </div>
+            </div>
+          ))}
+          <div className="border rounded p-2 border-dashed">
+            <div className="text-xs text-muted-foreground">未分类（待回刷）</div>
+            <div className="text-lg font-semibold tabular-nums">
+              {typeStatsQ.isLoading ? "…" : fmtInt(typeStatsQ.data?.["_null"] ?? 0)}
+            </div>
+          </div>
+        </div>
+      </CardContent></Card>
+
       {/* 列表 */}
       <Card><CardContent className="p-0">
         <Table>
