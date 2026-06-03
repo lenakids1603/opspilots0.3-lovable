@@ -633,11 +633,11 @@ export default function JstDataIntegrationPage() {
         />
         <OverviewCard
           title="销售/退款"
-          value={fmtNum(salesExtra.today_orders ?? salesExtra.orders) || "—"}
-          badge={mapping && mapping.unmapped > 0 ? "阻塞" : "正常"}
-          badgeTone={mapping && mapping.unmapped > 0 ? "error" : "ok"}
+          value={fmtNum(refundCountQ.data?.count) || "—"}
+          badge={mapping && mapping.unmapped > 0 ? "阻塞" : (refundCountQ.data?.lastLog?.status === "failed" ? "异常" : "正常")}
+          badgeTone={mapping && mapping.unmapped > 0 ? "error" : (refundCountQ.data?.lastLog?.status === "failed" ? "error" : "ok")}
           valueTone={mapping && mapping.unmapped > 0 ? "destructive" : "default"}
-          hint={mapping && mapping.unmapped > 0 ? "财务汇总阻塞" : `最近同步：${fmtTime(metrics["sales_summary"]?.last_sync_at)}`}
+          hint={`售后退款单 · 最近同步：${fmtTime(refundCountQ.data?.lastLog?.ended_at ?? refundCountQ.data?.lastLog?.started_at)}`}
         />
         <OverviewCard
           title="履约"
