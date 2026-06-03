@@ -68,7 +68,13 @@ export function InboundSyncJobPanel({
   unitLabel = "入库单",
   emptyText,
   toastTitle,
+  presets,
 }: Props) {
+  const effectivePresets: Preset[] = presets ?? [
+    { label: "同步最近 1 天", days: 1, requested_range: "1d" },
+    { label: "同步最近 7 天", days: 7, requested_range: "7d" },
+    { label: "同步最近 30 天", days: 30, requested_range: "30d" },
+  ];
   const qc = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
   const [tickError, setTickError] = useState<string | null>(null);
