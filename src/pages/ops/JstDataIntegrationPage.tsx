@@ -20,7 +20,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetTr
 import {
   AlertTriangle, RefreshCw, ChevronDown, FileText, Package, Warehouse, Truck,
   Search, Stethoscope, Store, Users, Building2, ShoppingCart, PackageCheck,
-  Link2, Boxes, LineChart, Plug, Download, Filter, Clock, MoreVertical,
+  Link2, Boxes, LineChart, Plug, Download, Filter, Clock, MoreVertical, StopCircle,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
