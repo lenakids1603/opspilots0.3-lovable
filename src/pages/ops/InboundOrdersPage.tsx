@@ -507,7 +507,8 @@ export default function InboundOrdersPage() {
           <Button size="sm" variant="outline" onClick={() => applyQuickRange("month")}>本月</Button>
           <Button size="sm" variant="outline" onClick={() => applyQuickRange("all")}>全部</Button>
           <div className="flex-1" />
-          <Button size="sm" variant="outline" onClick={onExport}><Download className="w-4 h-4 mr-1" />导出</Button>
+          <Button size="sm" variant="outline" onClick={onExportByStyle}><Download className="w-4 h-4 mr-1" />按款式导出</Button>
+          <Button size="sm" variant="outline" onClick={onExportByOrder}><Download className="w-4 h-4 mr-1" />按入库单导出</Button>
         </div>
         <div className="text-xs text-muted-foreground border-t pt-2">
           说明：同步任务按 <span className="font-medium text-foreground">聚水潭修改时间 (modified)</span> 拉取，列表筛选按 <span className="font-medium text-foreground">业务入库日期 (io_date)</span>。
