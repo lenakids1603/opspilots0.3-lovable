@@ -261,7 +261,7 @@ export default function InboundByStyleTab({ filters }: { filters: ByStyleFilters
     return aggQ.data.items.filter(it => {
       const rec = aggQ.data.receiptMap.get(it.receipt_id);
       const sp = (rec?.supplier_name ?? "").trim() || "(未知供应商)";
-      const st = styleOf(it.sku_no, it.product_name);
+      const st = it._style;
       return st === detailRow.style_no && sp === supplier;
     });
   }, [detailRow, aggQ.data]);
