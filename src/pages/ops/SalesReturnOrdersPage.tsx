@@ -546,7 +546,7 @@ export default function SalesReturnOrdersPage() {
           <SheetHeader>
             <SheetTitle>销退单详情 · {detailRow?.as_id}</SheetTitle>
             <SheetDescription>
-              {detailRow?.shop_name ?? "-"} · {detailRow?.warehouse ?? "-"} · {detailRow?.status ?? "-"}
+              {resolveShop(detailRow)} · {detailRow?.warehouse ?? "-"} · {detailRow?.status ?? "-"}
             </SheetDescription>
           </SheetHeader>
           {detailRow && (
