@@ -112,7 +112,7 @@ export function InboundSyncJobPanel({
 
   const startMut = useMutation({
     mutationFn: async (days: number) => {
-      const { data, error } = await supabase.functions.invoke("jst-sync-purchase-orders", {
+      const { data, error } = await supabase.functions.invoke(functionName, {
         body: {
           action: startAction,
           days,
@@ -138,7 +138,7 @@ export function InboundSyncJobPanel({
 
   const tickMut = useMutation({
     mutationFn: async (id: string) => {
-      const { data, error } = await supabase.functions.invoke("jst-sync-purchase-orders", {
+      const { data, error } = await supabase.functions.invoke(functionName, {
         body: { action: tickAction, job_id: id },
       });
       if (error) throw new Error(error.message);
@@ -166,7 +166,7 @@ export function InboundSyncJobPanel({
 
   const cancelMut = useMutation({
     mutationFn: async (id: string) => {
-      const { data, error } = await supabase.functions.invoke("jst-sync-purchase-orders", {
+      const { data, error } = await supabase.functions.invoke(functionName, {
         body: { action: cancelAction, job_id: id },
       });
       if (error) throw new Error(error.message);
