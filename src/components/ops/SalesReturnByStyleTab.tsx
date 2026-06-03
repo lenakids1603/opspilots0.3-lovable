@@ -113,7 +113,7 @@ function useAgg(filters: SrByStyleFilters) {
         }
       }
 
-      // 解析款号 + 供应商：先用 ops_skus → ops_products.style_no / supplier_name_snapshot，失败用 SKU 数字前缀
+      // 解析款号 + 供应商：1) ops_skus → ops_products  2) 回退 purchase_order_items + purchase_orders.supplier_name
       const skuCodes = Array.from(new Set(allItems.map(i => i.sku_id).filter(Boolean))) as string[];
       const skuToStyle = new Map<string, string>();
       const skuToSupplier = new Map<string, string>();
@@ -144,6 +144,31 @@ function useAgg(filters: SrByStyleFilters) {
           if (st) skuToStyle.set((s as any).sku_code, st);
           const sup = pidToSupplier.get((s as any).product_id);
           if (sup) skuToSupplier.set((s as any).sku_code, sup);
+        }
+
+        // 回退:采购明细
+        const missing = slice.filter(c => !skuToSupplier.has(c));
+        if (missing.length) {
+          const { data: poi } = await supabase
+            .from("purchase_order_items")
+            .select("sku_no, style_no, purchase_orders!inner(supplier_name, created_at)")
+            .in("sku_no", missing)
+            .limit(missing.length * 8);
+          const skuToRecent = new Map<string, { name: string; at: string; style: string | null }>();
+          for (const r of poi ?? []) {
+            const sku = (r as any).sku_no as string;
+            const po = (r as any).purchase_orders;
+            const sn = po?.supplier_name as string | null;
+            const at = (po?.created_at as string | null) ?? "";
+            const st = (r as any).style_no as string | null;
+            if (!sku || !sn) continue;
+            const prev = skuToRecent.get(sku);
+            if (!prev || at > prev.at) skuToRecent.set(sku, { name: sn, at, style: st });
+          }
+          for (const [sku, v] of skuToRecent) {
+            skuToSupplier.set(sku, v.name);
+            if (!skuToStyle.has(sku) && v.style) skuToStyle.set(sku, v.style);
+          }
         }
       }
 
