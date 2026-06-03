@@ -124,7 +124,9 @@ function usePurchaseLogs() {
           "outbound_orders",
           "refund_orders",
           "aftersale_received",
+          "sales_orders",
         ])
+
         .order("started_at", { ascending: false }).limit(200);
       if (error) throw error;
       return data ?? [];
