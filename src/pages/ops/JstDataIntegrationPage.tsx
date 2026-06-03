@@ -1045,6 +1045,9 @@ export default function JstDataIntegrationPage() {
                   const moduleName = isPurchase
                     ? (l.module_key === "purchase_orders" ? "采购单"
                       : (l.module_key === "purchase_inbound_orders" || l.module_key === "purchase_in" || l.module_key === "purchase_receipts") ? "入库单"
+                      : l.module_key === "outbound_orders" ? "出库API · 销售出库单"
+                      : l.module_key === "refund_orders" ? "售后API · 退货退款单"
+                      : l.module_key === "aftersale_received" ? "售后API · 销售退仓"
                       : "采购与入库")
                     : (mod?.module_name ?? l.module_key);
                   const s = asStatus(l.status === "running" ? "ok" : l.status);
