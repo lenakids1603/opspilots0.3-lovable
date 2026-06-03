@@ -126,14 +126,13 @@ export function InboundSyncJobPanel({
   });
 
   const startMut = useMutation({
-    mutationFn: async (days: number) => {
-      const { data, error } = await supabase.functions.invoke(functionName, {
-        body: {
-          action: startAction,
-          days,
-          requested_range: days <= 1 ? "1d" : days <= 7 ? "7d" : "30d",
-        },
-      });
+    mutationFn: async (preset: Preset) => {
+      const body: any = { action: startAction };
+      if (preset.hours != null) body.hours = preset.hours;
+      if (preset.days != null) body.days = preset.days;
+      body.requested_range = preset.requested_range
+        ?? (preset.hours != null ? `${preset.hours}h` : (preset.days != null ? `${preset.days}d` : "custom"));
+      const { data, error } = await supabase.functions.invoke(functionName, { body });
       if (error) throw new Error(error.message);
       if (data?.ok === false) throw new Error(data?.error ?? "启动失败");
       return data as { job_id: string; total_windows: number; reused?: boolean };
