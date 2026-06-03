@@ -486,11 +486,16 @@ export default function JstDataIntegrationPage() {
     return allLogs.filter((l) => {
       const isPurchaseLog = l._source === "purchase_log";
       const mod = modules.find((m) => m.module_key === l.module_key);
-      const groupLabel = isPurchaseLog ? CATEGORY_LABEL.purchase
+      const isFulfillmentKey = (k: string) => k === "outbound_orders" || k === "refund_orders" || k === "aftersale_received";
+      const groupLabel = isPurchaseLog
+        ? (isFulfillmentKey(l.module_key) ? CATEGORY_LABEL.fulfillment : CATEGORY_LABEL.purchase)
         : (mod ? (CATEGORY_LABEL[mod.category] ?? mod.category) : "");
       const moduleName = isPurchaseLog
         ? (l.module_key === "purchase_orders" ? "采购单"
           : (l.module_key === "purchase_inbound_orders" || l.module_key === "purchase_in" || l.module_key === "purchase_receipts") ? "入库单"
+          : l.module_key === "outbound_orders" ? "出库API · 销售出库单"
+          : l.module_key === "refund_orders" ? "售后API · 退货退款单"
+          : l.module_key === "aftersale_received" ? "售后API · 销售退仓"
           : "采购与入库")
         : (mod?.module_name ?? l.module_key);
       const triggerLabel = TRIGGER_LABEL[l.trigger_type] ?? l.trigger_type;
