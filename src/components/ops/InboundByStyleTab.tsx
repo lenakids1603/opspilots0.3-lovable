@@ -38,6 +38,7 @@ type AggItem = {
   cost_price: number;
   external_po_id: string | null;
   external_io_id: string | null;
+  _style: string;
 };
 
 type ReceiptMeta = {
@@ -67,10 +68,12 @@ type StyleRow = {
   last_io: string | null;
 };
 
-function styleOf(sku: string | null | undefined, productName: string | null | undefined) {
+function styleFallback(sku: string | null | undefined, productName: string | null | undefined) {
   const s = (sku ?? "").trim();
   if (s) {
-    // 常见约定 款号-颜色-尺码；取第一个分段
+    // 兜底：取 SKU 起始的纯数字段作为款号（聚水潭款号通常 6-12 位数字前缀）
+    const m = s.match(/^\d{6,12}/);
+    if (m) return m[0];
     const seg = s.split(/[-_/\s]/)[0];
     if (seg) return seg;
   }
@@ -128,9 +131,43 @@ function useStyleAggregate(filters: ByStyleFilters) {
             cost_price: Number((it as any).cost_price ?? 0),
             external_po_id: (it as any).external_po_id,
             external_io_id: (it as any).external_io_id,
+            _style: "",
           });
         }
       }
+
+      // 2.5) 解析款号：优先 ops_products.style_no，其次 purchase_order_items.style_no，最后 SKU 数字前缀兜底
+      const productIds = Array.from(new Set(allItems.map(it => it.product_id).filter(Boolean))) as string[];
+      const pidToStyle = new Map<string, string>();
+      for (let i = 0; i < productIds.length; i += 500) {
+        const slice = productIds.slice(i, i + 500);
+        const { data: prods } = await supabase.from("ops_products")
+          .select("id, style_no").in("id", slice);
+        for (const p of prods ?? []) {
+          if ((p as any).style_no) pidToStyle.set((p as any).id, (p as any).style_no);
+        }
+      }
+      // 通过采购单明细补充（按 external_po_id + sku_no 维度）
+      const missingSkus = Array.from(new Set(
+        allItems.filter(it => !pidToStyle.get(it.product_id ?? "") && it.sku_no)
+          .map(it => it.sku_no as string)
+      ));
+      const skuToStyle = new Map<string, string>();
+      for (let i = 0; i < missingSkus.length; i += 500) {
+        const slice = missingSkus.slice(i, i + 500);
+        const { data: poItems } = await supabase.from("purchase_order_items")
+          .select("sku_no, style_no").in("sku_no", slice).not("style_no", "is", null).limit(slice.length * 5);
+        for (const p of poItems ?? []) {
+          const sku = (p as any).sku_no; const st = (p as any).style_no;
+          if (sku && st && !skuToStyle.has(sku)) skuToStyle.set(sku, st);
+        }
+      }
+      for (const it of allItems) {
+        const fromProd = it.product_id ? pidToStyle.get(it.product_id) : undefined;
+        const fromSku = it.sku_no ? skuToStyle.get(it.sku_no) : undefined;
+        it._style = fromProd || fromSku || styleFallback(it.sku_no, it.product_name);
+      }
+
 
       // 3) 应用 hasItems / abnormal 过滤（按 receipt 维度的明细情况）
       const receiptItemCount = new Map<string, number>();
@@ -153,7 +190,7 @@ function useStyleAggregate(filters: ByStyleFilters) {
       for (const it of filteredItems) {
         const rec = receiptMap.get(it.receipt_id);
         const supplier = (rec?.supplier_name ?? "").trim() || "(未知供应商)";
-        const style = styleOf(it.sku_no, it.product_name);
+        const style = it._style;
         const key = `${style}__${supplier}`;
         let row = styleMap.get(key);
         if (!row) {
@@ -224,7 +261,7 @@ export default function InboundByStyleTab({ filters }: { filters: ByStyleFilters
     return aggQ.data.items.filter(it => {
       const rec = aggQ.data.receiptMap.get(it.receipt_id);
       const sp = (rec?.supplier_name ?? "").trim() || "(未知供应商)";
-      const st = styleOf(it.sku_no, it.product_name);
+      const st = it._style;
       return st === detailRow.style_no && sp === supplier;
     });
   }, [detailRow, aggQ.data]);
