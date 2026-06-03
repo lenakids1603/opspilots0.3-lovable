@@ -372,9 +372,11 @@ export default function InboundByStyleTab({ filters, exportRef, hideHeaderExport
         <div className="text-xs text-muted-foreground">
           按「款号 + 供应商」聚合 · 当前筛选 {totalCount} 个款式
         </div>
-        <Button size="sm" variant="outline" onClick={exportRows}>
-          <Download className="w-4 h-4 mr-1" />导出当前 Tab
-        </Button>
+        {!hideHeaderExport && (
+          <Button size="sm" variant="outline" onClick={exportRows}>
+            <Download className="w-4 h-4 mr-1" />导出当前 Tab
+          </Button>
+        )}
       </div>
       <Table>
         <TableHeader>
