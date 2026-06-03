@@ -11,6 +11,8 @@ const OPS_TAB_LABELS: TabLabels = {
   "/products/detail": "商品详情",
   "/products/image-search": "图片搜索入口",
   "/warehouse/arrivals": "到货登记",
+  "/purchase/delivery-dashboard": "货期交付看板",
+  "/purchase/orders": "采购单管理",
   "/finance/overview": "财务总览",
   "/finance/cashflow": "公司资金流水",
   "/finance/supplier-bills": "供应商账单核对",
