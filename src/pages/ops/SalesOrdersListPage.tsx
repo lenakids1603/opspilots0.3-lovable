@@ -346,6 +346,7 @@ export default function SalesOrdersListPage() {
                 <TableCell className="font-mono text-xs">{r.jst_o_id}</TableCell>
                 <TableCell className="text-xs">{r.shop_name || r.shop_id || "-"}</TableCell>
                 <TableCell><Badge variant="outline">{zhStatus(r.status)}</Badge></TableCell>
+                <TableCell><Badge variant="secondary">{r.internal_order_type_name || "待识别"}</Badge></TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.created_time, { withSeconds: false })}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.modified_time, { withSeconds: false })}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.pay_time, { withSeconds: false })}</TableCell>
