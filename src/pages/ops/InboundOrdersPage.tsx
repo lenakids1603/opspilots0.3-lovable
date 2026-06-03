@@ -46,9 +46,12 @@ type Filters = {
 };
 
 function defaultFilters(): Filters {
-  const today = todayCN();
+  const end = todayCN();
+  const d = new Date(`${end}T00:00:00+08:00`);
+  d.setUTCDate(d.getUTCDate() - 6);
+  const start = beijingYMD(d);
   return {
-    startDate: today, endDate: today, supplier: "", warehouse: "", ioNo: "", poNo: "", sku: "",
+    startDate: start, endDate: end, supplier: "", warehouse: "", ioNo: "", poNo: "", sku: "",
     status: "all", hasPo: "all", hasItems: "all", abnormal: "all",
   };
 }
