@@ -109,7 +109,7 @@ function useOrderList(filters: Filters, page: number, sortKey: SortKey, sortDir:
     queryKey: ["sales_orders_list", filters, page, sortKey, sortDir],
     queryFn: async () => {
       let q = supabase.from("jst_sales_orders")
-        .select("id, jst_o_id, so_id, shop_id, shop_name, status, order_type, created_time, modified_time, pay_time, paid_amount, pay_amount, io_id, io_date, l_id, lc_id, logistics_company", { count: "exact" });
+        .select("id, jst_o_id, so_id, shop_id, shop_name, status, internal_order_type, internal_order_type_name, order_type, created_time, modified_time, pay_time, paid_amount, pay_amount, io_id, io_date, l_id, lc_id, logistics_company", { count: "exact" });
       q = applyFilters(q, filters);
       q = q.order(sortKey, { ascending: sortDir === "asc", nullsFirst: false });
       if (sortKey !== "jst_o_id") {
@@ -321,6 +321,7 @@ export default function SalesOrdersListPage() {
               <SortHead sortKey="jst_o_id" currentKey={sortKey} dir={sortDir} onSort={onSort}>聚水潭单号</SortHead>
               <SortHead sortKey="shop_name" currentKey={sortKey} dir={sortDir} onSort={onSort}>店铺</SortHead>
               <SortHead sortKey="status" currentKey={sortKey} dir={sortDir} onSort={onSort}>状态</SortHead>
+              <TableHead>订单类型</TableHead>
               <SortHead sortKey="created_time" currentKey={sortKey} dir={sortDir} onSort={onSort}>创建时间</SortHead>
               <SortHead sortKey="modified_time" currentKey={sortKey} dir={sortDir} onSort={onSort}>修改时间</SortHead>
               <SortHead sortKey="pay_time" currentKey={sortKey} dir={sortDir} onSort={onSort}>支付时间</SortHead>
