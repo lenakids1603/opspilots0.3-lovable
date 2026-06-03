@@ -22,7 +22,7 @@ const OPS_TAB_LABELS: TabLabels = {
   "/finance/entities": "个体户账户管理",
   "/finance/quota-alerts": "额度预警",
   "/suppliers/overview": "供应商总览",
-  "/suppliers/po-alerts": "采购超时预警",
+  "/suppliers/po-alerts": "订单超时预警",
   "/cs/complaints": "商品投诉登记",
   "/cs/refunds": "异常退款商品",
   "/cs/quality": "质量问题分析",
