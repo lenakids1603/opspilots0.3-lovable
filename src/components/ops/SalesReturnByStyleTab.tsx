@@ -190,7 +190,7 @@ function useAgg(filters: SrByStyleFilters) {
       }
       const rows = Array.from(styleMap.values())
         .sort((a, b) => String(b.last_at ?? "").localeCompare(String(a.last_at ?? "")));
-      return { rows, items: filteredItems, orderByAs };
+      return { rows, items: filteredItems, orderByAs, shopMap };
     },
     retry: 1,
   });
