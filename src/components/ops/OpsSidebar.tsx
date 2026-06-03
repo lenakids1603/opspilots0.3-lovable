@@ -66,7 +66,7 @@ const GROUPS: Group[] = [
     title: "数据中心", icon: Database,
     items: [
       { title: "数据中心", url: "/data-center" },
-      { title: "聚水潭数据接入详情", url: "/data-center/jst-integration" },
+      { title: "聚水潭同步", url: "/data-center/jst-integration" },
     ],
   },
   {
