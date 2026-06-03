@@ -162,6 +162,17 @@ async function runSync(fromIso: string, toIso: string, logId: string) {
         fetched_items_count: items,
         message: `第 ${page} 页 已同步 ${orders} 出库单 / ${items} 明细 · 失败 ${failed} · has_next=${hasNext}`,
         heartbeat_at: new Date().toISOString(),
+        metadata: {
+          final_api_path: `/open/${METHOD_PATH}`,
+          request_fields: { InoutFlds: INOUT_FLDS, InoutItemFlds: INOUT_ITEM_FLDS },
+          last_request: { page_index: page, page_size: PAGE_SIZE, start_time: fmtBJ(winFrom), end_time: fmtBJ(winTo) },
+          detected_item_field: detectedItemField,
+          top_keys: firstTopKeys,
+          samples: sampleShapes,
+          failed_total: failed,
+          orders_without_items: ordersWithoutItems,
+          error_types: errorTypes,
+        },
       }).eq("id", logId);
 
       if (!hasNext || list.length === 0) break;
