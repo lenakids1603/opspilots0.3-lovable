@@ -104,7 +104,7 @@ export function OpsSidebar() {
       </div>
 
       {/* Menu */}
-      <nav className="flex-1 overflow-y-auto px-2 py-2 space-y-0.5">
+      <nav className="ops-sidebar-scroll flex-1 overflow-y-auto px-2 py-2 space-y-0.5">
         <NavLink
           to="/"
           end
