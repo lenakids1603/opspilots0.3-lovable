@@ -28,6 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ShopMappingsCard } from "@/components/ops/ShopMappingsCard";
 import { JstConnectionCheckCard } from "@/components/ops/JstConnectionCheckCard";
 import { InboundSyncJobPanel } from "@/components/ops/InboundSyncJobPanel";
+import { AftersalesSyncCards } from "@/components/ops/AftersalesSyncCards";
 
 // ============================================================
 // Types & helpers
@@ -403,6 +404,19 @@ export default function JstDataIntegrationPage() {
   const inventoryExtra = (metrics["inventory_summary"]?.metric_extra ?? {}) as any;
   const salesExtra = (metrics["sales_summary"]?.metric_extra ?? {}) as any;
   const fulfillmentExtra = (metrics["fulfillment_summary"]?.metric_extra ?? {}) as any;
+  const refundCountQ = useQuery({
+    queryKey: ["jst_refund_orders_count"],
+    queryFn: async () => {
+      const [{ count: refundCount }, { data: lastLog }] = await Promise.all([
+        supabase.from("jst_refund_orders").select("id", { count: "exact", head: true }),
+        supabase.from("jst_sync_logs").select("status,ended_at,started_at")
+          .in("sync_type", ["refund_orders", "aftersale_received"])
+          .order("started_at", { ascending: false }).limit(1).maybeSingle(),
+      ]);
+      return { count: refundCount ?? 0, lastLog };
+    },
+    refetchInterval: 10000,
+  });
   const globalMetric = metrics["global_status"];
   const globalExtra = (globalMetric?.metric_extra ?? {}) as Record<string, any>;
 
@@ -619,11 +633,11 @@ export default function JstDataIntegrationPage() {
         />
         <OverviewCard
           title="销售/退款"
-          value={fmtNum(salesExtra.today_orders ?? salesExtra.orders) || "—"}
-          badge={mapping && mapping.unmapped > 0 ? "阻塞" : "正常"}
-          badgeTone={mapping && mapping.unmapped > 0 ? "error" : "ok"}
+          value={fmtNum(refundCountQ.data?.count) || "—"}
+          badge={mapping && mapping.unmapped > 0 ? "阻塞" : (refundCountQ.data?.lastLog?.status === "failed" ? "异常" : "正常")}
+          badgeTone={mapping && mapping.unmapped > 0 ? "error" : (refundCountQ.data?.lastLog?.status === "failed" ? "error" : "ok")}
           valueTone={mapping && mapping.unmapped > 0 ? "destructive" : "default"}
-          hint={mapping && mapping.unmapped > 0 ? "财务汇总阻塞" : `最近同步：${fmtTime(metrics["sales_summary"]?.last_sync_at)}`}
+          hint={`售后退款单 · 最近同步：${fmtTime(refundCountQ.data?.lastLog?.ended_at ?? refundCountQ.data?.lastLog?.started_at)}`}
         />
         <OverviewCard
           title="履约"
@@ -888,7 +902,7 @@ export default function JstDataIntegrationPage() {
               <PlaceholderTab title="出库 API（暂未接入）" hint="后续接入。" />
             </TabsContent>
             <TabsContent value="aftersales" className="m-0">
-              <PlaceholderTab title="售后 API（暂未接入）" hint="后续接入。" />
+              <AftersalesSyncCards />
             </TabsContent>
           </Tabs>
         </CardContent>
