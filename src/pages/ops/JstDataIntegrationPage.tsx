@@ -29,6 +29,7 @@ import { ShopMappingsCard } from "@/components/ops/ShopMappingsCard";
 import { JstConnectionCheckCard } from "@/components/ops/JstConnectionCheckCard";
 import { InboundSyncJobPanel } from "@/components/ops/InboundSyncJobPanel";
 import { AftersalesSyncCards } from "@/components/ops/AftersalesSyncCards";
+import { OutboundSyncCards } from "@/components/ops/OutboundSyncCards";
 
 // ============================================================
 // Types & helpers
@@ -903,7 +904,7 @@ export default function JstDataIntegrationPage() {
 
 
             <TabsContent value="outbound" className="m-0">
-              <PlaceholderTab title="出库 API（暂未接入）" hint="后续接入。" />
+              <OutboundSyncCards />
             </TabsContent>
             <TabsContent value="aftersales" className="m-0">
               <AftersalesSyncCards />
