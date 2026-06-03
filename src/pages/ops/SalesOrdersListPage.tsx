@@ -16,6 +16,7 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
 import { Search, Download, FileJson, ArrowUp, ArrowDown, ChevronsUpDown } from "lucide-react";
+import { RemainingShipTime } from "@/components/ops/RemainingShipTime";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -109,7 +110,7 @@ function useOrderList(filters: Filters, page: number, sortKey: SortKey, sortDir:
     queryKey: ["sales_orders_list", filters, page, sortKey, sortDir],
     queryFn: async () => {
       let q = supabase.from("jst_sales_orders")
-        .select("id, jst_o_id, so_id, shop_id, shop_name, status, internal_order_type, internal_order_type_name, order_type, created_time, modified_time, pay_time, paid_amount, pay_amount, io_id, io_date, l_id, lc_id, logistics_company", { count: "exact" });
+        .select("id, jst_o_id, so_id, shop_id, shop_name, status, internal_order_type, internal_order_type_name, order_type, created_time, modified_time, pay_time, plan_delivery_date, paid_amount, pay_amount, io_id, io_date, l_id, lc_id, logistics_company", { count: "exact" });
       q = applyFilters(q, filters);
       q = q.order(sortKey, { ascending: sortDir === "asc", nullsFirst: false });
       if (sortKey !== "jst_o_id") {
@@ -264,15 +265,15 @@ export default function SalesOrdersListPage() {
   const onExport = () => {
     const rows = listQ.data?.rows ?? [];
     if (!rows.length) return toast({ title: "无订单数据可导出" });
-    const headers = ["修改时间", "创建时间", "支付时间", "线上订单号", "聚水潭单号", "店铺", "状态", "实付金额", "商品件数", "出库单号", "物流单号", "物流公司"];
-    const lines = [headers.join(",")];
-    for (const r of rows) {
-      lines.push([
-        formatDateTimeCN(r.modified_time), formatDateTimeCN(r.created_time), formatDateTimeCN(r.pay_time),
-        r.so_id ?? "", r.jst_o_id ?? "", r.shop_name ?? "", r.status ?? "",
-        Number(r.paid_amount ?? 0).toFixed(2), r.item_count, r.io_id ?? "", r.l_id ?? "", r.logistics_company ?? "",
-      ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
-    }
+      const headers = ["线上订单号", "聚水潭单号", "店铺", "状态", "订单类型", "支付时间", "约定发货时间", "实付金额", "商品件数", "出库单号", "物流单号", "物流公司"];
+      const lines = [headers.join(",")];
+      for (const r of rows) {
+        lines.push([
+          r.so_id ?? "", r.jst_o_id ?? "", r.shop_name ?? "", r.status ?? "", r.internal_order_type_name ?? "",
+          formatDateTimeCN(r.pay_time), formatDateTimeCN(r.plan_delivery_date),
+          Number(r.paid_amount ?? 0).toFixed(2), r.item_count, r.io_id ?? "", r.l_id ?? "", r.logistics_company ?? "",
+        ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
+      }
     const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -382,9 +383,8 @@ export default function SalesOrdersListPage() {
               <SortHead sortKey="shop_name" currentKey={sortKey} dir={sortDir} onSort={onSort}>店铺</SortHead>
               <SortHead sortKey="status" currentKey={sortKey} dir={sortDir} onSort={onSort}>状态</SortHead>
               <TableHead>订单类型</TableHead>
-              <SortHead sortKey="created_time" currentKey={sortKey} dir={sortDir} onSort={onSort}>创建时间</SortHead>
-              <SortHead sortKey="modified_time" currentKey={sortKey} dir={sortDir} onSort={onSort}>修改时间</SortHead>
               <SortHead sortKey="pay_time" currentKey={sortKey} dir={sortDir} onSort={onSort}>支付时间</SortHead>
+              <TableHead>剩余发货时间</TableHead>
               <SortHead sortKey="paid_amount" currentKey={sortKey} dir={sortDir} onSort={onSort} align="right">实付金额</SortHead>
               <TableHead className="text-right">商品件数</TableHead>
               <TableHead>出库单号</TableHead>
@@ -393,10 +393,10 @@ export default function SalesOrdersListPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {listQ.isLoading && <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">加载中...</TableCell></TableRow>}
-            {listQ.error && <TableRow><TableCell colSpan={13} className="text-center py-12 text-rose-600">读取失败：{(listQ.error as any).message}</TableCell></TableRow>}
+            {listQ.isLoading && <TableRow><TableCell colSpan={12} className="text-center py-12 text-muted-foreground">加载中...</TableCell></TableRow>}
+            {listQ.error && <TableRow><TableCell colSpan={12} className="text-center py-12 text-rose-600">读取失败：{(listQ.error as any).message}</TableCell></TableRow>}
             {!listQ.isLoading && !listQ.error && (listQ.data?.rows.length ?? 0) === 0 && (
-              <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
+              <TableRow><TableCell colSpan={12} className="text-center py-12 text-muted-foreground">
                 暂无订单。请到「聚水潭同步 → 订单 API」发起一次同步，或扩大日期范围。
               </TableCell></TableRow>
             )}
@@ -407,9 +407,8 @@ export default function SalesOrdersListPage() {
                 <TableCell className="text-xs">{r.shop_name || r.shop_id || "-"}</TableCell>
                 <TableCell><Badge variant="outline">{zhStatus(r.status)}</Badge></TableCell>
                 <TableCell><Badge variant="secondary">{r.internal_order_type_name || "待识别"}</Badge></TableCell>
-                <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.created_time, { withSeconds: false })}</TableCell>
-                <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.modified_time, { withSeconds: false })}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.pay_time, { withSeconds: false })}</TableCell>
+                <TableCell><RemainingShipTime planDeliveryDate={r.plan_delivery_date} shipped={!!r.io_id || !!r.io_date} /></TableCell>
                 <TableCell className="text-right tabular-nums">{r.paid_amount > 0 ? fmtMoney(r.paid_amount) : "-"}</TableCell>
                 <TableCell className="text-right">{fmtInt(r.item_count)}</TableCell>
                 <TableCell className="font-mono text-xs">{r.io_id ?? "-"}</TableCell>
@@ -458,6 +457,7 @@ export default function SalesOrdersListPage() {
                   <div><span className="text-muted-foreground">创建时间：</span>{formatDateTimeCN(detailRow.created_time)}</div>
                   <div><span className="text-muted-foreground">修改时间：</span>{formatDateTimeCN(detailRow.modified_time)}</div>
                   <div><span className="text-muted-foreground">支付时间：</span>{formatDateTimeCN(detailRow.pay_time)}</div>
+                  <div><span className="text-muted-foreground">约定发货时间：</span>{formatDateTimeCN(detailRow.plan_delivery_date)}</div>
                   <div><span className="text-muted-foreground">出库单号：</span>{detailRow.io_id ?? "-"}</div>
                   <div><span className="text-muted-foreground">出库时间：</span>{formatDateTimeCN(detailRow.io_date)}</div>
                   <div><span className="text-muted-foreground">物流公司：</span>{detailRow.logistics_company || "-"}</div>
