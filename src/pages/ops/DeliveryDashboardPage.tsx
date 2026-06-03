@@ -69,7 +69,8 @@ interface RawItem {
   product_image_url: string | null;
   purchase_qty: number;
   received_qty: number;
-  unreceived_qty: number;
+  unreceived_qty: number;       // = effective_pending_qty（已应用容差/超交/手动完结）
+  raw_unreceived_qty?: number;  // 原始差异（不应用容差）
   amount: number;
   unit_price: number;
   delivery_date: string | null;
@@ -77,6 +78,8 @@ interface RawItem {
   supplier_name: string;
   po_status: string;
   po_date: string | null;
+  _completion_type?: string;
+  _is_completed?: boolean;
 }
 
 function useDeliveryItems() {
