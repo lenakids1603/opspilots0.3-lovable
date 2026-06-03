@@ -198,7 +198,10 @@ export async function callOpenweb(methodPath: string, biz: Record<string, unknow
     return await callOpenweb(methodPath, biz, 2);
   }
   if (!isOk) {
-    throw new Error(`聚水潭 ${methodPath} 失败 code=${code} msg=${msg || text.slice(0, 200)}`);
+    const err: any = new Error(`聚水潭 ${methodPath} 失败 code=${code} msg=${msg || text.slice(0, 200)}`);
+    err.code = code; err.apiMsg = msg; err.path = methodPath; err.url = url;
+    err.requestId = json.request_id ?? json.requestId ?? null;
+    throw err;
   }
   return json.data ?? json;
 }
