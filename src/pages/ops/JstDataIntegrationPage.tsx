@@ -404,6 +404,19 @@ export default function JstDataIntegrationPage() {
   const inventoryExtra = (metrics["inventory_summary"]?.metric_extra ?? {}) as any;
   const salesExtra = (metrics["sales_summary"]?.metric_extra ?? {}) as any;
   const fulfillmentExtra = (metrics["fulfillment_summary"]?.metric_extra ?? {}) as any;
+  const refundCountQ = useQuery({
+    queryKey: ["jst_refund_orders_count"],
+    queryFn: async () => {
+      const [{ count: refundCount }, { data: lastLog }] = await Promise.all([
+        supabase.from("jst_refund_orders").select("id", { count: "exact", head: true }),
+        supabase.from("jst_sync_logs").select("status,ended_at,started_at")
+          .in("sync_type", ["refund_orders", "aftersale_received"])
+          .order("started_at", { ascending: false }).limit(1).maybeSingle(),
+      ]);
+      return { count: refundCount ?? 0, lastLog };
+    },
+    refetchInterval: 10000,
+  });
   const globalMetric = metrics["global_status"];
   const globalExtra = (globalMetric?.metric_extra ?? {}) as Record<string, any>;
 
