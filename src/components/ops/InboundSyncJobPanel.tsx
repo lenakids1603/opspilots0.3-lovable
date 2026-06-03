@@ -29,6 +29,13 @@ const STATUS_COLOR: Record<string, string> = {
   waiting_next_tick: "bg-blue-100 text-blue-700",
 };
 
+export interface SyncPresetButton {
+  label: string;
+  /** body passed to start action (merged with action name). e.g. { hours: 1 } / { days: 3 } / { start_time, end_time, requested_range } */
+  body: Record<string, unknown>;
+  variant?: "default" | "outline";
+}
+
 interface Props {
   onJobFinished?: (job: any) => void;
   title?: string;
@@ -45,6 +52,8 @@ interface Props {
   unitLabel?: string;
   emptyText?: string;
   toastTitle?: string;
+  /** Override the default 1d/7d/30d buttons */
+  presets?: SyncPresetButton[];
 }
 
 export function InboundSyncJobPanel({
@@ -59,7 +68,9 @@ export function InboundSyncJobPanel({
   unitLabel = "入库单",
   emptyText,
   toastTitle,
+  presets,
 }: Props) {
+
   const qc = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
   const [tickError, setTickError] = useState<string | null>(null);
@@ -111,13 +122,9 @@ export function InboundSyncJobPanel({
   });
 
   const startMut = useMutation({
-    mutationFn: async (days: number) => {
+    mutationFn: async (body: Record<string, unknown>) => {
       const { data, error } = await supabase.functions.invoke(functionName, {
-        body: {
-          action: startAction,
-          days,
-          requested_range: days <= 1 ? "1d" : days <= 7 ? "7d" : "30d",
-        },
+        body: { action: startAction, ...body },
       });
       if (error) throw new Error(error.message);
       if (data?.ok === false) throw new Error(data?.error ?? "启动失败");
@@ -135,6 +142,7 @@ export function InboundSyncJobPanel({
     },
     onError: (e: any) => toast({ title: "启动同步失败", description: e.message, variant: "destructive" }),
   });
+
 
   const tickMut = useMutation({
     mutationFn: async (id: string) => {
@@ -218,17 +226,21 @@ export function InboundSyncJobPanel({
           <div className="flex-1" />
           {showStartButtons && (
             <div className="flex flex-wrap gap-2">
-              <Button size="default" variant="default" className="h-9" disabled={startMut.isPending}
-                onClick={() => startMut.mutate(1)}>
-                <RefreshCw className={"w-4 h-4 mr-1 " + (startMut.isPending ? "animate-spin" : "")} />
-                同步最近 1 天
-              </Button>
-              <Button size="default" variant="outline" className="h-9 border-primary/40 text-primary hover:bg-primary/5"
-                disabled={startMut.isPending} onClick={() => startMut.mutate(7)}>同步最近 7 天</Button>
-              <Button size="default" variant="outline" className="h-9 border-primary/40 text-primary hover:bg-primary/5"
-                disabled={startMut.isPending} onClick={() => startMut.mutate(30)}>同步最近 30 天</Button>
+              {(presets ?? [
+                { label: "同步最近 1 天", body: { days: 1, requested_range: "1d" }, variant: "default" as const },
+                { label: "同步最近 7 天", body: { days: 7, requested_range: "7d" }, variant: "outline" as const },
+                { label: "同步最近 30 天", body: { days: 30, requested_range: "30d" }, variant: "outline" as const },
+              ]).map((p, idx) => (
+                <Button key={idx} size="default" variant={p.variant ?? "outline"}
+                  className={p.variant === "default" ? "h-9" : "h-9 border-primary/40 text-primary hover:bg-primary/5"}
+                  disabled={startMut.isPending} onClick={() => startMut.mutate(p.body)}>
+                  {idx === 0 && <RefreshCw className={"w-4 h-4 mr-1 " + (startMut.isPending ? "animate-spin" : "")} />}
+                  {p.label}
+                </Button>
+              ))}
             </div>
           )}
+
         </div>
 
         {!j && (
