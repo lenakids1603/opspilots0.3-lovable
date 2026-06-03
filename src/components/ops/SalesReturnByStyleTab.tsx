@@ -300,18 +300,15 @@ export default function SalesReturnByStyleTab({ filters, exportRef }: Props) {
             <TableHead className="text-right">销退单数</TableHead>
             <TableHead className="text-right">原始订单数</TableHead>
             <TableHead className="text-right">SKU 数</TableHead>
-            <TableHead>最近销退</TableHead>
-            <TableHead>首次销退</TableHead>
-            <TableHead>仓库</TableHead>
             <TableHead>异常</TableHead>
             <TableHead>操作</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {aggQ.isLoading && <TableRow><TableCell colSpan={14} className="text-center py-12 text-muted-foreground">聚合中...</TableCell></TableRow>}
-          {aggQ.error && <TableRow><TableCell colSpan={14} className="text-center py-12 text-rose-600">读取失败：{(aggQ.error as any).message}</TableCell></TableRow>}
+          {aggQ.isLoading && <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">聚合中...</TableCell></TableRow>}
+          {aggQ.error && <TableRow><TableCell colSpan={11} className="text-center py-12 text-rose-600">读取失败：{(aggQ.error as any).message}</TableCell></TableRow>}
           {!aggQ.isLoading && !aggQ.error && totalCount === 0 && (
-            <TableRow><TableCell colSpan={14} className="text-center py-12 text-muted-foreground">当前筛选下没有销退款式数据</TableCell></TableRow>
+            <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">当前筛选下没有销退款式数据</TableCell></TableRow>
           )}
           {pageRows.map(r => (
             <TableRow key={r.key}>
@@ -324,9 +321,6 @@ export default function SalesReturnByStyleTab({ filters, exportRef }: Props) {
               <TableCell className="text-right">{fmtInt(r.as_set.size)}</TableCell>
               <TableCell className="text-right">{fmtInt(r.so_set.size)}</TableCell>
               <TableCell className="text-right">{fmtInt(r.sku_set.size)}</TableCell>
-              <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.last_at, { withSeconds: false })}</TableCell>
-              <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.first_at, { withSeconds: false })}</TableCell>
-              <TableCell className="text-xs">{whLabel(r.wh_set)}</TableCell>
               <TableCell>{r.abnormal ? <Badge variant="destructive">异常</Badge> : null}</TableCell>
               <TableCell><Button size="sm" variant="ghost" onClick={() => setDetailKey(r.key)}>详情</Button></TableCell>
             </TableRow>
