@@ -15,12 +15,14 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Search, Download, Activity, FileJson, ArrowUp, ArrowDown, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import {
   formatDateCN, formatDateTimeCN, beijingDayRangeToUTC, todayCN, beijingYMD,
 } from "@/lib/datetime";
+import InboundByStyleTab from "@/components/ops/InboundByStyleTab";
 
 
 const PAGE_SIZE = 20;
@@ -338,6 +340,7 @@ export default function InboundOrdersPage() {
   const [detailRow, setDetailRow] = useState<any | null>(null);
   const [rawOpen, setRawOpen] = useState<any | null>(null);
   const [diagOpen, setDiagOpen] = useState(false);
+  const [tab, setTab] = useState<"byOrder" | "byStyle">("byOrder");
 
   const [sortKey, setSortKey] = useState<InboundSortKey>("io_date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -388,6 +391,11 @@ export default function InboundOrdersPage() {
 
 
   const onExport = () => {
+    if (tab === "byStyle") {
+      // 款式 Tab 的导出在子组件内自行处理
+      toast({ title: "请使用「按款式统计」卡片内的导出按钮" });
+      return;
+    }
     const rows = listQ.data?.rows ?? [];
     if (!rows.length) return toast({ title: "无数据可导出" });
     const headers = ["入库日期", "入库单号", "JST入库ID", "采购单号", "供应商", "仓库", "状态", "入库件数", "入库金额", "明细行数", "JST修改时间"];
@@ -402,7 +410,7 @@ export default function InboundOrdersPage() {
     const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `入库单_${todayCN()}.csv`;
+    a.download = `入库单列表_${todayCN()}.csv`;
     a.click();
   };
 
@@ -412,9 +420,9 @@ export default function InboundOrdersPage() {
   return (
     <div>
       <PageHeader
-        breadcrumb={["仓库系统", "入库单"]}
-        title="入库单"
-        description="展示从聚水潭同步过来的采购入库单数据，用于查看仓库实际入库、核对采购单到货进度、核对供应商应付款。"
+        breadcrumb={["仓库系统", "入库信息"]}
+        title="入库信息"
+        description="展示从聚水潭同步过来的采购入库单数据，按入库单或按款式两种维度查看。"
         actions={
           <Button size="sm" variant="outline" onClick={() => setDiagOpen(true)}>
             <Activity className="w-4 h-4 mr-1" /> 同步诊断
