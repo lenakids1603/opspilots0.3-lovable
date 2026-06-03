@@ -682,6 +682,7 @@ export type Database = {
           batch_no: string | null
           created_at: string
           id: string
+          item_unique_key: string | null
           name: string | null
           outer_oi_id: string | null
           pic: string | null
@@ -706,6 +707,7 @@ export type Database = {
           batch_no?: string | null
           created_at?: string
           id?: string
+          item_unique_key?: string | null
           name?: string | null
           outer_oi_id?: string | null
           pic?: string | null
@@ -730,6 +732,7 @@ export type Database = {
           batch_no?: string | null
           created_at?: string
           id?: string
+          item_unique_key?: string | null
           name?: string | null
           outer_oi_id?: string | null
           pic?: string | null
