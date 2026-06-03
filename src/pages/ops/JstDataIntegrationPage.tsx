@@ -20,7 +20,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetTr
 import {
   AlertTriangle, RefreshCw, ChevronDown, FileText, Package, Warehouse, Truck,
   Search, Stethoscope, Store, Users, Building2, ShoppingCart, PackageCheck,
-  Link2, Boxes, LineChart, Plug, Download, Filter, Clock, MoreVertical,
+  Link2, Boxes, LineChart, Plug, Download, Filter, Clock, MoreVertical, StopCircle,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -380,6 +380,22 @@ export default function JstDataIntegrationPage() {
       setTimeout(() => document.getElementById("jst-sync-logs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
     },
     onError: (e: any) => toast({ title: "同步失败", description: e.message, variant: "destructive" }),
+  });
+
+  const cancelAllMut = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await (supabase as any).rpc("jst_cancel_all_running_syncs");
+      if (error) throw new Error(error.message);
+      const row = Array.isArray(data) ? data[0] : data;
+      return { logs: row?.cancelled_logs ?? 0, jobs: row?.cancelled_jobs ?? 0 };
+    },
+    onSuccess: (d) => {
+      toast({ title: "已终止运行中的同步", description: `日志 ${d.logs} 条 / 任务 ${d.jobs} 个已标记为终止` });
+      qc.invalidateQueries({ queryKey: ["jst_sync_logs", "purchase"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_runs"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_modules"] });
+    },
+    onError: (e: any) => toast({ title: "终止失败", description: e.message, variant: "destructive" }),
   });
 
   const pendingScope = purchaseSyncMut.isPending ? (purchaseSyncMut.variables as any)?.scope : null;
@@ -1016,6 +1032,20 @@ export default function JstDataIntegrationPage() {
           <div className="px-5 py-4 flex flex-wrap items-center justify-between gap-3 border-b border-border">
             <h3 className="text-sm font-semibold">同步日志</h3>
             <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-9"
+                disabled={cancelAllMut.isPending}
+                onClick={() => {
+                  if (window.confirm("确定要终止所有运行中的同步任务吗？此操作会将正在运行的同步标记为已终止。")) {
+                    cancelAllMut.mutate();
+                  }
+                }}
+              >
+                <StopCircle className="w-3.5 h-3.5 mr-1" />
+                {cancelAllMut.isPending ? "终止中…" : "终止所有进程"}
+              </Button>
               <Select value={triggerFilter} onValueChange={setTriggerFilter}>
                 <SelectTrigger className="w-[120px] h-9"><Filter className="w-3 h-3 mr-1" /><SelectValue placeholder="过滤" /></SelectTrigger>
                 <SelectContent>
