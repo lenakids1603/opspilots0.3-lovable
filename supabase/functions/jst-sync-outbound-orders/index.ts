@@ -67,13 +67,14 @@ function pickItems(r: any): { list: any[]; field: string | null } {
   return { list: [], field: null };
 }
 
-async function runSync(fromIso: string, toIso: string, logId: string) {
+async function runSync(fromIso: string, toIso: string, logId: string, fieldVariant: FieldVariant = "none") {
   const winFrom = new Date(fromIso);
   const winTo = new Date(toIso);
   let page = 1, apiCount = 0, orders = 0, items = 0, failed = 0;
   let ordersWithoutItems = 0;
   let detectedItemField: string | null = null;
   let firstTopKeys: string[] = [];
+  let lastRequestPreview: Record<string, unknown> = {};
   const sampleShapes: any[] = [];
   const errors: string[] = [];
   const errorTypes: Record<string, number> = {};
@@ -82,12 +83,8 @@ async function runSync(fromIso: string, toIso: string, logId: string) {
     while (true) {
       if (page > MAX_PAGE_NO) throw new Error(`分页超过上限 ${MAX_PAGE_NO}`);
       await sleep(RATE_DELAY_MS);
-      const requestBiz = {
-        page_index: page, page_size: PAGE_SIZE,
-        modified_begin: fmtBJ(winFrom), modified_end: fmtBJ(winTo),
-        InoutFlds: INOUT_FLDS,
-        InoutItemFlds: INOUT_ITEM_FLDS,
-      };
+      const requestBiz = buildRequestBiz(page, winFrom, winTo, fieldVariant);
+      lastRequestPreview = requestPreview(requestBiz, fieldVariant);
       console.log(`[outbound] FINAL REQUEST path=/open/${METHOD_PATH} params=${JSON.stringify(requestBiz)}`);
       const data = await callOpenweb(METHOD_PATH, requestBiz);
       apiCount++;
@@ -191,12 +188,8 @@ async function runSync(fromIso: string, toIso: string, logId: string) {
         heartbeat_at: new Date().toISOString(),
         metadata: {
           final_api_path: `/open/${METHOD_PATH}`,
-          request_fields: { InoutFlds: INOUT_FLDS, InoutItemFlds: INOUT_ITEM_FLDS },
-          request_body_preview: {
-            page_index: page, page_size: PAGE_SIZE,
-            start_time: fmtBJ(winFrom), end_time: fmtBJ(winTo),
-            InoutFlds: INOUT_FLDS, InoutItemFlds: INOUT_ITEM_FLDS,
-          },
+          request_fields: { field_variant: fieldVariant, field_params_enabled: fieldVariant !== "none" },
+          request_body_preview: lastRequestPreview,
           detected_item_field: detectedItemField,
           top_keys: firstTopKeys,
           samples: sampleShapes,
@@ -235,11 +228,8 @@ async function runSync(fromIso: string, toIso: string, logId: string) {
       error_detail: failed > 0 ? detailLines.join(" | ").slice(0, 1800) : null,
       metadata: {
         final_api_path: `/open/${METHOD_PATH}`,
-        request_fields: { InoutFlds: INOUT_FLDS, InoutItemFlds: INOUT_ITEM_FLDS },
-        request_body_preview: {
-          page_size: PAGE_SIZE, start_time: fmtBJ(winFrom), end_time: fmtBJ(winTo),
-          InoutFlds: INOUT_FLDS, InoutItemFlds: INOUT_ITEM_FLDS,
-        },
+        request_fields: { field_variant: fieldVariant, field_params_enabled: fieldVariant !== "none" },
+        request_body_preview: lastRequestPreview || requestPreview(buildRequestBiz(page, winFrom, winTo, fieldVariant), fieldVariant),
         detected_item_field: detectedItemField,
         top_keys: firstTopKeys,
         samples: sampleShapes,
@@ -279,12 +269,8 @@ async function runSync(fromIso: string, toIso: string, logId: string) {
       error_detail: detail.slice(0, 1500),
       metadata: {
         final_api_path: `/open/${METHOD_PATH}`,
-        request_fields: { InoutFlds: INOUT_FLDS, InoutItemFlds: INOUT_ITEM_FLDS },
-        request_body_preview: {
-          page_index: page, page_size: PAGE_SIZE,
-          start_time: fmtBJ(winFrom), end_time: fmtBJ(winTo),
-          InoutFlds: INOUT_FLDS, InoutItemFlds: INOUT_ITEM_FLDS,
-        },
+        request_fields: { field_variant: fieldVariant, field_params_enabled: fieldVariant !== "none" },
+        request_body_preview: lastRequestPreview || requestPreview(buildRequestBiz(page, winFrom, winTo, fieldVariant), fieldVariant),
         detected_item_field: detectedItemField,
         top_keys: firstTopKeys,
         samples: sampleShapes,
