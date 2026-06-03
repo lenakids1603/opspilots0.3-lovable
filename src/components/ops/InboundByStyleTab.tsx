@@ -16,10 +16,17 @@ import {
 } from "@/lib/datetime";
 
 const PAGE_SIZE = 20;
+const QUERY_BATCH_SIZE = 150;
+
 const fmtMoney = (n: number | null | undefined) =>
   "¥" + Number(n ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 const fmtInt = (n: number | null | undefined) =>
   Number(n ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 });
+
+function formatSupabaseError(prefix: string, error: unknown) {
+  const e = error as { message?: string; details?: string; hint?: string; code?: string };
+  return `${prefix}: ${e.message || "未知错误"}${e.details ? ` | details=${e.details}` : ""}${e.hint ? ` | hint=${e.hint}` : ""}${e.code ? ` | code=${e.code}` : ""}`;
+}
 
 export type ByStyleFilters = {
   startDate: string; endDate: string; supplier: string; warehouse: string;
@@ -103,7 +110,7 @@ function useStyleAggregate(filters: ByStyleFilters) {
         .limit(5000);
       q = applyReceiptFilters(q, filters);
       const { data: recs, error } = await q;
-      if (error) throw error;
+      if (error) throw new Error(formatSupabaseError("主表查询失败", error));
       const receipts = (recs ?? []) as ReceiptMeta[];
       const receiptMap = new Map<string, ReceiptMeta>(receipts.map(r => [r.id, r]));
       const ids = receipts.map(r => r.id);
@@ -111,14 +118,15 @@ function useStyleAggregate(filters: ByStyleFilters) {
 
       // 2) 取入库明细
       const allItems: AggItem[] = [];
-      for (let i = 0; i < ids.length; i += 800) {
-        const slice = ids.slice(i, i + 800);
+      for (let i = 0; i < ids.length; i += QUERY_BATCH_SIZE) {
+        const slice = ids.slice(i, i + QUERY_BATCH_SIZE);
         let iq = supabase.from("purchase_receipt_items")
           .select("receipt_id, sku_no, product_name, product_id, sku_id, received_qty, cost_amount, cost_price, external_po_id, external_io_id")
-          .in("receipt_id", slice);
-        if (filters.sku) iq = iq.ilike("sku_no", `%${filters.sku}%`);
+          .in("receipt_id", slice)
+          .limit(10000);
+        if (filters.sku) iq = iq.ilike("sku_no", `%${filters.sku.replace(/[,()]/g, "")}%`);
         const { data: items, error: itErr } = await iq;
-        if (itErr) throw itErr;
+        if (itErr) throw new Error(formatSupabaseError(`明细查询失败 [batch ${i}-${i + slice.length}, ids=${slice.length}]`, itErr));
         for (const it of items ?? []) {
           allItems.push({
             receipt_id: (it as any).receipt_id,
@@ -139,10 +147,11 @@ function useStyleAggregate(filters: ByStyleFilters) {
       // 2.5) 解析款号：优先 ops_products.style_no，其次 purchase_order_items.style_no，最后 SKU 数字前缀兜底
       const productIds = Array.from(new Set(allItems.map(it => it.product_id).filter(Boolean))) as string[];
       const pidToStyle = new Map<string, string>();
-      for (let i = 0; i < productIds.length; i += 500) {
-        const slice = productIds.slice(i, i + 500);
-        const { data: prods } = await supabase.from("ops_products")
+      for (let i = 0; i < productIds.length; i += QUERY_BATCH_SIZE) {
+        const slice = productIds.slice(i, i + QUERY_BATCH_SIZE);
+        const { data: prods, error: prodErr } = await supabase.from("ops_products")
           .select("id, style_no").in("id", slice);
+        if (prodErr) throw new Error(formatSupabaseError(`商品款号查询失败 [batch ${i}-${i + slice.length}, ids=${slice.length}]`, prodErr));
         for (const p of prods ?? []) {
           if ((p as any).style_no) pidToStyle.set((p as any).id, (p as any).style_no);
         }
@@ -153,10 +162,11 @@ function useStyleAggregate(filters: ByStyleFilters) {
           .map(it => it.sku_no as string)
       ));
       const skuToStyle = new Map<string, string>();
-      for (let i = 0; i < missingSkus.length; i += 500) {
-        const slice = missingSkus.slice(i, i + 500);
-        const { data: poItems } = await supabase.from("purchase_order_items")
+      for (let i = 0; i < missingSkus.length; i += QUERY_BATCH_SIZE) {
+        const slice = missingSkus.slice(i, i + QUERY_BATCH_SIZE);
+        const { data: poItems, error: poErr } = await supabase.from("purchase_order_items")
           .select("sku_no, style_no").in("sku_no", slice).not("style_no", "is", null).limit(slice.length * 5);
+        if (poErr) throw new Error(formatSupabaseError(`采购明细款号查询失败 [batch ${i}-${i + slice.length}, ids=${slice.length}]`, poErr));
         for (const p of poItems ?? []) {
           const sku = (p as any).sku_no; const st = (p as any).style_no;
           if (sku && st && !skuToStyle.has(sku)) skuToStyle.set(sku, st);
