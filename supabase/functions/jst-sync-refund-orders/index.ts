@@ -96,8 +96,15 @@ async function processRefundPage(args: ProcessPageArgs): Promise<PageResult> {
   const list = pickList(data, ["refunds", "refund_list"]);
   const hasNext = computeHasNext(data, list.length, pageSize, pageIndex);
   let mainUpserted = 0, itemUpserted = 0, failed = 0, lastErr = "";
+  let skippedDisabled = 0, skippedSyncOff = 0;
+  const skippedShopIds = new Set<string>();
+  const sk = await loadSkippedShops();
   const oIds: string[] = [], soIds: string[] = [];
   for (const r of list) {
+    const sid = shopIdOf(r);
+    const skip = shouldSkipShop(sid, sk);
+    if (skip === "disabled") { skippedDisabled++; skippedShopIds.add(sid); continue; }
+    if (skip === "sync_off") { skippedSyncOff++; skippedShopIds.add(sid); continue; }
     try {
       itemUpserted += await upsertRefund(r); mainUpserted++;
       if (r.o_id) oIds.push(String(r.o_id));
