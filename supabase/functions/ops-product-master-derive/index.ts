@@ -264,8 +264,9 @@ function aggregate(rows: DeriveRow[]): { masters: Agg[]; orphanAliases: DeriveRo
       a = {
         sku_code: r.sku_code, jst_sku_id: r.jst_sku_id,
         product_name: null, color: null, size: null, pic: null,
+        cost_price: null,
         supplier_id: null, supplier_name: null,
-        style_no: deriveStyleNo(r.sku_code),
+        style_no: r.style_no ?? deriveStyleNo(r.sku_code),
         sources: new Set(), first: null, last: null,
         aliases: new Map(),
       };
@@ -277,9 +278,13 @@ function aggregate(rows: DeriveRow[]): { masters: Agg[]; orphanAliases: DeriveRo
     a.color = a.color ?? r.color;
     a.size = a.size ?? r.size;
     a.pic = a.pic ?? r.pic;
+    // 成本优先取入库单的实际成本；其次采购单价
+    if (r.cost_price != null) {
+      if (a.cost_price == null || r.source === "receipt") a.cost_price = r.cost_price;
+    }
     a.supplier_id = a.supplier_id ?? r.supplier_id;
     a.supplier_name = a.supplier_name ?? r.supplier_name;
-    a.style_no = a.style_no ?? deriveStyleNo(a.sku_code);
+    a.style_no = a.style_no ?? r.style_no ?? deriveStyleNo(a.sku_code);
     a.sources.add(r.source);
     if (r.ts) {
       if (!a.first || r.ts < a.first) a.first = r.ts;
