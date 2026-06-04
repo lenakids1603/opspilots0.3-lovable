@@ -6,7 +6,7 @@
 //   - (无 action) 兼容旧的一次性后台同步, 可用于 cron
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import {
-  admin, callOpenweb, fmtBJ, parseJstBeijingDateTime, parseHasNext,
+  admin, callOpenweb, fmtBJ, parseJstBeijingDateTime, computeHasNext, pickList, pickItemsArray,
   resolveCaller, resolveWindow, sleep, RATE_DELAY_MS, MAX_PAGE_NO,
 } from "../_shared/jst-client.ts";
 import { handleJobActions, PageResult, ProcessPageArgs } from "../_shared/jst-sync-job.ts";
