@@ -167,7 +167,9 @@ Deno.serve(async (req) => {
     const caller = await resolveCaller(req);
     const cronSecret = req.headers.get("x-cron-secret") ?? "";
     const okCron = !!Deno.env.get("JST_SYNC_CRON_SECRET") && cronSecret === Deno.env.get("JST_SYNC_CRON_SECRET");
-    if (!okCron && !caller.isAdmin) {
+    const internalTick = req.headers.get("x-internal-tick") ?? "";
+    const okInternal = !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") && internalTick === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!okCron && !okInternal && !caller.isAdmin) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -181,7 +183,15 @@ Deno.serve(async (req) => {
       startActionName: "start_outbound_job",
       tickActionName: "tick_outbound_job",
       cancelActionName: "cancel_outbound_job",
-      config: { pageSize: PAGE_SIZE, maxWindowDays: 0.25, maxPagesPerRun: 2, timeBudgetSeconds: 35 },
+      functionName: "jst-sync-outbound-orders",
+      // 1 小时窗口，2 页/35s，每页 50；深分页(>10 页) 自动主动拆分
+      config: {
+        pageSize: PAGE_SIZE,
+        maxWindowDays: 1 / 24,
+        maxPagesPerRun: 2,
+        timeBudgetSeconds: 35,
+        proactiveSplitAfterPage: 10,
+      },
       resolveWindowFromBody: (b) => resolveWindow(b),
     });
     if (jobResp) {
