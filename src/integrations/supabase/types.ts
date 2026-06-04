@@ -547,7 +547,7 @@ export type Database = {
           batch_no: string | null
           created_at: string
           id: string
-          item_unique_key: string | null
+          item_unique_key: string
           name: string | null
           pic: string | null
           properties_value: string | null
@@ -567,7 +567,7 @@ export type Database = {
           batch_no?: string | null
           created_at?: string
           id?: string
-          item_unique_key?: string | null
+          item_unique_key: string
           name?: string | null
           pic?: string | null
           properties_value?: string | null
@@ -587,7 +587,7 @@ export type Database = {
           batch_no?: string | null
           created_at?: string
           id?: string
-          item_unique_key?: string | null
+          item_unique_key?: string
           name?: string | null
           pic?: string | null
           properties_value?: string | null
@@ -624,7 +624,7 @@ export type Database = {
           outer_as_id: string | null
           raw_data: Json | null
           received_date: string | null
-          received_unique_key: string | null
+          received_unique_key: string
           shop_id: string | null
           shop_name: string | null
           so_id: string | null
@@ -647,7 +647,7 @@ export type Database = {
           outer_as_id?: string | null
           raw_data?: Json | null
           received_date?: string | null
-          received_unique_key?: string | null
+          received_unique_key: string
           shop_id?: string | null
           shop_name?: string | null
           so_id?: string | null
@@ -670,7 +670,7 @@ export type Database = {
           outer_as_id?: string | null
           raw_data?: Json | null
           received_date?: string | null
-          received_unique_key?: string | null
+          received_unique_key?: string
           shop_id?: string | null
           shop_name?: string | null
           so_id?: string | null
