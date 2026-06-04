@@ -17,11 +17,13 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession:
 type DeriveRow = {
   sku_code: string | null;
   jst_sku_id: string | null;
+  style_no: string | null;
   product_name: string | null;
   sku_name: string | null;
   color: string | null;
   size: string | null;
   pic: string | null;
+  cost_price: number | null;
   supplier_id: string | null;
   supplier_name: string | null;
   shop_id: string | null;
