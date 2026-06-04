@@ -817,27 +817,42 @@ async function syncSalesRefund(runId: string, days: number, allowSummary: boolea
 }
 
 // ---------- 店铺映射前置校验 (sales_refund 等真实业务同步前调用) ----------
-// 规则:仅"待处理 (unmapped/pending)"店铺会阻塞正式销售汇总;
-// 已忽略 (ignored) 视为业务上已处理 (历史废弃 / 个体户已注销),不阻塞;
-// 无主体 / 无平台 / 重复绑定的检查仅针对"已映射 (mapped)"店铺。
+// 规则:仅"启用 (status='active') 且 参与订单同步 (is_order_sync_enabled=true)"的店铺参与阻塞判定。
+// 已停用 / 已关闭订单同步 / 已忽略 (mapping_status='ignored') 的店铺不阻塞同步。
+// 无主体 / 无平台 / 重复绑定的检查仅针对"已映射 (mapped)"且关联店铺仍启用并参与同步的店铺。
 async function shopMappingPrecheck() {
-  const { data } = await admin.from("jst_shop_mappings")
-    .select("matched_shop_id, matched_business_entity_id, matched_platform_id, mapping_status");
-  const rows = (data ?? []) as any[];
+  const [{ data: maps }, { data: shops }] = await Promise.all([
+    admin.from("jst_shop_mappings")
+      .select("matched_shop_id, matched_business_entity_id, matched_platform_id, mapping_status"),
+    admin.from("shops")
+      .select("id, status, is_ignored, is_order_sync_enabled")
+      .is("deleted_at", null),
+  ]);
+  const rows = (maps ?? []) as any[];
+  const shopMap = new Map<string, any>();
+  (shops ?? []).forEach((s: any) => shopMap.set(s.id, s));
+  const isActiveAndSyncing = (s: any) =>
+    !!s && s.is_ignored === false && (s.status ?? "active") === "active" && (s.is_order_sync_enabled ?? true) === true;
+
   const total = rows.length;
-  const mappedRows = rows.filter(r => r.mapping_status === "mapped");
   const ignored = rows.filter(r => r.mapping_status === "ignored").length;
-  const pending = total - mappedRows.length - ignored;
-  const noEntity = mappedRows.filter(r => !r.matched_business_entity_id).length;
-  const noPlatform = mappedRows.filter(r => !r.matched_platform_id).length;
+  const mappedRows = rows.filter(r => r.mapping_status === "mapped");
+  const participating = mappedRows.filter(r => isActiveAndSyncing(r.matched_shop_id ? shopMap.get(r.matched_shop_id) : null));
+  const pendingRows = rows.filter(r => r.mapping_status !== "mapped" && r.mapping_status !== "ignored");
+  const pending = pendingRows.filter(r => {
+    const s = r.matched_shop_id ? shopMap.get(r.matched_shop_id) : null;
+    return !s ? true : isActiveAndSyncing(s);
+  }).length;
+  const noEntity = participating.filter(r => !r.matched_business_entity_id).length;
+  const noPlatform = participating.filter(r => !r.matched_platform_id).length;
   const shopCount = new Map<string, number>();
-  mappedRows.forEach(r => { if (r.matched_shop_id) shopCount.set(r.matched_shop_id, (shopCount.get(r.matched_shop_id) ?? 0) + 1); });
+  participating.forEach(r => { if (r.matched_shop_id) shopCount.set(r.matched_shop_id, (shopCount.get(r.matched_shop_id) ?? 0) + 1); });
   const dupCount = Array.from(shopCount.values()).filter(n => n > 1).length;
   const blocking = pending > 0 || noEntity > 0 || noPlatform > 0 || dupCount > 0;
   return {
     blocking, pending, unmapped: pending, ignored, mapped: mappedRows.length, total,
     noEntity, noPlatform, dupCount,
-    summary: `共 ${total},已映射 ${mappedRows.length},已忽略 ${ignored},待处理 ${pending};已映射中无主体 ${noEntity},无平台 ${noPlatform},重复 ${dupCount}`,
+    summary: `共 ${total},已映射 ${mappedRows.length},已忽略 ${ignored},待处理 ${pending}(仅含启用+参与同步);参与统计 ${participating.length},其中无主体 ${noEntity},无平台 ${noPlatform},重复 ${dupCount}`,
   };
 }
 
