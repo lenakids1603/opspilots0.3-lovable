@@ -1,82 +1,81 @@
-## 目标
+# 商品模块设计方案（第一阶段）
 
-在现有 `/data-center/jst-integration` 页面的「售后API」模块内，接入聚水潭售后同步功能。仅做同步层与最小化 UI 改造，不做分析页。
+明确不做的事：**不**开发"全量同步聚水潭 60 万条商品"按钮；**不**把平台商品记录展示在商品资料主列表；**不**批量下载图片。
 
 ---
 
-## 一、数据库 migration（一次性提交）
+## 一、数据库结构
 
-新增 4 张表 + GRANT + RLS（沿用现有 `is_ops_internal` / `has_ops_role admin` 规则，与 jst_* 系列一致）。
+### 1. `ops_products_master` — 商品主档（内部 SKU 维度，一条 SKU 一行）
+字段：`id, style_code, sku_code, product_name, color, size, supplier_id, supplier_name, cost_price, season, category, main_image_url, status, first_seen_at, last_seen_at, source(订单/采购/入库/出库/销退/手工/聚水潭), created_at, updated_at`
 
-1. **`jst_refund_orders`** — 退货退款单主表（`as_id` 唯一）
-2. **`jst_refund_order_items`** — 退货退款单明细（`refund_order_id` cascade；幂等键：`as_id + COALESCE(asi_id, sku_id||'|'||outer_oi_id)`，用部分唯一索引实现）
-3. **`jst_aftersale_received_orders`** — 销售退仓主表（`as_id` 唯一）
-4. **`jst_aftersale_received_items`** — 销售退仓明细（cascade）
+去重唯一键（按优先级）：
+- `sku_code` 非空时唯一
+- 否则 `jst_sku_id`（写在 mapping 表，主档通过 mapping 反查）
+- 否则 `(style_code, color, size)` 兜底唯一
 
-字段按用户给出的列表落地，全部带 `raw_data jsonb`、`synced_at/created_at/updated_at`。
+> 沿用项目现有 `ops_skus` / `ops_products` 表的可能性需确认；若已包含等价字段，复用并补字段，不重复建表。
 
-RLS：`is_ops_internal` 读，`admin` 全权限；GRANT 给 `authenticated` + `service_role`，不给 `anon`。
+### 2. `ops_product_online_mappings` — 线上商品映射（平台/店铺维度，可多条）
+字段：`id, product_master_id(FK), sku_code, jst_item_id, jst_sku_id, platform, shop_id, shop_name, online_item_code, online_sku_code, online_product_name, online_sku_name, online_status, modified_at, raw_data jsonb, created_at, updated_at`
+唯一键：`(shop_id, online_sku_code)` 或 `(jst_sku_id, shop_id)`。
 
-复用现有 `jst_sync_logs` / `jst_sync_jobs` 表，不新建日志体系。`sync_type` 新增两个取值：`refund_orders`、`aftersale_received`（只是 text 取值约定，无 schema 变更）。
+### 3. `ops_product_sync_logs` — 商品同步日志
+字段：`sync_type, status, started_at, finished_at, total_count, success_count, failed_count, error_message, cursor, date_range, created_at`
+（或直接复用现有 `jst_sync_logs`，新增 `sync_type` 取值约定。）
+
+### 4. `ops_product_mapping_exceptions` — 映射异常
+字段：`shop_id, shop_name, platform, online_item_code, online_sku_code, order_no, reason, status(pending/resolved/ignored), raw_data jsonb, created_at`
+
+RLS：沿用 `is_ops_internal` 读、`admin` 写；GRANT 给 `authenticated` + `service_role`。
 
 ---
 
 ## 二、Edge Functions
 
-新增两个独立函数（结构对齐已有 `jst-sync-purchase-orders`，复用 token / 代理 / 签名逻辑）：
-
-- **`supabase/functions/jst-sync-refund-orders/index.ts`**
-  - 调聚水潭 `/open/refund/list/query`（按 `modified` 字段时间区间）
-  - 主表 upsert by `as_id`，明细 upsert by 幂等键
-  - 支持 `days | start_time | end_time | manual` 入参，默认 1 天
-  - page_size 取接口最大，循环到 `has_next=false`
-  - 写 `jst_sync_logs`，累计 `total_api_count / orders / items / failed`
-
-- **`supabase/functions/jst-sync-aftersale-received/index.ts`**
-  - 调聚水潭 `/open/aftersale/received/query`（销售退仓 / 实际收货）
-  - 同样的分页/幂等/日志结构
-
-两个函数都用现有 JST secrets（已配置：`JST_APP_KEY` / `JST_APP_SECRET` / `JST_ACCESS_TOKEN` / `JST_PROXY_*`）。
-
-错误（签名、token、IP 白名单、权限）全部写入 `jst_sync_logs.error_message`，前端 toast 提示。
+- `ops-product-master-derive`：从 `jst_sales_orders/_items`、采购单、入库、出库、销退表反查 SKU/款号/颜色/尺码/图片/供应商，upsert 主档；更新 `first_seen_at/last_seen_at`；遇到无主档的线上 SKU 写 `mapping_exceptions`。
+- `jst-sync-products-incremental`：仅支持小范围参数 `{days, sku_codes[], style_codes[], shop_id?}`，分页 + 断点续传 + 失败重试，写 mapping 表 + 主档 upsert，**只存图片 URL**。
+- 暂不做 full-sync 入口。
 
 ---
 
-## 三、前端改造（仅改 `JstDataIntegrationPage.tsx` 的「售后API」tab）
+## 三、前端页面
 
-替换原 `售后API（暂未接入）` 占位为两张卡片：
+### 商品资料页（`/products`）
+- 数据源：`ops_products_master`（内部 SKU 维度）
+- 列：图片 / 款号 / SKU / 名称 / 颜色 / 尺码 / 供应商 / 成本 / 关联线上商品数 / 近 7 天销量 / 库存 / 状态 / 最后出现时间
+- 顶部按钮：
+  - "从业务数据沉淀主档"（调 derive 函数）
+  - "同步近 7 天有变更商品"
+  - "同步近 30 天有订单商品"
+  - "按 SKU 同步" / "按款号同步"（输入框）
+  - "补全缺失资料"
+- **不**放"全量同步"按钮。
 
-- **卡片 A：退货退款单** — 状态 badge / 已同步记录数（`count(jst_refund_orders)`）/ 最近同步时间 / 最近状态 / 4 个按钮（1天/7天/30天/自定义范围）
-- **卡片 B：销售退仓** — 同上，数据源 `jst_aftersale_received_orders`
+### 商品详情页（`/products/:id`）
+Tab 视图：基础资料 / 线上映射（mapping 表）/ 订单 / 出库 / 采购 / 入库 / 销退退款 / 库存 / 成本。
 
-按钮通过 `supabase.functions.invoke()` 调用对应 edge function；运行中显示 spinner，结束后刷新统计与日志。
-
-**顶部「销售/退款」统计卡片**：改为读取 `jst_refund_orders` 记录数 + 取 refund/aftersale 两类最新 `ended_at` 作为「最近同步时间」，状态来自最近一次日志。
-
-**自动同步计划区域**：新增两行展示（仅 UI 展示，不实际安装 cron）：
-- 退货退款单 — 每天 03:10，最近 2 天
-- 销售退仓 — 每天 03:30，最近 2 天
-
-如果现有自动同步计划列表是从某张配置表读取的，则向该表 insert 两条记录；若是硬编码列表，则在数组里追加两项。具体接入位置在实现阶段确认。
-
-不引入新页面、不动其他 tab。
-
----
-
-## 四、不做
-
-- 不做退款原因/SKU/供应商分析
-- 不做补偿同步 cron（先只做手动 + UI 展示的每日计划）
-- 不改采购单/入库单/库存模块
-- 不删除任何现有功能
+### 映射异常页（`/products/exceptions`）
+列表 + 手动绑定到主档。
 
 ---
 
-## 五、执行顺序
+## 四、本次执行顺序
 
-1. 提交 migration（创建 4 表 + GRANT + RLS）→ 等用户批准
-2. 写两个 edge function（自动部署）
-3. 改 `JstDataIntegrationPage.tsx`：售后 tab + 顶部统计卡 + 自动计划展示
-4. 手动点同步按钮验证 → 检查 `jst_sync_logs` 与数据表行数
+1. **先确认**：现有 `ops_products` / `ops_skus` / `ops_sku_aliases` 表的字段与本方案的差距，决定"复用扩字段"还是"新建 master 表"。
+2. 提交 migration（4 表 + GRANT + RLS）。
+3. 写 `ops-product-master-derive` edge function（从业务数据沉淀）。
+4. 改商品资料页：只展示主档 + 顶部按钮组（不含全量同步）。
+5. 商品详情页骨架（先放基础资料 + 线上映射两个 tab，其余 tab 占位）。
+6. 映射异常页骨架。
+7. 增量同步 edge function 留到第二批，本轮不实现。
 
-确认后我就按这个顺序开始。
+---
+
+## 五、待确认
+
+执行前请确认两点：
+1. 是**新建** `ops_products_master` 表，还是**扩展现有** `ops_products` / `ops_skus`？（看到项目里已有这两张表）
+2. 同步日志是**新建** `ops_product_sync_logs`，还是**复用** `jst_sync_logs`？
+
+确认后即按上面顺序开工。
