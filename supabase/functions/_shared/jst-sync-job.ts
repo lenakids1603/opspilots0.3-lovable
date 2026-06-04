@@ -407,8 +407,8 @@ export async function handleJobActions(opts: {
   if (opts.action === opts.cancelActionName) {
     const jobId = String(opts.body.job_id ?? "");
     if (!jobId) throw new Error("缺少 job_id");
-    await cancelJob(jobId);
-    return new Response(JSON.stringify({ ok: true }), { headers });
+    const result = await cancelJob(jobId);
+    return new Response(JSON.stringify(result), { headers, status: result.ok ? 200 : 404 });
   }
 
   return null;
