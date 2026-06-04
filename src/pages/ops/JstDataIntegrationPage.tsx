@@ -903,6 +903,7 @@ export default function JstDataIntegrationPage() {
                 聚水潭销售订单同步（断点续跑）：调用 <code>/open/orders/single/query</code>，按修改时间窗口分页拉取，自动 upsert 到 <code>jst_sales_orders</code> + <code>jst_sales_order_items</code>。隐私字段（收件人姓名/手机/详细地址）不会落库，仅保留省/市/区用于地域分析。
               </div>
               <InboundSyncJobPanel
+                cancelAllVersion={cancelAllVersion}
                 title="销售订单同步任务（断点续跑）"
                 syncType="sales_orders"
                 functionName="jst-sync-sales-orders"
@@ -947,6 +948,7 @@ export default function JstDataIntegrationPage() {
             {/* ====== 采购API ====== */}
             <TabsContent value="purchase" className="m-0 p-5 space-y-3">
               <InboundSyncJobPanel
+                cancelAllVersion={cancelAllVersion}
                 title="采购单同步任务（断点续跑）"
                 syncType="purchase_orders"
                 startAction="start_po_job"
@@ -969,6 +971,7 @@ export default function JstDataIntegrationPage() {
             {/* ====== 入库API ====== */}
             <TabsContent value="receipt" className="m-0 p-5 space-y-3">
               <InboundSyncJobPanel
+                cancelAllVersion={cancelAllVersion}
                 title="入库单同步任务（断点续跑）"
                 syncType="purchase_inbound_orders"
                 unitLabel="入库单"
@@ -991,6 +994,7 @@ export default function JstDataIntegrationPage() {
                 聚水潭销售出库同步（只读 · 断点续跑）：调用 <code>/open/orders/out/simple/query</code>，按修改时间窗口分页拉取，自动 upsert <code>jst_outbound_orders</code> + 明细表。出库单列表请前往【仓库系统 / 出库信息】查看。
               </div>
               <InboundSyncJobPanel
+                cancelAllVersion={cancelAllVersion}
                 title="销售出库同步任务（断点续跑）"
                 syncType="outbound_orders"
                 functionName="jst-sync-outbound-orders"
@@ -1006,6 +1010,7 @@ export default function JstDataIntegrationPage() {
                 聚水潭售后同步（断点续跑）：分为「退货退款单」（关注退款金额/状态/原因）和「销售退仓」（关注仓库实际收货 SKU 与数量），两类数据独立入库，互不混淆。
               </div>
               <InboundSyncJobPanel
+                cancelAllVersion={cancelAllVersion}
                 title="退货退款单同步任务（断点续跑）"
                 syncType="refund_orders"
                 functionName="jst-sync-refund-orders"
@@ -1016,6 +1021,7 @@ export default function JstDataIntegrationPage() {
                 toastTitle="已创建退货退款单同步任务"
               />
               <InboundSyncJobPanel
+                cancelAllVersion={cancelAllVersion}
                 title="销售退仓同步任务（断点续跑）"
                 syncType="aftersale_received"
                 functionName="jst-sync-aftersale-received"
