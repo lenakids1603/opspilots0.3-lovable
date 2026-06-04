@@ -47,13 +47,8 @@ function str(v: any): string | null {
   return s.length === 0 ? null : s;
 }
 
-const ITEM_FIELDS = ["items", "orderitems", "order_items", "item_list", "details", "skus"];
 function pickItems(o: any): any[] {
-  for (const f of ITEM_FIELDS) {
-    const v = o?.[f];
-    if (Array.isArray(v) && v.length > 0) return v;
-  }
-  return [];
+  return pickItemsArray(o);
 }
 
 async function upsertSalesOrder(o: any): Promise<{ orderId: string; itemsUpserted: number }> {
