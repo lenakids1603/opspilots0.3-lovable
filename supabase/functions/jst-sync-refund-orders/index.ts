@@ -172,6 +172,11 @@ Deno.serve(async (req) => {
     const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
     const action: string = body.action ?? "";
 
+    if (action === "debug_refund_params") {
+      const out = await runDebugParams(body);
+      return new Response(JSON.stringify(out), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     const jobResp = await handleJobActions({
       action, body, syncType: SYNC_TYPE, callerUid: caller.uid,
       processPage: processRefundPage,
@@ -179,13 +184,14 @@ Deno.serve(async (req) => {
       tickActionName: "tick_refund_job",
       cancelActionName: "cancel_refund_job",
       functionName: "jst-sync-refund-orders",
-      config: { pageSize: PAGE_SIZE, maxWindowDays: 1, maxPagesPerRun: 3, timeBudgetSeconds: 40, proactiveSplitAfterPage: 12 },
+      config: { pageSize: PAGE_SIZE, maxWindowDays: 1, maxPagesPerRun: 2, timeBudgetSeconds: 35, proactiveSplitAfterPage: 10 },
       resolveWindowFromBody: (b) => resolveWindow(b),
     });
     if (jobResp) {
       const text = await jobResp.text();
       return new Response(text, { status: jobResp.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
+
 
     const { from, to } = resolveWindow(body);
     const { data: log, error: logErr } = await admin.from("jst_sync_logs").insert({
