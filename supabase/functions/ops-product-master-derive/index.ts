@@ -341,29 +341,39 @@ async function upsertMasters(masters: Agg[]) {
   const existing = new Map<string, any>();
   const idByKey = new Map<string, string>();
 
+async function upsertMasters(masters: Agg[]) {
+  let inserted = 0, updated = 0;
+  const skuCodes = Array.from(new Set(masters.map(m => m.sku_code).filter(Boolean))) as string[];
+  const jstIds = Array.from(new Set(masters.map(m => m.jst_sku_id).filter(Boolean))) as string[];
+
+  const existingById = new Map<string, any>(); // id -> row
+  const idBySku = new Map<string, string>();
+  const idByJst = new Map<string, string>();
+
   if (skuCodes.length) {
-    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id").in("sku_code", skuCodes);
+    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id, product_name, sku_name, style_no, color, size, sku_image_url, external_image_url, supplier_id, cost_price, first_seen_at, source").in("sku_code", skuCodes);
     (data ?? []).forEach((r: any) => {
-      existing.set(`sku:${r.sku_code}`, r);
-      idByKey.set(`sku:${r.sku_code}`, r.id);
-      if (r.jst_sku_id) idByKey.set(`jst:${r.jst_sku_id}`, r.id);
+      existingById.set(r.id, r);
+      if (r.sku_code) idBySku.set(r.sku_code, r.id);
+      if (r.jst_sku_id) idByJst.set(r.jst_sku_id, r.id);
     });
   }
   if (jstIds.length) {
-    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id").in("jst_sku_id", jstIds);
+    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id, product_name, sku_name, style_no, color, size, sku_image_url, external_image_url, supplier_id, cost_price, first_seen_at, source").in("jst_sku_id", jstIds);
     (data ?? []).forEach((r: any) => {
-      const k = r.sku_code ? `sku:${r.sku_code}` : `jst:${r.jst_sku_id}`;
-      existing.set(k, r);
-      idByKey.set(`jst:${r.jst_sku_id}`, r.id);
-      if (r.sku_code) idByKey.set(`sku:${r.sku_code}`, r.id);
+      existingById.set(r.id, r);
+      if (r.sku_code) idBySku.set(r.sku_code, r.id);
+      if (r.jst_sku_id) idByJst.set(r.jst_sku_id, r.id);
     });
   }
 
-  const masterIdMap = new Map<string, string>(); // key->ops_skus.id
+  const masterIdMap = new Map<string, string>(); // agg key -> ops_skus.id
 
   for (const m of masters) {
     const keyPrimary = m.sku_code ? `sku:${m.sku_code}` : `jst:${m.jst_sku_id}`;
-    const id = idByKey.get(keyPrimary);
+    // 命中策略：优先按 sku_code，再按 jst_sku_id
+    const id = (m.sku_code && idBySku.get(m.sku_code)) || (m.jst_sku_id && idByJst.get(m.jst_sku_id)) || null;
+
     const payload = {
       sku_code: m.sku_code ?? `JST-${m.jst_sku_id}`,
       jst_sku_id: m.jst_sku_id,
@@ -383,22 +393,35 @@ async function upsertMasters(masters: Agg[]) {
     };
 
     if (id) {
-      // 仅在字段为空时补全（避免覆盖人工维护的数据）；cost_price 当来源含 receipt 时允许覆盖
-      const ex = existing.get(keyPrimary) ?? {};
+      const ex = existingById.get(id) ?? {};
       const patch: Record<string, any> = { last_seen_at: payload.last_seen_at, last_synced_at: payload.last_synced_at };
-      for (const k of ["jst_sku_id","sku_name","product_name","style_no","color","size","sku_image_url","external_image_url","supplier_id","first_seen_at","source"]) {
+      for (const k of ["jst_sku_id","sku_name","product_name","style_no","color","size","sku_image_url","external_image_url","supplier_id","first_seen_at"]) {
         if (!ex[k] && (payload as any)[k]) patch[k] = (payload as any)[k];
       }
-      // cost_price：优先采用入库来源覆盖；否则仅在原值为空时补
+      // 若原 sku_code 是 JST-xxx 占位且本次拿到了真实 sku_code，则覆盖
+      if (m.sku_code && (!ex.sku_code || /^JST-/.test(ex.sku_code))) patch.sku_code = m.sku_code;
+      // 来源累计合并
+      const prevSources = new Set((ex.source ?? "").split(",").map((s: string) => s.trim()).filter(Boolean));
+      Array.from(m.sources).forEach(s => prevSources.add(s));
+      patch.source = Array.from(prevSources).join(",");
+      // cost_price：入库来源覆盖；否则仅在原值为空时补
       if (m.cost_price != null) {
-        const sources = Array.from(m.sources);
-        if (sources.includes("receipt") || ex.cost_price == null) patch.cost_price = m.cost_price;
+        if (m.sources.has("receipt") || ex.cost_price == null) patch.cost_price = m.cost_price;
       }
       const { error } = await admin.from("ops_skus").update(patch).eq("id", id);
-      if (!error) { updated++; masterIdMap.set(keyPrimary, id); }
+      if (!error) { updated++; masterIdMap.set(keyPrimary, id);
+        // 同步更新内存索引，防止后续重复插入
+        if (m.sku_code) idBySku.set(m.sku_code, id);
+        if (m.jst_sku_id) idByJst.set(m.jst_sku_id, id);
+      }
     } else {
       const { data, error } = await admin.from("ops_skus").insert(payload).select("id").single();
-      if (!error && data) { inserted++; masterIdMap.set(keyPrimary, data.id); }
+      if (!error && data) {
+        inserted++;
+        masterIdMap.set(keyPrimary, data.id);
+        if (m.sku_code) idBySku.set(m.sku_code, data.id);
+        if (m.jst_sku_id) idByJst.set(m.jst_sku_id, data.id);
+      }
     }
   }
 
