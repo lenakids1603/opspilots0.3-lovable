@@ -12,6 +12,7 @@ import OverviewPage from "./pages/ops/OverviewPage";
 import SuppliersPage from "./pages/ops/SuppliersPage";
 import ProductsPage from "./pages/ops/ProductsPage";
 import SkusPage from "./pages/ops/SkusPage";
+import ProductMappingExceptionsPage from "./pages/ops/ProductMappingExceptionsPage";
 
 import SupplierBillsPage from "./pages/ops/SupplierBillsPage";
 import UsersPage from "./pages/ops/UsersPage";
@@ -81,6 +82,7 @@ const App = () => (
 
           {/* 商品系统 */}
           <Route path="/products/image-search" element={wrap(<OpsPlaceholder breadcrumb={["商品系统", "图片搜索入口"]} title="图片搜索入口" description="上传图片快速定位款号 / SKU（规划中）" columns={["上传时间", "图片", "匹配款号", "相似度", "操作"]} />)} />
+          <Route path="/products/exceptions" element={wrap(<ProductMappingExceptionsPage />)} />
 
           {/* 客服 / 售后 */}
           <Route path="/cs/complaints" element={wrap(<OpsPlaceholder breadcrumb={["客服 / 售后", "商品投诉登记"]} title="商品投诉登记" description="客服快速登记投诉、上传图片、关联订单与款号" columns={["投诉编号", "日期", "款号", "投诉类型", "处理状态", "操作"]} />)} />
