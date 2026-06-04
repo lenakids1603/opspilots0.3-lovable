@@ -49,6 +49,7 @@ interface Preset {
   label: string;
   days?: number;
   hours?: number;
+  minutes?: number;
   requested_range?: string;
 }
 
