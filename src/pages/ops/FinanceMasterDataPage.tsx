@@ -589,7 +589,8 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
   const [q, setQ] = useState("");
   const [pf, setPf] = useState("");
   const [ent, setEnt] = useState("");
-  const [stf, setStf] = useState("");
+  const [activeFilter, setActiveFilter] = useState<string>(""); // ""|active|disabled
+  const [syncFilter, setSyncFilter] = useState<string>(""); // ""|on|off
   const [bindState, setBindState] = useState(initialFilter || "");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -597,7 +598,10 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
   const [sortAsc, setSortAsc] = useState<boolean>(true);
   const [bindOpen, setBindOpen] = useState(false);
   const [bindShop, setBindShop] = useState<AnyRow | null>(null);
-  useDebouncedReset([q, pf, ent, stf, bindState, pageSize], setPage);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [disableOpen, setDisableOpen] = useState(false);
+  const [disableTargets, setDisableTargets] = useState<string[]>([]);
+  useDebouncedReset([q, pf, ent, activeFilter, syncFilter, bindState, pageSize], setPage);
 
   const [bindingsByShop, setBindingsByShop] = useState<Map<string, AnyRow[]>>(new Map());
   const [accountsOpen, setAccountsOpen] = useState(false);
@@ -612,21 +616,27 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
     ]);
     setEntities(es ?? []); setPlatforms(ps ?? []); setBanks(bs ?? []);
 
-    let qry = supabase.from("shops").select("*", { count: "exact" }).is("deleted_at", null)
+    let qry = (supabase as any).from("shops").select("*", { count: "exact" }).is("deleted_at", null)
       .order(sortKey, { ascending: sortAsc, nullsFirst: false });
     const qq = q.trim();
     if (qq) qry = (qry as any).or(`name.ilike.%${qq}%,jst_shop_id.ilike.%${qq}%`);
     if (pf) qry = qry.eq("platform_id", pf);
     if (ent) qry = qry.eq("entity_id", ent);
-    if (stf) qry = qry.eq("status", stf);
+    if (activeFilter === "active") qry = qry.eq("status", "active");
+    else if (activeFilter === "disabled") qry = qry.neq("status", "active");
+    if (syncFilter === "on") qry = qry.eq("is_order_sync_enabled", true);
+    else if (syncFilter === "off") qry = qry.eq("is_order_sync_enabled", false);
     if (bindState === "bound") qry = qry.not("entity_id", "is", null);
-    else if (bindState === "unbound" || bindState === "missing_entity") qry = qry.is("entity_id", null);
-    else if (bindState === "missing_platform") qry = qry.is("platform_id", null);
+    else if (bindState === "unbound" || bindState === "missing_entity") {
+      // 缺主体仅看待处理（启用 + 参与同步）
+      qry = qry.is("entity_id", null).eq("status", "active").eq("is_order_sync_enabled", true);
+    } else if (bindState === "missing_platform") qry = qry.is("platform_id", null);
     const from = (page - 1) * pageSize;
     const { data, count, error } = await qry.range(from, from + pageSize - 1);
     setLoading(false);
     if (error) { toast({ title: "加载失败", description: error.message, variant: "destructive" }); return; }
     setRows(data ?? []); setTotal(count ?? 0);
+    setSelected(new Set());
 
     const ids = (data ?? []).map((r: any) => r.id);
     if (ids.length) {
@@ -639,7 +649,7 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
       });
       setBindingsByShop(m);
     } else setBindingsByShop(new Map());
-  }, [q, pf, ent, stf, bindState, page, pageSize, sortKey, sortAsc]);
+  }, [q, pf, ent, activeFilter, syncFilter, bindState, page, pageSize, sortKey, sortAsc]);
   useEffect(() => { load(); }, [load]);
 
   const entityMap = useMemo(() => new Map(entities.map(e => [e.id, e])), [entities]);
@@ -657,12 +667,15 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
   }, [banks]);
 
   const handleExport = async () => {
-    const { data } = await supabase.from("shops").select("*").is("deleted_at", null);
+    const { data } = await (supabase as any).from("shops").select("*").is("deleted_at", null);
     const out = (data ?? []).map((r: any) => ({
       店铺名称: r.name,
       JST店铺ID: r.jst_shop_id ?? "",
       平台: r.platform_type ?? platformMap.get(r.platform_id)?.name ?? "",
       所属经营主体: entityMap.get(r.entity_id)?.name ?? "",
+      业务状态: (r.status ?? "active") === "active" ? "启用" : "已停用",
+      订单同步: (r.is_order_sync_enabled ?? true) ? "参与同步" : "不参与同步",
+      停用原因: r.disabled_reason ?? "",
       授权状态: r.auth_status ?? "",
       店铺状态: r.shop_status_raw ?? "",
       最后同步时间: r.last_synced_at ? new Date(r.last_synced_at).toLocaleString("zh-CN") : "",
@@ -679,10 +692,39 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
     else { toast({ title: "已解除经营主体绑定" }); load(); }
   };
 
+  const askDisable = (ids: string[]) => { setDisableTargets(ids); setDisableOpen(true); };
+  const enableShops = async (ids: string[]) => {
+    if (!ids.length) return;
+    const { error } = await (supabase as any).from("shops")
+      .update({ status: "active", disabled_reason: null, disabled_at: null }).in("id", ids);
+    if (error) toast({ title: "启用失败", description: error.message, variant: "destructive" });
+    else { toast({ title: `已启用 ${ids.length} 个店铺` }); load(); }
+  };
+  const setSyncEnabled = async (ids: string[], on: boolean) => {
+    if (!ids.length) return;
+    const { error } = await (supabase as any).from("shops")
+      .update({ is_order_sync_enabled: on }).in("id", ids);
+    if (error) toast({ title: "操作失败", description: error.message, variant: "destructive" });
+    else { toast({ title: on ? `已开启 ${ids.length} 个店铺的订单同步` : `已关闭 ${ids.length} 个店铺的订单同步` }); load(); }
+  };
+
+  const toggleAll = (checked: boolean) => {
+    if (checked) setSelected(new Set(rows.map((r) => r.id)));
+    else setSelected(new Set());
+  };
+  const toggleOne = (id: string, checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+  const selectedIds = Array.from(selected);
+
   return (
     <Card className="overflow-hidden mt-4">
       <div className="px-4 py-3 border-b bg-muted/10 text-[12px] text-muted-foreground">
-        店铺资料来自聚水潭同步。本页维护店铺对应的经营主体，以及店铺与银行账户的绑定关系（一个店铺可绑定多个账户，账户与店铺为多对多）。
+        店铺资料来自聚水潭同步。历史弃用店铺可在此停用或关闭订单同步，停用后不会阻塞订单 API 同步、也不会进入财务统计。
       </div>
       <FilterRow>
         <Input placeholder="搜索店铺名 / JST 店铺ID" value={q} onChange={e => setQ(e.target.value)} className="h-9 w-64" />
@@ -692,33 +734,55 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
         <select value={ent} onChange={e => setEnt(e.target.value)} className="h-9 rounded-md border px-2 text-[13px] max-w-[180px]">
           <option value="">全部主体</option>{entities.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
         </select>
+        <select value={activeFilter} onChange={e => setActiveFilter(e.target.value)} className="h-9 rounded-md border px-2 text-[13px]">
+          <option value="">全部状态</option>
+          <option value="active">启用</option>
+          <option value="disabled">已停用</option>
+        </select>
+        <select value={syncFilter} onChange={e => setSyncFilter(e.target.value)} className="h-9 rounded-md border px-2 text-[13px]">
+          <option value="">订单同步：全部</option>
+          <option value="on">参与订单同步</option>
+          <option value="off">不参与订单同步</option>
+        </select>
         <select value={bindState} onChange={e => setBindState(e.target.value)} className="h-9 rounded-md border px-2 text-[13px]">
           <option value="">全部绑定状态</option>
           <option value="bound">已绑定主体</option>
           <option value="unbound">未绑定主体</option>
-          <option value="missing_entity">缺主体（待补）</option>
+          <option value="missing_entity">缺主体（仅待处理）</option>
           <option value="missing_platform">缺平台（待补）</option>
-        </select>
-        <select value={stf} onChange={e => setStf(e.target.value)} className="h-9 rounded-md border px-2 text-[13px]">
-          <option value="">全部状态</option><option value="active">运营中</option><option value="disabled">停用</option>
         </select>
         <div className="flex-1" />
         <Button variant="outline" size="sm" onClick={handleExport}><Download className="w-3.5 h-3.5 mr-1" />导出</Button>
       </FilterRow>
 
+      {selectedIds.length > 0 && (
+        <div className="px-4 py-2 border-b bg-amber-50/60 text-[12px] flex items-center gap-2 flex-wrap">
+          <span className="font-medium">已选 {selectedIds.length} 项：</span>
+          <Button size="sm" variant="outline" onClick={() => askDisable(selectedIds)}>批量停用</Button>
+          <Button size="sm" variant="outline" onClick={() => enableShops(selectedIds)}>批量启用</Button>
+          <Button size="sm" variant="outline" onClick={() => setSyncEnabled(selectedIds, false)}>批量关闭订单同步</Button>
+          <Button size="sm" variant="outline" onClick={() => setSyncEnabled(selectedIds, true)}>批量开启订单同步</Button>
+          <button className="text-muted-foreground hover:underline ml-auto" onClick={() => setSelected(new Set())}>取消选择</button>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <table className="w-full text-[12.5px]">
           <thead className="bg-muted/40 text-muted-foreground">
             <tr className="text-left">
-              {(["店铺名称","平台","经营主体","默认收款账户","状态","操作"]).map(h =>
+              <th className="px-3 py-2.5 w-8">
+                <input type="checkbox" checked={rows.length > 0 && selected.size === rows.length}
+                  onChange={(e) => toggleAll(e.target.checked)} />
+              </th>
+              {(["店铺名称","平台","经营主体","默认收款账户","业务状态","订单同步","操作"]).map(h =>
                 <th key={h} className="px-3 py-2.5 font-normal whitespace-nowrap">{h}</th>
               )}
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={6} className="text-center py-8 text-muted-foreground">加载中...</td></tr>}
+            {loading && <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">加载中...</td></tr>}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={6}>
+              <tr><td colSpan={8}>
                 <EmptyHint msg="暂无店铺数据。请先在【数据中心 / 聚水潭数据接入详情】同步店铺资料。" />
               </td></tr>
             )}
@@ -729,14 +793,24 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
                 ?? shopBindings.find(b => b.binding_type === "collection");
               const defBank = defaultCollection ? bankMap.get(defaultCollection.bank_account_id) : null;
               const platformName = r.platform_type || platformMap.get(r.platform_id)?.name || "-";
+              const isActive = (r.status ?? "active") === "active";
+              const syncOn = (r.is_order_sync_enabled ?? true) === true;
+              const isDisabled = !isActive;
               return (
-                <tr key={r.id} className="border-t hover:bg-muted/30">
+                <tr key={r.id} className={`border-t hover:bg-muted/30 ${isDisabled ? "opacity-70" : ""}`}>
+                  <td className="px-3 py-2.5">
+                    <input type="checkbox" checked={selected.has(r.id)} onChange={(e) => toggleOne(r.id, e.target.checked)} />
+                  </td>
                   <td className="px-3 py-2.5">
                     <div className="font-medium">{r.name}</div>
                     <div className="text-[11px] text-muted-foreground font-mono">{r.jst_shop_id ?? ""}</div>
                   </td>
                   <td className="px-3 py-2.5">{platformName}</td>
-                  <td className="px-3 py-2.5">{entity ? entity.name : <span className="text-amber-600">未绑定</span>}</td>
+                  <td className="px-3 py-2.5">
+                    {entity ? entity.name : (isActive && syncOn
+                      ? <span className="text-amber-600">未绑定</span>
+                      : <span className="text-muted-foreground">—</span>)}
+                  </td>
                   <td className="px-3 py-2.5 text-[12px]">
                     {defBank ? (
                       <div>
@@ -745,17 +819,39 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
                       </div>
                     ) : <span className="text-muted-foreground">—</span>}
                   </td>
-                  <td className="px-3 py-2.5">{r.shop_status_raw || "-"}</td>
-                  <td className="px-3 py-2.5 whitespace-nowrap">
-                    <button onClick={() => openAccounts(r)} className="text-[12px] text-primary hover:underline mr-3">
-                      {shopBindings.length > 0 ? "查看/管理账户" : "绑定账户"}
-                    </button>
-                    <button onClick={() => openBind(r)} className="text-[12px] text-muted-foreground hover:underline mr-3">
-                      {r.entity_id ? "更换主体" : "绑定主体"}
-                    </button>
-                    {r.entity_id && (
-                      <button onClick={() => unbind(r)} className="text-[12px] text-muted-foreground hover:underline">解除主体</button>
+                  <td className="px-3 py-2.5">
+                    {isActive
+                      ? <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded text-[11px]">启用</span>
+                      : <span className="inline-flex items-center gap-1 text-muted-foreground bg-muted px-1.5 py-0.5 rounded text-[11px]" title={r.disabled_reason || ""}>已停用</span>}
+                    {!isActive && r.disabled_reason && (
+                      <div className="text-[11px] text-muted-foreground mt-0.5 max-w-[180px] truncate" title={r.disabled_reason}>{r.disabled_reason}</div>
                     )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {syncOn
+                      ? <span className="inline-flex items-center gap-1 text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded text-[11px]">参与同步</span>
+                      : <span className="inline-flex items-center gap-1 text-muted-foreground bg-muted px-1.5 py-0.5 rounded text-[11px]">不参与同步</span>}
+                  </td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-[12px]">
+                    {isActive && syncOn && (
+                      <>
+                        <button onClick={() => openAccounts(r)} className="text-primary hover:underline mr-3">
+                          {shopBindings.length > 0 ? "账户" : "绑定账户"}
+                        </button>
+                        <button onClick={() => openBind(r)} className="text-muted-foreground hover:underline mr-3">
+                          {r.entity_id ? "更换主体" : "绑定主体"}
+                        </button>
+                        {r.entity_id && (
+                          <button onClick={() => unbind(r)} className="text-muted-foreground hover:underline mr-3">解除主体</button>
+                        )}
+                      </>
+                    )}
+                    {isActive
+                      ? <button onClick={() => askDisable([r.id])} className="text-rose-600 hover:underline mr-3">停用</button>
+                      : <button onClick={() => enableShops([r.id])} className="text-emerald-700 hover:underline mr-3">启用</button>}
+                    {syncOn
+                      ? <button onClick={() => setSyncEnabled([r.id], false)} className="text-muted-foreground hover:underline">关同步</button>
+                      : <button onClick={() => setSyncEnabled([r.id], true)} className="text-muted-foreground hover:underline">开同步</button>}
                   </td>
                 </tr>
               );
@@ -781,9 +877,69 @@ function ShopsTab({ initialFilter = "" }: { initialFilter?: string }) {
         banks={banks}
         onSaved={load}
       />
+      <DisableShopDialog
+        open={disableOpen}
+        onOpenChange={setDisableOpen}
+        count={disableTargets.length}
+        onConfirm={async (reason) => {
+          const { error } = await (supabase as any).from("shops")
+            .update({ status: "disabled", is_order_sync_enabled: false, disabled_reason: reason, disabled_at: new Date().toISOString() })
+            .in("id", disableTargets);
+          if (error) { toast({ title: "停用失败", description: error.message, variant: "destructive" }); return; }
+          toast({ title: `已停用 ${disableTargets.length} 个店铺，同时关闭订单同步` });
+          setDisableOpen(false); setDisableTargets([]); load();
+        }}
+      />
     </Card>
   );
 }
+
+const DISABLE_REASONS = [
+  "历史弃用店铺",
+  "原经营主体已注销",
+  "原银行账户已注销",
+  "平台店铺关闭",
+  "其他",
+];
+
+function DisableShopDialog({ open, onOpenChange, count, onConfirm }: {
+  open: boolean; onOpenChange: (v: boolean) => void; count: number;
+  onConfirm: (reason: string) => void | Promise<void>;
+}) {
+  const [preset, setPreset] = useState<string>(DISABLE_REASONS[0]);
+  const [custom, setCustom] = useState("");
+  useEffect(() => { if (open) { setPreset(DISABLE_REASONS[0]); setCustom(""); } }, [open]);
+  const finalReason = preset === "其他" ? custom.trim() : preset;
+  const canSubmit = finalReason.length > 0 && count > 0;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>停用店铺（共 {count} 个）</DialogTitle></DialogHeader>
+        <div className="space-y-2 text-[13px]">
+          <div className="text-muted-foreground text-[12px]">
+            停用后将自动关闭订单同步，订单 API 不再校验该店铺映射，财务统计也不再包含。历史档案会保留。
+          </div>
+          <div className="space-y-1.5">
+            {DISABLE_REASONS.map((r) => (
+              <label key={r} className="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="disable-reason" checked={preset === r} onChange={() => setPreset(r)} />
+                <span>{r}</span>
+              </label>
+            ))}
+          </div>
+          {preset === "其他" && (
+            <Input placeholder="请填写停用原因" value={custom} onChange={(e) => setCustom(e.target.value)} />
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+          <Button variant="destructive" disabled={!canSubmit} onClick={() => onConfirm(finalReason)}>确认停用</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 
 function BindEntityDrawer({
   open, onOpenChange, shop, entities, banksByEntity, onSaved,
