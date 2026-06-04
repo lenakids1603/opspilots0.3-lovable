@@ -167,7 +167,9 @@ Deno.serve(async (req) => {
     const caller = await resolveCaller(req);
     const cronSecret = req.headers.get("x-cron-secret") ?? "";
     const okCron = !!Deno.env.get("JST_SYNC_CRON_SECRET") && cronSecret === Deno.env.get("JST_SYNC_CRON_SECRET");
-    if (!okCron && !caller.isAdmin) {
+    const internalTick = req.headers.get("x-internal-tick") ?? "";
+    const okInternal = !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") && internalTick === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!okCron && !okInternal && !caller.isAdmin) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
