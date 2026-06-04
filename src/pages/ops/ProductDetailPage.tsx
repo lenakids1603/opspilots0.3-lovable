@@ -59,11 +59,14 @@ export default function ProductDetailPage() {
       const code = s.sku_code as string | null;
       const jstId = s.jst_sku_id as string | null;
 
-      // 线上映射
-      const { data: al } = await supabase.from("ops_sku_aliases").select("*").eq("sku_id", skuId).limit(200);
-      setAliases(al ?? []);
+      // 线上映射：优先按 sku_id；为兼容旧数据，也按 jst_sku_id 兜底
+      {
+        const ors: string[] = [`sku_id.eq.${skuId}`];
+        if (jstId) ors.push(`jst_sku_id.eq.${jstId}`);
+        const { data: al } = await supabase.from("ops_sku_aliases").select("*").or(ors.join(",")).limit(200);
+        setAliases(al ?? []);
+      }
 
-      // 通用条件：sku_code 或 jst_sku_id 命中
       const orSku = (col: string) => code ? `${col}.eq.${code}` : null;
       const orJst = (col: string) => jstId ? `${col}.eq.${jstId}` : null;
 
@@ -78,7 +81,7 @@ export default function ProductDetailPage() {
         }
       }
 
-      // 出库
+      // 出库（仅有 sku_id）
       if (jstId) {
         const { data } = await supabase.from("jst_outbound_order_items")
           .select("io_id, oi_id, name, color, size, qty, amount, synced_at")
@@ -86,47 +89,51 @@ export default function ProductDetailPage() {
         setOutbound(data ?? []);
       }
 
-      // 退款
+      // 退款 / 销退（仅有 sku_id）
       if (jstId) {
-        const { data } = await supabase.from("jst_refund_order_items")
-          .select("as_id, name, qty, r_qty, price, amount, type, synced_at")
-          .eq("sku_id", jstId).order("synced_at", { ascending: false }).limit(200);
-        setRefunds(data ?? []);
-      }
-      if (jstId) {
-        const { data } = await supabase.from("jst_aftersale_received_items")
-          .select("as_id, name, qty, r_qty, amount, synced_at")
-          .eq("sku_id", jstId).order("synced_at", { ascending: false }).limit(200);
-        setAftersale(data ?? []);
-      }
-
-      // 采购单
-      if (code) {
-        const { data } = await supabase.from("purchase_order_items")
-          .select("external_po_id, sku_no, product_name, color, size, purchase_qty, received_qty, unreceived_qty, unit_price, delivery_date, purchase_order:purchase_orders(supplier_name, status, po_date)")
-          .eq("sku_no", code).order("updated_at", { ascending: false }).limit(200);
-        setPurchase(data ?? []);
+        const [{ data: r1 }, { data: r2 }] = await Promise.all([
+          supabase.from("jst_refund_order_items")
+            .select("as_id, name, qty, r_qty, price, amount, type, synced_at")
+            .eq("sku_id", jstId).order("synced_at", { ascending: false }).limit(200),
+          supabase.from("jst_aftersale_received_items")
+            .select("as_id, name, qty, r_qty, amount, synced_at")
+            .eq("sku_id", jstId).order("synced_at", { ascending: false }).limit(200),
+        ]);
+        setRefunds(r1 ?? []);
+        setAftersale(r2 ?? []);
       }
 
-      // 入库单
-      if (code) {
-        const { data } = await supabase.from("purchase_receipt_items")
-          .select("external_io_id, external_po_id, sku_no, product_name, received_qty, cost_price, receipt:purchase_receipts(supplier_name, warehouse_name, io_date, status)")
-          .eq("sku_no", code).order("updated_at", { ascending: false }).limit(200);
-        setReceipt(data ?? []);
-      }
-
-      // 异常
+      // 采购单：sku_no 优先，sku_id 兜底
       {
-        const ors: string[] = [];
-        if (code) ors.push(`online_sku_code.eq.${code}`);
-        if (jstId) ors.push(`jst_sku_id.eq.${jstId}`);
-        if (ors.length) {
-          const { data } = await supabase.from("ops_product_mapping_exceptions")
-            .select("*").or(ors.join(",")).order("created_at", { ascending: false }).limit(100);
-          setExceptions(data ?? []);
+        const filters = [orSku("sku_no"), orJst("sku_id")].filter(Boolean).join(",");
+        if (filters) {
+          const { data } = await supabase.from("purchase_order_items")
+            .select("external_po_id, sku_no, product_name, color, size, purchase_qty, received_qty, unreceived_qty, unit_price, delivery_date, purchase_order:purchase_orders(supplier_name, status, po_date)")
+            .or(filters).order("updated_at", { ascending: false }).limit(200);
+          setPurchase(data ?? []);
         }
       }
+
+      // 入库单：sku_no 优先，sku_id 兜底
+      {
+        const filters = [orSku("sku_no"), orJst("sku_id")].filter(Boolean).join(",");
+        if (filters) {
+          const { data } = await supabase.from("purchase_receipt_items")
+            .select("external_io_id, external_po_id, sku_no, product_name, received_qty, cost_price, receipt:purchase_receipts(supplier_name, warehouse_name, io_date, status)")
+            .or(filters).order("updated_at", { ascending: false }).limit(200);
+          setReceipt(data ?? []);
+        }
+      }
+
+      // 映射异常：按 resolved_sku_id（已解析回当前 SKU）或 jst_sku_id 关联
+      {
+        const ors: string[] = [`resolved_sku_id.eq.${skuId}`];
+        if (jstId) ors.push(`jst_sku_id.eq.${jstId}`);
+        const { data } = await supabase.from("ops_product_mapping_exceptions")
+          .select("*").or(ors.join(",")).order("created_at", { ascending: false }).limit(100);
+        setExceptions(data ?? []);
+      }
+
 
       setLoading(false);
     })();

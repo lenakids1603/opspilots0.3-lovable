@@ -53,9 +53,10 @@ function pickSpec(spec: string | null): { color: string | null; size: string | n
 
 function deriveStyleNo(skuCode: string | null): string | null {
   if (!skuCode) return null;
-  // 内部约定：款号通常是 sku_code 去掉颜色/尺码后缀；取 '-' 前段或前 6-10 字符
-  const m = skuCode.match(/^([A-Za-z0-9]+?)(?:[-_].+)?$/);
-  return m ? m[1] : skuCode;
+  // 内部约定：款号通常是 sku_code 去掉颜色/尺码后缀；取首个 '-' 或 '_' 前段
+  const idx = skuCode.search(/[-_]/);
+  if (idx > 0) return skuCode.slice(0, idx);
+  return skuCode;
 }
 
 async function loadRows(source: string, days: number, limit: number): Promise<DeriveRow[]> {
@@ -253,20 +254,44 @@ function aggregate(rows: DeriveRow[]): { masters: Agg[]; orphanAliases: DeriveRo
   const byKey = new Map<string, Agg>();
   const orphans: DeriveRow[] = [];
 
+  // 第一步：建立 sku_code <-> jst_sku_id 映射，避免同一 SKU 因不同来源生成两条主档
+  const skuToJst = new Map<string, string>();
+  const jstToSku = new Map<string, string>();
   for (const r of rows) {
-    const key = r.sku_code ? `sku:${r.sku_code}` : r.jst_sku_id ? `jst:${r.jst_sku_id}` : null;
+    if (r.sku_code && r.jst_sku_id) {
+      if (!skuToJst.has(r.sku_code)) skuToJst.set(r.sku_code, r.jst_sku_id);
+      if (!jstToSku.has(r.jst_sku_id)) jstToSku.set(r.jst_sku_id, r.sku_code);
+    }
+  }
+
+  const keyOf = (r: DeriveRow): string | null => {
+    // 优先按 sku_code 聚合；sku_code 为空时按 jst_sku_id 聚合
+    // 若 jst_sku_id 已知对应某个 sku_code，则归并到该 sku_code
+    if (r.sku_code) return `sku:${r.sku_code}`;
+    if (r.jst_sku_id) {
+      const mapped = jstToSku.get(r.jst_sku_id);
+      if (mapped) return `sku:${mapped}`;
+      return `jst:${r.jst_sku_id}`;
+    }
+    return null;
+  };
+
+  for (const r of rows) {
+    const key = keyOf(r);
     if (!key) {
       if (r.shop_id && r.online_sku_code) orphans.push(r);
       continue;
     }
     let a = byKey.get(key);
     if (!a) {
+      const sc = r.sku_code ?? (r.jst_sku_id ? jstToSku.get(r.jst_sku_id) ?? null : null);
+      const js = r.jst_sku_id ?? (r.sku_code ? skuToJst.get(r.sku_code) ?? null : null);
       a = {
-        sku_code: r.sku_code, jst_sku_id: r.jst_sku_id,
+        sku_code: sc, jst_sku_id: js,
         product_name: null, color: null, size: null, pic: null,
         cost_price: null,
         supplier_id: null, supplier_name: null,
-        style_no: r.style_no ?? deriveStyleNo(r.sku_code),
+        style_no: r.style_no ?? deriveStyleNo(sc),
         sources: new Set(), first: null, last: null,
         aliases: new Map(),
       };
@@ -278,13 +303,15 @@ function aggregate(rows: DeriveRow[]): { masters: Agg[]; orphanAliases: DeriveRo
     a.color = a.color ?? r.color;
     a.size = a.size ?? r.size;
     a.pic = a.pic ?? r.pic;
-    // 成本优先取入库单的实际成本；其次采购单价
-    if (r.cost_price != null) {
+    // 成本优先取入库单的实际成本；其次采购单价；销售/吊牌价不参与
+    if (r.cost_price != null && (r.source === "receipt" || r.source === "purchase")) {
       if (a.cost_price == null || r.source === "receipt") a.cost_price = r.cost_price;
     }
     a.supplier_id = a.supplier_id ?? r.supplier_id;
     a.supplier_name = a.supplier_name ?? r.supplier_name;
-    a.style_no = a.style_no ?? r.style_no ?? deriveStyleNo(a.sku_code);
+    // style_no：采购来源优先
+    if (r.style_no && (a.style_no == null || r.source === "purchase")) a.style_no = r.style_no;
+    if (a.style_no == null) a.style_no = deriveStyleNo(a.sku_code);
     a.sources.add(r.source);
     if (r.ts) {
       if (!a.first || r.ts < a.first) a.first = r.ts;
@@ -305,38 +332,40 @@ function aggregate(rows: DeriveRow[]): { masters: Agg[]; orphanAliases: DeriveRo
   return { masters: Array.from(byKey.values()), orphanAliases: orphans };
 }
 
+
 async function upsertMasters(masters: Agg[]) {
   let inserted = 0, updated = 0;
-  // 拉已有，按 sku_code / jst_sku_id 命中
-  const skuCodes = masters.map(m => m.sku_code).filter(Boolean) as string[];
-  const jstIds = masters.map(m => m.jst_sku_id).filter(Boolean) as string[];
+  const skuCodes = Array.from(new Set(masters.map(m => m.sku_code).filter(Boolean))) as string[];
+  const jstIds = Array.from(new Set(masters.map(m => m.jst_sku_id).filter(Boolean))) as string[];
 
-  const existing = new Map<string, any>();
-  const idByKey = new Map<string, string>();
+  const existingById = new Map<string, any>(); // id -> row
+  const idBySku = new Map<string, string>();
+  const idByJst = new Map<string, string>();
 
   if (skuCodes.length) {
-    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id").in("sku_code", skuCodes);
+    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id, product_name, sku_name, style_no, color, size, sku_image_url, external_image_url, supplier_id, cost_price, first_seen_at, source").in("sku_code", skuCodes);
     (data ?? []).forEach((r: any) => {
-      existing.set(`sku:${r.sku_code}`, r);
-      idByKey.set(`sku:${r.sku_code}`, r.id);
-      if (r.jst_sku_id) idByKey.set(`jst:${r.jst_sku_id}`, r.id);
+      existingById.set(r.id, r);
+      if (r.sku_code) idBySku.set(r.sku_code, r.id);
+      if (r.jst_sku_id) idByJst.set(r.jst_sku_id, r.id);
     });
   }
   if (jstIds.length) {
-    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id").in("jst_sku_id", jstIds);
+    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id, product_name, sku_name, style_no, color, size, sku_image_url, external_image_url, supplier_id, cost_price, first_seen_at, source").in("jst_sku_id", jstIds);
     (data ?? []).forEach((r: any) => {
-      const k = r.sku_code ? `sku:${r.sku_code}` : `jst:${r.jst_sku_id}`;
-      existing.set(k, r);
-      idByKey.set(`jst:${r.jst_sku_id}`, r.id);
-      if (r.sku_code) idByKey.set(`sku:${r.sku_code}`, r.id);
+      existingById.set(r.id, r);
+      if (r.sku_code) idBySku.set(r.sku_code, r.id);
+      if (r.jst_sku_id) idByJst.set(r.jst_sku_id, r.id);
     });
   }
 
-  const masterIdMap = new Map<string, string>(); // key->ops_skus.id
+  const masterIdMap = new Map<string, string>(); // agg key -> ops_skus.id
 
   for (const m of masters) {
     const keyPrimary = m.sku_code ? `sku:${m.sku_code}` : `jst:${m.jst_sku_id}`;
-    const id = idByKey.get(keyPrimary);
+    // 命中策略：优先按 sku_code，再按 jst_sku_id
+    const id = (m.sku_code && idBySku.get(m.sku_code)) || (m.jst_sku_id && idByJst.get(m.jst_sku_id)) || null;
+
     const payload = {
       sku_code: m.sku_code ?? `JST-${m.jst_sku_id}`,
       jst_sku_id: m.jst_sku_id,
@@ -356,22 +385,35 @@ async function upsertMasters(masters: Agg[]) {
     };
 
     if (id) {
-      // 仅在字段为空时补全（避免覆盖人工维护的数据）；cost_price 当来源含 receipt 时允许覆盖
-      const ex = existing.get(keyPrimary) ?? {};
+      const ex = existingById.get(id) ?? {};
       const patch: Record<string, any> = { last_seen_at: payload.last_seen_at, last_synced_at: payload.last_synced_at };
-      for (const k of ["jst_sku_id","sku_name","product_name","style_no","color","size","sku_image_url","external_image_url","supplier_id","first_seen_at","source"]) {
+      for (const k of ["jst_sku_id","sku_name","product_name","style_no","color","size","sku_image_url","external_image_url","supplier_id","first_seen_at"]) {
         if (!ex[k] && (payload as any)[k]) patch[k] = (payload as any)[k];
       }
-      // cost_price：优先采用入库来源覆盖；否则仅在原值为空时补
+      // 若原 sku_code 是 JST-xxx 占位且本次拿到了真实 sku_code，则覆盖
+      if (m.sku_code && (!ex.sku_code || /^JST-/.test(ex.sku_code))) patch.sku_code = m.sku_code;
+      // 来源累计合并
+      const prevSources = new Set((ex.source ?? "").split(",").map((s: string) => s.trim()).filter(Boolean));
+      Array.from(m.sources).forEach(s => prevSources.add(s));
+      patch.source = Array.from(prevSources).join(",");
+      // cost_price：入库来源覆盖；否则仅在原值为空时补
       if (m.cost_price != null) {
-        const sources = Array.from(m.sources);
-        if (sources.includes("receipt") || ex.cost_price == null) patch.cost_price = m.cost_price;
+        if (m.sources.has("receipt") || ex.cost_price == null) patch.cost_price = m.cost_price;
       }
       const { error } = await admin.from("ops_skus").update(patch).eq("id", id);
-      if (!error) { updated++; masterIdMap.set(keyPrimary, id); }
+      if (!error) { updated++; masterIdMap.set(keyPrimary, id);
+        // 同步更新内存索引，防止后续重复插入
+        if (m.sku_code) idBySku.set(m.sku_code, id);
+        if (m.jst_sku_id) idByJst.set(m.jst_sku_id, id);
+      }
     } else {
       const { data, error } = await admin.from("ops_skus").insert(payload).select("id").single();
-      if (!error && data) { inserted++; masterIdMap.set(keyPrimary, data.id); }
+      if (!error && data) {
+        inserted++;
+        masterIdMap.set(keyPrimary, data.id);
+        if (m.sku_code) idBySku.set(m.sku_code, data.id);
+        if (m.jst_sku_id) idByJst.set(m.jst_sku_id, data.id);
+      }
     }
   }
 
