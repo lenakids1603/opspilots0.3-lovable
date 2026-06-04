@@ -348,6 +348,7 @@ async function upsertMasters(masters: Agg[]) {
       sku_image_url: m.pic,
       external_image_url: m.pic,
       supplier_id: m.supplier_id,
+      cost_price: m.cost_price,
       last_seen_at: m.last,
       first_seen_at: m.first,
       source: Array.from(m.sources).join(","),
@@ -355,7 +356,7 @@ async function upsertMasters(masters: Agg[]) {
     };
 
     if (id) {
-      // 仅在字段为空时补全（避免覆盖人工维护的数据）
+      // 仅在字段为空时补全（避免覆盖人工维护的数据）；cost_price 当来源含 receipt 时允许覆盖
       const ex = existing.get(keyPrimary) ?? {};
       const patch: Record<string, any> = { last_seen_at: payload.last_seen_at, last_synced_at: payload.last_synced_at };
       for (const k of ["jst_sku_id","sku_name","product_name","style_no","color","size","sku_image_url","external_image_url","supplier_id","first_seen_at","source"]) {
