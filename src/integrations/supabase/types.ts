@@ -1662,6 +1662,7 @@ export type Database = {
           created_at: string
           duration_ms: number
           error_detail: string
+          error_type: string | null
           failed_count: number
           first_io_date: string | null
           first_modified_at: string | null
@@ -1688,6 +1689,7 @@ export type Database = {
           created_at?: string
           duration_ms?: number
           error_detail?: string
+          error_type?: string | null
           failed_count?: number
           first_io_date?: string | null
           first_modified_at?: string | null
@@ -1714,6 +1716,7 @@ export type Database = {
           created_at?: string
           duration_ms?: number
           error_detail?: string
+          error_type?: string | null
           failed_count?: number
           first_io_date?: string | null
           first_modified_at?: string | null
