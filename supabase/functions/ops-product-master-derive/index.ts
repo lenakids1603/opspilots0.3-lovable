@@ -254,20 +254,44 @@ function aggregate(rows: DeriveRow[]): { masters: Agg[]; orphanAliases: DeriveRo
   const byKey = new Map<string, Agg>();
   const orphans: DeriveRow[] = [];
 
+  // 第一步：建立 sku_code <-> jst_sku_id 映射，避免同一 SKU 因不同来源生成两条主档
+  const skuToJst = new Map<string, string>();
+  const jstToSku = new Map<string, string>();
   for (const r of rows) {
-    const key = r.sku_code ? `sku:${r.sku_code}` : r.jst_sku_id ? `jst:${r.jst_sku_id}` : null;
+    if (r.sku_code && r.jst_sku_id) {
+      if (!skuToJst.has(r.sku_code)) skuToJst.set(r.sku_code, r.jst_sku_id);
+      if (!jstToSku.has(r.jst_sku_id)) jstToSku.set(r.jst_sku_id, r.sku_code);
+    }
+  }
+
+  const keyOf = (r: DeriveRow): string | null => {
+    // 优先按 sku_code 聚合；sku_code 为空时按 jst_sku_id 聚合
+    // 若 jst_sku_id 已知对应某个 sku_code，则归并到该 sku_code
+    if (r.sku_code) return `sku:${r.sku_code}`;
+    if (r.jst_sku_id) {
+      const mapped = jstToSku.get(r.jst_sku_id);
+      if (mapped) return `sku:${mapped}`;
+      return `jst:${r.jst_sku_id}`;
+    }
+    return null;
+  };
+
+  for (const r of rows) {
+    const key = keyOf(r);
     if (!key) {
       if (r.shop_id && r.online_sku_code) orphans.push(r);
       continue;
     }
     let a = byKey.get(key);
     if (!a) {
+      const sc = r.sku_code ?? (r.jst_sku_id ? jstToSku.get(r.jst_sku_id) ?? null : null);
+      const js = r.jst_sku_id ?? (r.sku_code ? skuToJst.get(r.sku_code) ?? null : null);
       a = {
-        sku_code: r.sku_code, jst_sku_id: r.jst_sku_id,
+        sku_code: sc, jst_sku_id: js,
         product_name: null, color: null, size: null, pic: null,
         cost_price: null,
         supplier_id: null, supplier_name: null,
-        style_no: r.style_no ?? deriveStyleNo(r.sku_code),
+        style_no: r.style_no ?? deriveStyleNo(sc),
         sources: new Set(), first: null, last: null,
         aliases: new Map(),
       };
@@ -279,13 +303,15 @@ function aggregate(rows: DeriveRow[]): { masters: Agg[]; orphanAliases: DeriveRo
     a.color = a.color ?? r.color;
     a.size = a.size ?? r.size;
     a.pic = a.pic ?? r.pic;
-    // 成本优先取入库单的实际成本；其次采购单价
-    if (r.cost_price != null) {
+    // 成本优先取入库单的实际成本；其次采购单价；销售/吊牌价不参与
+    if (r.cost_price != null && (r.source === "receipt" || r.source === "purchase")) {
       if (a.cost_price == null || r.source === "receipt") a.cost_price = r.cost_price;
     }
     a.supplier_id = a.supplier_id ?? r.supplier_id;
     a.supplier_name = a.supplier_name ?? r.supplier_name;
-    a.style_no = a.style_no ?? r.style_no ?? deriveStyleNo(a.sku_code);
+    // style_no：采购来源优先
+    if (r.style_no && (a.style_no == null || r.source === "purchase")) a.style_no = r.style_no;
+    if (a.style_no == null) a.style_no = deriveStyleNo(a.sku_code);
     a.sources.add(r.source);
     if (r.ts) {
       if (!a.first || r.ts < a.first) a.first = r.ts;
