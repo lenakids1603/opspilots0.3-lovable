@@ -122,7 +122,51 @@ async function processRefundPage(args: ProcessPageArgs): Promise<PageResult> {
 }
 
 
-async function runLegacySync(fromIso: string, toIso: string, logId: string) {
+async function tryCall(reqBody: any) {
+  const t0 = Date.now();
+  try {
+    const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
+    const list = pickList(data, ["refunds", "refund_list"]);
+    const first = list[0] ?? null;
+    return {
+      ok: true, duration_ms: Date.now() - t0,
+      req: reqBody,
+      top_keys: data && typeof data === "object" ? Object.keys(data) : [],
+      list_count: list.length,
+      first_row_keys: first ? Object.keys(first) : [],
+    };
+  } catch (e: any) {
+    return {
+      ok: false, duration_ms: Date.now() - t0, req: reqBody,
+      code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 500),
+      apiMsg: e?.apiMsg ?? null,
+    };
+  }
+}
+
+async function runDebugParams(body: any) {
+  const { from, to } = resolveWindow(body);
+  const base = { modified_begin: fmtBJ(from), modified_end: fmtBJ(to) };
+  const cases: Record<string, any> = {
+    A_minimal_strings: { ...base, page_index: "1", page_size: "50" },
+    B_with_date_type_1: { ...base, page_index: "1", page_size: "50", date_type: "1" },
+    C_numbers_compare: { ...base, page_index: 1, page_size: 50 },
+  };
+  const results: Record<string, any> = {};
+  for (const [k, v] of Object.entries(cases)) {
+    results[k] = await tryCall(v);
+    await sleep(500);
+  }
+  await admin.from("jst_sync_logs").insert({
+    sync_type: SYNC_TYPE, status: "success",
+    ended_at: new Date().toISOString(),
+    message: `[debug_refund_params] ${fmtBJ(from)} → ${fmtBJ(to)}`,
+    metadata: results,
+  });
+  return { ok: true, window: { from: fmtBJ(from), to: fmtBJ(to) }, results };
+}
+
+
   const winFrom = new Date(fromIso); const winTo = new Date(toIso);
   let page = 1, orders = 0, items = 0, failed = 0;
   try {
