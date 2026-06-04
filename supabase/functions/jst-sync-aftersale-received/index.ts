@@ -33,7 +33,7 @@ async function upsertReceived(r: any): Promise<number> {
     .upsert(row, { onConflict: "as_id" }).select("id").single();
   if (error) throw error;
   let items = 0;
-  for (const it of (r.items ?? [])) {
+  for (const it of pickItemsArray(r, ["received_items"])) {
     const skuId = it.sku_id != null ? String(it.sku_id) : null;
     const itemRow = {
       received_order_id: up.id, as_id: asId, sku_id: skuId,
