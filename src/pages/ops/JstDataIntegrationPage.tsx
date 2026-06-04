@@ -18,6 +18,10 @@ import {
 } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetTrigger } from "@/components/ui/sheet";
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   AlertTriangle, RefreshCw, ChevronDown, FileText, Package, Warehouse, Truck,
   Search, Stethoscope, Store, Users, Building2, ShoppingCart, PackageCheck,
   Link2, Boxes, LineChart, Plug, Download, Filter, Clock, MoreVertical, StopCircle,
