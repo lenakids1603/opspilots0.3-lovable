@@ -383,16 +383,29 @@ export default function JstDataIntegrationPage() {
     onError: (e: any) => toast({ title: "同步失败", description: e.message, variant: "destructive" }),
   });
 
+  const [cancelAllVersion, setCancelAllVersion] = useState(0);
+  const [cancelAllOpen, setCancelAllOpen] = useState(false);
+
   const cancelAllMut = useMutation({
     mutationFn: async () => {
       const { data, error } = await (supabase as any).rpc("jst_cancel_all_running_syncs");
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(error.message || "RPC 调用失败");
       const row = Array.isArray(data) ? data[0] : data;
-      return { logs: row?.cancelled_logs ?? 0, jobs: row?.cancelled_jobs ?? 0 };
+      return { logs: Number(row?.cancelled_logs ?? 0), jobs: Number(row?.cancelled_jobs ?? 0) };
+    },
+    onMutate: () => {
+      toast({ title: "正在终止同步任务..." });
     },
     onSuccess: (d) => {
-      toast({ title: "已终止运行中的同步", description: `日志 ${d.logs} 条 / 任务 ${d.jobs} 个已标记为终止` });
-      qc.invalidateQueries({ queryKey: ["jst_sync_logs", "purchase"] });
+      if (d.logs === 0 && d.jobs === 0) {
+        toast({ title: "没有可终止的运行中任务", description: "已刷新状态。" });
+      } else {
+        toast({ title: "已终止运行中的同步", description: `日志 ${d.logs} 条 / 任务 ${d.jobs} 个已标记为终止` });
+      }
+      setCancelAllVersion((v) => v + 1);
+      qc.removeQueries({ queryKey: ["sync_job"] });
+      qc.invalidateQueries({ queryKey: ["sync_last_job"] });
+      qc.invalidateQueries({ queryKey: ["jst_sync_logs"] });
       qc.invalidateQueries({ queryKey: ["jst_sync_runs"] });
       qc.invalidateQueries({ queryKey: ["jst_sync_modules"] });
     },
