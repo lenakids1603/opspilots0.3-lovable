@@ -74,11 +74,23 @@ async function processRefundPage(args: ProcessPageArgs): Promise<PageResult> {
   if (pageIndex > MAX_PAGE_NO) throw new Error(`分页超过上限 ${MAX_PAGE_NO}`);
   await sleep(RATE_DELAY_MS);
   const reqBody = {
-    page_index: pageIndex, page_size: pageSize,
-    modified_begin: fmtBJ(windowFrom), modified_end: fmtBJ(windowTo),
+    page_index: String(pageIndex),
+    page_size: String(Math.min(Number(pageSize) || 50, 50)),
+    modified_begin: fmtBJ(windowFrom),
+    modified_end: fmtBJ(windowTo),
   };
   const t0 = Date.now();
-  const data = await callOpenweb(METHOD_PATH, reqBody);
+  let data: any;
+  try {
+    data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
+  } catch (e: any) {
+    e.requestBody = reqBody;
+    e.apiPath = METHOD_PATH;
+    e.durationMs = Date.now() - t0;
+    e.responseCode = e.responseCode ?? (e.code != null ? String(e.code) : null);
+    e.responseMsg = e.responseMsg ?? e.apiMsg ?? null;
+    throw e;
+  }
   const durationMs = Date.now() - t0;
   const list = pickList(data, ["refunds", "refund_list"]);
   const hasNext = computeHasNext(data, list.length, pageSize, pageIndex);
@@ -101,8 +113,14 @@ async function processRefundPage(args: ProcessPageArgs): Promise<PageResult> {
       });
     } catch (_e) { /* ignore */ }
   }
-  return { apiCount: list.length, mainUpserted, itemUpserted, failed, hasNext, errorDetail: lastErr || undefined, requestBody: reqBody, durationMs };
+  return {
+    apiCount: list.length, mainUpserted, itemUpserted, failed, hasNext,
+    errorDetail: lastErr || undefined, requestBody: reqBody, durationMs,
+    responseCode: (data as any)?.code != null ? String((data as any).code) : null,
+    responseMsg: (data as any)?.msg ?? null,
+  };
 }
+
 
 async function runLegacySync(fromIso: string, toIso: string, logId: string) {
   const winFrom = new Date(fromIso); const winTo = new Date(toIso);
