@@ -101,7 +101,7 @@ async function processRefundPage(args: ProcessPageArgs): Promise<PageResult> {
       });
     } catch (_e) { /* ignore */ }
   }
-  return { apiCount: list.length, mainUpserted, itemUpserted, failed, hasNext, errorDetail: lastErr };
+  return { apiCount: list.length, mainUpserted, itemUpserted, failed, hasNext, errorDetail: lastErr || undefined, requestBody: reqBody, durationMs };
 }
 
 async function runLegacySync(fromIso: string, toIso: string, logId: string) {
