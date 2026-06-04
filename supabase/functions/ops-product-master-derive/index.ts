@@ -173,6 +173,62 @@ async function loadRows(source: string, days: number, limit: number): Promise<De
     }
   }
 
+  if (source === "purchase" || source === "all") {
+    const { data, error } = await admin
+      .from("purchase_order_items")
+      .select("sku_no, sku_id, style_no, product_name, color, size, properties_value, product_image_url, unit_price, updated_at, purchase_order:purchase_orders!inner(supplier_id, supplier_name, po_date)")
+      .gte("updated_at", since)
+      .limit(limit);
+    if (error) throw new Error(`purchase: ${error.message}`);
+    for (const r of (data ?? []) as any[]) {
+      const spec = pickSpec(r.properties_value);
+      const po = r.purchase_order ?? {};
+      out.push({
+        sku_code: r.sku_no ?? null,
+        jst_sku_id: r.sku_id ?? null,
+        style_no: r.style_no ?? null,
+        product_name: r.product_name ?? null,
+        sku_name: null,
+        color: r.color ?? spec.color,
+        size: r.size ?? spec.size,
+        pic: r.product_image_url ?? null,
+        cost_price: r.unit_price ?? null,
+        supplier_id: po.supplier_id ?? null,
+        supplier_name: po.supplier_name ?? null,
+        shop_id: null, online_sku_code: null, online_product_id: null,
+        ts: po.po_date ?? r.updated_at ?? null,
+        source: "purchase",
+      });
+    }
+  }
+
+  if (source === "receipt" || source === "all") {
+    const { data, error } = await admin
+      .from("purchase_receipt_items")
+      .select("sku_no, sku_id, product_name, cost_price, updated_at, receipt:purchase_receipts!inner(supplier_name, io_date)")
+      .gte("updated_at", since)
+      .limit(limit);
+    if (error) throw new Error(`receipt: ${error.message}`);
+    for (const r of (data ?? []) as any[]) {
+      const rc = r.receipt ?? {};
+      out.push({
+        sku_code: r.sku_no ?? null,
+        jst_sku_id: r.sku_id ?? null,
+        style_no: null,
+        product_name: r.product_name ?? null,
+        sku_name: null,
+        color: null, size: null,
+        pic: null,
+        cost_price: r.cost_price ?? null,
+        supplier_id: null,
+        supplier_name: rc.supplier_name ?? null,
+        shop_id: null, online_sku_code: null, online_product_id: null,
+        ts: rc.io_date ?? r.updated_at ?? null,
+        source: "receipt",
+      });
+    }
+  }
+
   return out;
 }
 
@@ -183,6 +239,7 @@ type Agg = {
   color: string | null;
   size: string | null;
   pic: string | null;
+  cost_price: number | null;
   supplier_id: string | null;
   supplier_name: string | null;
   style_no: string | null;
