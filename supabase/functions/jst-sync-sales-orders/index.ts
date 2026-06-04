@@ -158,6 +158,24 @@ async function upsertSalesOrder(o: any): Promise<{ orderId: string; itemsUpserte
   return { orderId: up.id as string, itemsUpserted };
 }
 
+// 加载"停用 / 不参与订单同步"的店铺 jst_shop_id 集合
+async function loadSkippedShops(): Promise<{ disabled: Set<string>; syncOff: Set<string> }> {
+  const disabled = new Set<string>();
+  const syncOff = new Set<string>();
+  try {
+    const { data } = await admin.from("shops")
+      .select("jst_shop_id, status, is_order_sync_enabled, is_ignored")
+      .is("deleted_at", null);
+    (data ?? []).forEach((s: any) => {
+      if (!s.jst_shop_id) return;
+      const k = String(s.jst_shop_id);
+      if ((s.status ?? "active") !== "active" || s.is_ignored === true) disabled.add(k);
+      else if ((s.is_order_sync_enabled ?? true) === false) syncOff.add(k);
+    });
+  } catch (_e) { /* ignore */ }
+  return { disabled, syncOff };
+}
+
 async function processSalesPage(args: ProcessPageArgs): Promise<PageResult> {
   const { windowFrom, windowTo, pageIndex, pageSize } = args;
   await sleep(RATE_DELAY_MS);
@@ -174,9 +192,15 @@ async function processSalesPage(args: ProcessPageArgs): Promise<PageResult> {
   const durationMs = Date.now() - t0;
   const list = pickList(data);
   const hasNext = computeHasNext(data, list.length, pageSize, pageIndex);
+  const { disabled, syncOff } = await loadSkippedShops();
   let mainUpserted = 0, itemUpserted = 0, failed = 0;
+  let skippedDisabled = 0, skippedSyncOff = 0;
+  const skippedShopIds = new Set<string>();
   let lastErr = "";
   for (const r of list) {
+    const sid = r?.shop_id != null ? String(r.shop_id) : "";
+    if (sid && disabled.has(sid)) { skippedDisabled++; skippedShopIds.add(sid); continue; }
+    if (sid && syncOff.has(sid)) { skippedSyncOff++; skippedShopIds.add(sid); continue; }
     try {
       const res = await upsertSalesOrder(r);
       mainUpserted++; itemUpserted += res.itemsUpserted;
@@ -184,9 +208,12 @@ async function processSalesPage(args: ProcessPageArgs): Promise<PageResult> {
       failed++; lastErr = String((we as Error).message ?? we);
     }
   }
+  const skipNote = (skippedDisabled || skippedSyncOff)
+    ? ` · 跳过停用店铺订单 ${skippedDisabled}/不同步店铺订单 ${skippedSyncOff}(涉及店铺 ${skippedShopIds.size})`
+    : "";
   return {
     apiCount: list.length, mainUpserted, itemUpserted, failed, hasNext,
-    errorDetail: lastErr || undefined,
+    errorDetail: (lastErr || skipNote) ? `${lastErr}${skipNote}` : undefined,
     requestBody: reqBody, durationMs,
   };
 }
