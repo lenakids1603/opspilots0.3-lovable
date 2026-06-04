@@ -43,7 +43,7 @@ async function upsertRefund(r: any): Promise<number> {
     .upsert(row, { onConflict: "as_id" }).select("id").single();
   if (error) throw error;
   let items = 0;
-  for (const it of (r.items ?? [])) {
+  for (const it of pickItemsArray(r, ["refund_items"])) {
     const asiId = it.asi_id != null ? String(it.asi_id) : null;
     const skuId = it.sku_id != null ? String(it.sku_id) : null;
     const outerOiId = it.outer_oi_id != null ? String(it.outer_oi_id) : null;
