@@ -13,15 +13,13 @@ const SYNC_TYPE = "aftersale_received";
 const METHOD_PATH = "aftersale/received/query";
 const PAGE_SIZE = 50;
 
-function buildItemUniqueKey(uniqueKey: string, it: any, rModified: any) {
-  return [
-    uniqueKey,
-    it.ioi_id ?? "",
-    it.asi_id ?? "",
-    it.sku_id ?? "",
-    it.batch_no ?? "",
-    it.modified ?? rModified ?? "",
-  ].join("|");
+function buildItemUniqueKey(uniqueKey: string, it: any, _rModified: any) {
+  const lineKey =
+    it.ioi_id ??
+    it.asi_id ??
+    it.outer_oi_id ??
+    [it.sku_id ?? "", it.batch_no ?? "", it.properties_value ?? ""].join(":");
+  return [uniqueKey, String(lineKey)].join("|");
 }
 
 async function upsertReceived(r: any): Promise<number> {
