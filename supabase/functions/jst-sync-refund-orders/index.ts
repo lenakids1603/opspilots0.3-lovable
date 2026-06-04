@@ -73,12 +73,15 @@ async function processRefundPage(args: ProcessPageArgs): Promise<PageResult> {
   const { windowFrom, windowTo, pageIndex, pageSize } = args;
   if (pageIndex > MAX_PAGE_NO) throw new Error(`分页超过上限 ${MAX_PAGE_NO}`);
   await sleep(RATE_DELAY_MS);
-  const data = await callOpenweb(METHOD_PATH, {
+  const reqBody = {
     page_index: pageIndex, page_size: pageSize,
     modified_begin: fmtBJ(windowFrom), modified_end: fmtBJ(windowTo),
-  });
-  const list: any[] = data.datas ?? data.list ?? data.refunds ?? data.orders ?? [];
-  const hasNext = parseHasNext(data.has_next ?? data.hasNext, list.length === pageSize);
+  };
+  const t0 = Date.now();
+  const data = await callOpenweb(METHOD_PATH, reqBody);
+  const durationMs = Date.now() - t0;
+  const list = pickList(data, ["refunds", "refund_list"]);
+  const hasNext = computeHasNext(data, list.length, pageSize, pageIndex);
   let mainUpserted = 0, itemUpserted = 0, failed = 0, lastErr = "";
   const oIds: string[] = [], soIds: string[] = [];
   for (const r of list) {
