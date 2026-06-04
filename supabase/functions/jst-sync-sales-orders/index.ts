@@ -11,6 +11,7 @@ import {
 } from "../_shared/jst-client.ts";
 import { handleJobActions, PageResult, ProcessPageArgs } from "../_shared/jst-sync-job.ts";
 import { classifySalesOrder } from "../_shared/orderClassify.ts";
+import { loadSkippedShops, shopIdOf, shouldSkipShop, formatSkipNote } from "../_shared/shop-filter.ts";
 
 const SYNC_TYPE = "sales_orders";
 const METHOD_PATH = "orders/single/query";
