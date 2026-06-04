@@ -119,8 +119,8 @@ export default function ProductMappingExceptionsPage() {
                   <td className="p-2 text-right">
                     {r.status === "pending" && (
                       <div className="flex gap-1 justify-end">
-                        <Button size="sm" variant="outline" onClick={() => setStatus(r.id, "resolved")}>标记已解决</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setStatus(r.id, "ignored")}>忽略</Button>
+                        <Button size="sm" variant="outline" onClick={() => setRowStatus(r.id, "resolved")}>标记已解决</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setRowStatus(r.id, "ignored")}>忽略</Button>
                       </div>
                     )}
                   </td>
