@@ -27,24 +27,32 @@ type Row = {
 export default function ProductMappingExceptionsPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
+  const [keyword, setKeyword] = useState("");
+  const [status, setStatusFilter] = useState<string>("pending");
 
   const load = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    let q = supabase
       .from("ops_product_mapping_exceptions")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(500);
+    if (status !== "all") q = q.eq("status", status);
+    if (keyword.trim()) {
+      const k = `%${keyword.trim()}%`;
+      q = q.or(`online_sku_code.ilike.${k},online_item_code.ilike.${k},shop_name.ilike.${k},shop_id.ilike.${k}`);
+    }
+    const { data, error } = await q;
     if (error) toast.error(error.message);
     setRows((data as any) ?? []);
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [status]);
 
-  const setStatus = async (id: string, status: string) => {
+  const setRowStatus = async (id: string, next: string) => {
     const { error } = await supabase.from("ops_product_mapping_exceptions")
-      .update({ status, resolved_at: status === "resolved" ? new Date().toISOString() : null })
+      .update({ status: next, resolved_at: next === "resolved" ? new Date().toISOString() : null })
       .eq("id", id);
     if (error) { toast.error(error.message); return; }
     toast.success("已更新");
@@ -61,6 +69,27 @@ export default function ProductMappingExceptionsPage() {
       />
 
       <Card className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Input
+            placeholder="搜索线上 SKU / 商品编码 / 店铺"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && load()}
+            className="max-w-xs"
+          />
+          <Select value={status} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="pending">待处理</SelectItem>
+              <SelectItem value="resolved">已解决</SelectItem>
+              <SelectItem value="ignored">已忽略</SelectItem>
+              <SelectItem value="all">全部</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="outline" onClick={load}>搜索</Button>
+          <span className="text-xs text-muted-foreground ml-auto">共 {rows.length} 条</span>
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-xs text-muted-foreground">
