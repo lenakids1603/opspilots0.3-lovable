@@ -107,7 +107,6 @@ async function upsertSalesOrder(o: any): Promise<{ orderId: string; itemsUpserte
     receiver_city: str(o.receiver_city),
     receiver_district: str(o.receiver_district),
     receiver_mobile_masked: null,
-    raw_data: null,
     synced_at: new Date().toISOString(),
   } as any;
 
@@ -188,7 +187,6 @@ function buildSalesOrderRowForBatch(o: any, hasRefund: boolean) {
     receiver_city: str(o.receiver_city),
     receiver_district: str(o.receiver_district),
     receiver_mobile_masked: null,
-    raw_data: null,
     synced_at: new Date().toISOString(),
   } as any;
 
@@ -237,7 +235,6 @@ function buildSalesItemRowsForBatch(o: any, salesOrderId: string) {
       supplier_id: str(it.supplier_id),
       supplier_name: str(it.supplier_name),
       item_unique_key: `${jstOId}|${jstItemId ?? ""}|${skuId ?? ""}|${i}`,
-      raw_item_data: null,
       synced_at: new Date().toISOString(),
     });
   }

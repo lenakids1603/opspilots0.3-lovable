@@ -49,7 +49,6 @@ async function upsertReceived(r: any): Promise<number> {
     received_date: parseJstBeijingDateTime(r.received_date ?? r.io_date ?? r.in_date),
     modified_at_jst: parseJstBeijingDateTime(r.modified),
     status: r.status ?? null,
-    raw_data: null,
     synced_at: new Date().toISOString(),
   };
   const { data: up, error } = await admin
@@ -84,7 +83,6 @@ async function upsertReceived(r: any): Promise<number> {
       supplier_id: it.supplier_id != null ? String(it.supplier_id) : null,
       supplier_name: it.supplier_name ?? null,
       item_unique_key: itemKey,
-      raw_data: null,
       synced_at: new Date().toISOString(),
     };
     const { error: itErr } = await admin

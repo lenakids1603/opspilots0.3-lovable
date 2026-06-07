@@ -38,7 +38,7 @@ async function upsertRefund(r: any): Promise<number> {
     created_at_jst: parseJstBeijingDateTime(r.created),
     modified_at_jst: parseJstBeijingDateTime(r.modified),
     confirm_date: parseJstBeijingDateTime(r.confirm_date),
-    raw_data: null, synced_at: new Date().toISOString(),
+    synced_at: new Date().toISOString(),
   };
   const { data: up, error } = await admin.from("jst_refund_orders")
     .upsert(row, { onConflict: "as_id" }).select("id").single();
@@ -60,7 +60,7 @@ async function upsertRefund(r: any): Promise<number> {
       type: itemType, outer_oi_id: outerOiId, sku_type: it.sku_type ?? null,
       supplier_id: it.supplier_id != null ? String(it.supplier_id) : null,
       supplier_name: it.supplier_name ?? null, batch_no: it.batch_no ?? null,
-      item_unique_key: itemUniqueKey, raw_data: null, synced_at: new Date().toISOString(),
+      item_unique_key: itemUniqueKey, synced_at: new Date().toISOString(),
     };
     const { error: itErr } = await admin.from("jst_refund_order_items")
       .upsert(itemRow, { onConflict: "item_unique_key" });

@@ -57,7 +57,6 @@ async function upsertOutboundOrder(r: any): Promise<{ orderId: string; itemsUpse
     consign_time: parseJstBeijingDateTime(r.consign_time ?? r.consigntime),
     modified_at_jst: parseJstBeijingDateTime(r.modified),
     qty: aggQty > 0 ? aggQty : Number(r.qty ?? 0),
-    raw_data: null,
     synced_at: new Date().toISOString(),
   };
   const { data: up, error } = await admin
@@ -78,7 +77,7 @@ async function upsertOutboundOrder(r: any): Promise<{ orderId: string; itemsUpse
       color: props.color, size: props.size,
       qty: Number(it.qty ?? it.sale_qty ?? it.total_qty ?? 0),
       amount: Number(it.amount ?? it.sale_amount ?? 0),
-      pic: it.pic ?? null, item_unique_key: itemUniqueKey, raw_data: null,
+      pic: it.pic ?? null, item_unique_key: itemUniqueKey,
       synced_at: new Date().toISOString(),
     };
     const { error: itErr } = await admin
