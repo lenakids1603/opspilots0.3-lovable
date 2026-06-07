@@ -407,18 +407,25 @@ export default function SalesOrdersListPage() {
     <div>
       <PageHeader
         breadcrumb={["运维系统", "订单列表"]}
-        title="订单列表"
-        description="订单工作台：聚焦待发货、超时、退款/退货等关键运营指标。"
+        title="订单列表（轻量订单查询 / 历史回看）"
+        description="系统已切换为轻量订单架构：完整订单明细以聚水潭为准，本系统主要保留销售汇总、轻量订单索引和未发货风险数据。"
       />
 
+      <div className="mb-3 rounded-md border border-sky-300 bg-sky-50/60 px-4 py-2.5 text-xs text-sky-800">
+        新架构提示：本页用于历史订单回看与轻量订单查询，不再作为完整订单仓库。完整订单明细请以聚水潭为准；新同步默认不再保存完整 raw JSON。
+      </div>
+
       {/* 统计卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-2">
         <Stat label="今日付款订单" value={fmtInt(s?.todayPaidOrders)} error={err} />
         <Stat label="今日实付金额" value={fmtMoney(s?.todayAmt)} error={err} />
         <Stat label="待发货订单" value={fmtInt(s?.pendingShip)} error={err} accent="warn" />
         <Stat label="超时未发货" value={fmtInt(s?.overdueShip)} error={err} accent="danger" />
         <Stat label="已发货订单" value={fmtInt(s?.shipped)} error={err} accent="ok" />
         <Stat label="退款/退货订单" value={fmtInt(s?.refund)} error={err} accent="danger" />
+      </div>
+      <div className="mb-4 text-[11px] text-muted-foreground">
+        当前统计来自历史明细表，后续将切换为销售汇总表（sales_*_summary）。
       </div>
 
       {/* 筛选 */}
@@ -730,12 +737,14 @@ export default function SalesOrdersListPage() {
         </SheetContent>
       </Sheet>
 
-      {/* 原始 JSON 抽屉 */}
+      {/* 历史调试数据（raw JSON） */}
       <Sheet open={!!rawOpen} onOpenChange={(o) => { if (!o) setRawOpen(null); }}>
         <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto">
           <SheetHeader>
-            <SheetTitle>订单原始数据</SheetTitle>
-            <SheetDescription>历史订单可能有 raw_data；新同步默认不再保存完整 raw JSON</SheetDescription>
+            <SheetTitle>历史调试数据（raw JSON）</SheetTitle>
+            <SheetDescription>
+              新同步默认不保存完整 raw JSON，以避免数据库被海量订单和商品数据撑爆。完整订单明细请以聚水潭为准。
+            </SheetDescription>
           </SheetHeader>
           {rawOpen && <RawData orderId={rawOpen.id} />}
         </SheetContent>
@@ -755,9 +764,21 @@ function RawData({ orderId }: { orderId: string }) {
     },
   });
   if (q.isLoading) return <div className="text-sm text-muted-foreground mt-4">加载中...</div>;
+  if (!q.data) {
+    return (
+      <div className="mt-4 text-xs text-muted-foreground rounded border border-dashed p-4">
+        新同步默认不保存完整 raw JSON，以避免数据库被海量订单和商品数据撑爆。完整订单明细请以聚水潭为准。
+      </div>
+    );
+  }
   return (
-    <pre className="bg-muted p-3 rounded text-[11px] overflow-auto max-h-[70vh] mt-4">
-      {q.data ? JSON.stringify(q.data, null, 2) : "新同步订单默认不保存 raw_data；如需排查，请临时开启短期 debug payload。"}
-    </pre>
+    <details className="mt-4">
+      <summary className="text-xs text-muted-foreground cursor-pointer select-none mb-2">
+        展开历史 raw JSON（仅供排查，默认收起）
+      </summary>
+      <pre className="bg-muted p-3 rounded text-[11px] overflow-auto max-h-[70vh]">
+        {JSON.stringify(q.data, null, 2)}
+      </pre>
+    </details>
   );
 }

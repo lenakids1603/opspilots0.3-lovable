@@ -89,6 +89,10 @@ export default function ProductsPage() {
         }
       />
 
+      <div className="mb-3 rounded-md border border-sky-300 bg-sky-50/60 px-4 py-2.5 text-xs text-sky-800">
+        新架构提示：当前系统只同步活跃商品、近期业务相关商品或手动指定范围商品，并不保存聚水潭全部商品档案。如需补全某款 / 某 SKU，请使用「按 SKU / 款号同步」。
+      </div>
+
       <Card className="p-4 mb-4 space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="font-medium text-sm">从业务数据沉淀商品主档</h2>
@@ -164,7 +168,7 @@ export default function ProductsPage() {
               })}
               {rows.length === 0 && (
                 <tr><td colSpan={9} className="py-12 text-center text-muted-foreground">
-                  暂无商品主档。点击上方"沉淀近 N 天"从已同步业务数据自动生成。
+                  暂无商品数据。当前系统不会全量同步聚水潭全部 SKU，请通过近期同步或按 SKU / 款号范围同步获取数据。
                 </td></tr>
               )}
             </tbody>
