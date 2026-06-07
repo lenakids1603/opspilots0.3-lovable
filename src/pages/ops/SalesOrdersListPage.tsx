@@ -407,18 +407,25 @@ export default function SalesOrdersListPage() {
     <div>
       <PageHeader
         breadcrumb={["运维系统", "订单列表"]}
-        title="订单列表"
-        description="订单工作台：聚焦待发货、超时、退款/退货等关键运营指标。"
+        title="订单列表（轻量订单查询 / 历史回看）"
+        description="系统已切换为轻量订单架构：完整订单明细以聚水潭为准，本系统主要保留销售汇总、轻量订单索引和未发货风险数据。"
       />
 
+      <div className="mb-3 rounded-md border border-sky-300 bg-sky-50/60 px-4 py-2.5 text-xs text-sky-800">
+        新架构提示：本页用于历史订单回看与轻量订单查询，不再作为完整订单仓库。完整订单明细请以聚水潭为准；新同步默认不再保存完整 raw JSON。
+      </div>
+
       {/* 统计卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-2">
         <Stat label="今日付款订单" value={fmtInt(s?.todayPaidOrders)} error={err} />
         <Stat label="今日实付金额" value={fmtMoney(s?.todayAmt)} error={err} />
         <Stat label="待发货订单" value={fmtInt(s?.pendingShip)} error={err} accent="warn" />
         <Stat label="超时未发货" value={fmtInt(s?.overdueShip)} error={err} accent="danger" />
         <Stat label="已发货订单" value={fmtInt(s?.shipped)} error={err} accent="ok" />
         <Stat label="退款/退货订单" value={fmtInt(s?.refund)} error={err} accent="danger" />
+      </div>
+      <div className="mb-4 text-[11px] text-muted-foreground">
+        当前统计来自历史明细表，后续将切换为销售汇总表（sales_*_summary）。
       </div>
 
       {/* 筛选 */}
