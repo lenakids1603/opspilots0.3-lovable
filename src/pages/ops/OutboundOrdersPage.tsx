@@ -336,6 +336,10 @@ export default function OutboundOrdersPage() {
         description="展示从聚水潭同步过来的销售出库单数据，按出库单或按款式两种维度查看。"
       />
 
+      <div className="mb-3 rounded-md border border-sky-300 bg-sky-50/60 px-4 py-2.5 text-xs text-sky-800">
+        新架构提示：完整出库明细请以聚水潭为准。新同步默认不保存完整 raw JSON，以避免数据库被海量出库数据撑爆。
+      </div>
+
       {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
         <Stat label="今日出库单数" value={fmtInt(s?.todayOrders)} error={err} />
