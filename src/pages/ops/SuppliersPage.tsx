@@ -460,18 +460,23 @@ export default function SuppliersPage() {
                       )}
                     </dd>
                   </dl>
-                  {detailRow.raw_jst_json && (
+                  {detailRow.raw_jst_json ? (
                     <div className="mt-3">
                       <Button size="sm" variant="ghost" onClick={() => setShowRaw(v => !v)}>
-                        {showRaw ? "隐藏" : "查看"} 聚水潭原始 JSON
+                        {showRaw ? "隐藏" : "查看"} 历史调试数据（raw JSON）
                       </Button>
                       {showRaw && (
-                        <pre className="mt-2 bg-muted p-2 rounded text-[11px] overflow-auto max-h-72">
-                          {JSON.stringify(detailRow.raw_jst_json, null, 2)}
-                        </pre>
+                        <>
+                          <p className="mt-2 text-[11px] text-muted-foreground">
+                            新同步默认不保存完整 raw JSON，以避免数据库被海量数据撑爆。下面是旧版历史 raw，仅供排查。
+                          </p>
+                          <pre className="mt-2 bg-muted p-2 rounded text-[11px] overflow-auto max-h-72">
+                            {JSON.stringify(detailRow.raw_jst_json, null, 2)}
+                          </pre>
+                        </>
                       )}
                     </div>
-                  )}
+                  ) : null}
                 </section>
 
                 <section>
