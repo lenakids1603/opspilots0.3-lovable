@@ -737,12 +737,14 @@ export default function SalesOrdersListPage() {
         </SheetContent>
       </Sheet>
 
-      {/* 原始 JSON 抽屉 */}
+      {/* 历史调试数据（raw JSON） */}
       <Sheet open={!!rawOpen} onOpenChange={(o) => { if (!o) setRawOpen(null); }}>
         <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto">
           <SheetHeader>
-            <SheetTitle>订单原始数据</SheetTitle>
-            <SheetDescription>历史订单可能有 raw_data；新同步默认不再保存完整 raw JSON</SheetDescription>
+            <SheetTitle>历史调试数据（raw JSON）</SheetTitle>
+            <SheetDescription>
+              新同步默认不保存完整 raw JSON，以避免数据库被海量订单和商品数据撑爆。完整订单明细请以聚水潭为准。
+            </SheetDescription>
           </SheetHeader>
           {rawOpen && <RawData orderId={rawOpen.id} />}
         </SheetContent>
@@ -762,9 +764,21 @@ function RawData({ orderId }: { orderId: string }) {
     },
   });
   if (q.isLoading) return <div className="text-sm text-muted-foreground mt-4">加载中...</div>;
+  if (!q.data) {
+    return (
+      <div className="mt-4 text-xs text-muted-foreground rounded border border-dashed p-4">
+        新同步默认不保存完整 raw JSON，以避免数据库被海量订单和商品数据撑爆。完整订单明细请以聚水潭为准。
+      </div>
+    );
+  }
   return (
-    <pre className="bg-muted p-3 rounded text-[11px] overflow-auto max-h-[70vh] mt-4">
-      {q.data ? JSON.stringify(q.data, null, 2) : "新同步订单默认不保存 raw_data；如需排查，请临时开启短期 debug payload。"}
-    </pre>
+    <details className="mt-4">
+      <summary className="text-xs text-muted-foreground cursor-pointer select-none mb-2">
+        展开历史 raw JSON（仅供排查，默认收起）
+      </summary>
+      <pre className="bg-muted p-3 rounded text-[11px] overflow-auto max-h-[70vh]">
+        {JSON.stringify(q.data, null, 2)}
+      </pre>
+    </details>
   );
 }
