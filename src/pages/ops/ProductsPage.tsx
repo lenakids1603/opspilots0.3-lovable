@@ -168,7 +168,7 @@ export default function ProductsPage() {
               })}
               {rows.length === 0 && (
                 <tr><td colSpan={9} className="py-12 text-center text-muted-foreground">
-                  暂无商品主档。点击上方"沉淀近 N 天"从已同步业务数据自动生成。
+                  暂无商品数据。当前系统不会全量同步聚水潭全部 SKU，请通过近期同步或按 SKU / 款号范围同步获取数据。
                 </td></tr>
               )}
             </tbody>
