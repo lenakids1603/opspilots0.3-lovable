@@ -39,6 +39,8 @@ export default function ProductDetailPage() {
   const [sku, setSku] = useState<Sku | null>(null);
   const [aliases, setAliases] = useState<any[]>([]);
   const [sales, setSales] = useState<any[]>([]);
+  const [salesSource, setSalesSource] = useState<"light" | "legacy" | "none">("none");
+  const [salesSummary, setSalesSummary] = useState<{ d7: any; d30: any; rows: any[] }>({ d7: null, d30: null, rows: [] });
   const [outbound, setOutbound] = useState<any[]>([]);
   const [refunds, setRefunds] = useState<any[]>([]);
   const [aftersale, setAftersale] = useState<any[]>([]);
@@ -70,7 +72,7 @@ export default function ProductDetailPage() {
       const orSku = (col: string) => code ? `${col}.eq.${code}` : null;
       const orJst = (col: string) => jstId ? `${col}.eq.${jstId}` : null;
 
-      // 销售订单明细
+      // 销售订单明细 — 优先轻量表，旧表 fallback
       {
         const filters = [orSku("sku_code"), orJst("sku_id")].filter(Boolean).join(",");
         if (filters) {
@@ -79,11 +81,41 @@ export default function ProductDetailPage() {
             .or(filters).order("synced_at", { ascending: false }).limit(200);
           if (!lightErr && (light ?? []).length > 0) {
             setSales((light ?? []).map((r: any) => ({ ...r, jst_o_id: r.o_id, amount: r.pay_amount })));
+            setSalesSource("light");
           } else {
             const { data } = await supabase.from("jst_sales_order_items")
               .select("jst_o_id, so_id, shop_id, product_name, sku_code, sku_name, qty, amount, paid_amount, refund_status, synced_at")
               .or(filters).order("synced_at", { ascending: false }).limit(200);
             setSales(data ?? []);
+            setSalesSource((data ?? []).length > 0 ? "legacy" : "none");
+          }
+        }
+
+        // 销售汇总（按 sku_code，近 7 / 30 天）
+        if (code) {
+          const d30 = new Date(); d30.setDate(d30.getDate() - 30);
+          const { data: sumRows, error: sumErr } = await (supabase as any).from("sales_sku_daily_summary")
+            .select("summary_date, pay_qty, pay_amount, estimated_cost_amount, estimated_gross_profit")
+            .eq("sku_code", code)
+            .gte("summary_date", d30.toISOString().slice(0, 10))
+            .order("summary_date", { ascending: false }).limit(120);
+          if (!sumErr) {
+            const rows = (sumRows ?? []) as any[];
+            const d7Cut = new Date(); d7Cut.setDate(d7Cut.getDate() - 7);
+            const d7Str = d7Cut.toISOString().slice(0, 10);
+            const agg = (filter: (r: any) => boolean) => rows.filter(filter).reduce(
+              (s, r) => ({
+                qty: s.qty + Number(r.pay_qty ?? 0),
+                amount: s.amount + Number(r.pay_amount ?? 0),
+                profit: s.profit + Number(r.estimated_gross_profit ?? 0),
+              }),
+              { qty: 0, amount: 0, profit: 0 }
+            );
+            setSalesSummary({
+              d7: agg(r => r.summary_date >= d7Str),
+              d30: agg(() => true),
+              rows,
+            });
           }
         }
       }
