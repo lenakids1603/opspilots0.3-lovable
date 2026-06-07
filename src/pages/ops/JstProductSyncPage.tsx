@@ -31,7 +31,7 @@ export default function JstProductSyncPage() {
   const [busy, setBusy] = useState(false);
   const [styleNo, setStyleNo] = useState("");
   const [skuCode, setSkuCode] = useState("");
-  const [recentDays, setRecentDays] = useState(30);
+  const [recentDays, setRecentDays] = useState(3);
 
   const load = async () => {
     setLoading(true);
@@ -93,7 +93,7 @@ export default function JstProductSyncPage() {
 
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">最近 N 天有更新的商品</Label>
+            <Label className="text-xs text-muted-foreground">最近 N 天有更新的商品（最多 7 天）</Label>
             <div className="flex items-center gap-2">
               <Input
                 type="number"
@@ -101,17 +101,13 @@ export default function JstProductSyncPage() {
                 onChange={(e) => setRecentDays(Number(e.target.value) || 30)}
                 className="w-[100px]"
                 min={1}
-                max={90}
+                max={7}
               />
-              <Button onClick={() => invoke({ action: "sync_recent", days: recentDays }, `同步最近 ${recentDays} 天商品`)} disabled={busy}>
+              <Button onClick={() => invoke({ action: "sync_recent", days: recentDays, max_pages: 10 }, `同步最近 ${recentDays} 天商品`)} disabled={busy}>
                 <PlayCircle className="w-4 h-4 mr-2" /> 同步最近 {recentDays} 天
               </Button>
             </div>
           </div>
-
-          <Button variant="outline" onClick={() => invoke({ action: "sync_all" }, "同步全部商品")} disabled={busy}>
-            <PlayCircle className="w-4 h-4 mr-2" /> 同步全部商品
-          </Button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -1,12 +1,11 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, CheckCircle2, RefreshCw, ShieldCheck, ExternalLink } from "lucide-react";
+import { AlertTriangle, CheckCircle2, RefreshCw, ShieldCheck, ExternalLink, Ban } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { useToast } from "@/hooks/use-toast";
 
 type Mapping = {
   id: string;
@@ -94,30 +93,7 @@ export function useSalesRefundPrecheck() {
 
 export function SalesRefundPrecheckCard() {
   const { stats, isLoading, refetch } = useSalesRefundPrecheck();
-  const { toast } = useToast();
-  const qc = useQueryClient();
   const navigate = useNavigate();
-
-  const trigger = useMutation({
-    mutationFn: async (days: number) => {
-      const { data, error } = await supabase.functions.invoke("jst-sync-dispatch", {
-        body: { module_key: "sales_refund", trigger_type: "manual_backfill", days },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.error) throw new Error(data.error);
-      return data;
-    },
-    onSuccess: (d) => {
-      toast({
-        title: d?.summary_updated ? "销售退款同步完成" : "已保存原始数据",
-        description: d?.message ?? "完成",
-      });
-      qc.invalidateQueries({ queryKey: ["jst_sync_runs"] });
-      qc.invalidateQueries({ queryKey: ["jst_sync_metrics"] });
-      qc.invalidateQueries({ queryKey: ["jst_sales_refund_daily_summary"] });
-    },
-    onError: (e: any) => toast({ title: "同步失败", description: e.message, variant: "destructive" }),
-  });
 
   const blocked = !stats.allowSummary;
 
@@ -141,12 +117,8 @@ export function SalesRefundPrecheckCard() {
             <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
               <RefreshCw className={`w-3.5 h-3.5 mr-1 ${isLoading ? "animate-spin" : ""}`} />刷新
             </Button>
-            <Button size="sm" onClick={() => trigger.mutate(7)} disabled={trigger.isPending}>
-              {trigger.isPending && <RefreshCw className="w-3.5 h-3.5 mr-1 animate-spin" />}
-              同步最近 7 天
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => trigger.mutate(30)} disabled={trigger.isPending}>
-              同步最近 30 天
+            <Button size="sm" variant="secondary" disabled title="旧版 RAW 同步已禁用，请使用订单/退款断点同步">
+              <Ban className="w-3.5 h-3.5 mr-1" /> 旧版同步已禁用
             </Button>
           </div>
         </div>
@@ -179,7 +151,7 @@ export function SalesRefundPrecheckCard() {
         ) : (
           <div className="text-xs text-emerald-800 flex items-start gap-1.5">
             <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            店铺映射处理完成。已忽略店铺不参与正式经营统计。sales_refund 同步将刷新正式 GMV / GSV / 退款指标。
+            店铺映射处理完成。已忽略店铺不参与正式经营统计。旧版 sales_refund RAW 同步已禁用，请使用新的订单/退款断点同步与销售汇总表。
           </div>
         )}
       </CardContent>

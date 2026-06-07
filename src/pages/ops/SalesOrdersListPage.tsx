@@ -147,16 +147,25 @@ function useOrderList(filters: Filters, page: number, sortKey: SortKey, sortDir:
       const { data, error, count } = await q;
       if (error) throw error;
       const ids = (data ?? []).map((r: any) => r.id);
+      const oIds = (data ?? []).map((r: any) => r.jst_o_id).filter(Boolean);
       const countMap = new Map<string, number>();
+      const legacyCountMap = new Map<string, number>();
+      if (oIds.length > 0) {
+        const { data: lightItems } = await (supabase as any).from("sales_order_light_items")
+          .select("o_id, qty").in("o_id", oIds);
+        (lightItems ?? []).forEach((it: any) => {
+          countMap.set(it.o_id, (countMap.get(it.o_id) ?? 0) + Number(it.qty ?? 1));
+        });
+      }
       if (ids.length > 0) {
         const { data: items } = await supabase.from("jst_sales_order_items")
           .select("sales_order_id, qty").in("sales_order_id", ids);
         (items ?? []).forEach((it: any) => {
-          countMap.set(it.sales_order_id, (countMap.get(it.sales_order_id) ?? 0) + Number(it.qty ?? 1));
+          legacyCountMap.set(it.sales_order_id, (legacyCountMap.get(it.sales_order_id) ?? 0) + Number(it.qty ?? 1));
         });
       }
       return {
-        rows: (data ?? []).map((r: any) => ({ ...r, item_count: countMap.get(r.id) ?? 0 })),
+        rows: (data ?? []).map((r: any) => ({ ...r, item_count: countMap.get(r.jst_o_id) ?? legacyCountMap.get(r.id) ?? 0 })),
         count: count ?? 0,
       };
     },
@@ -203,13 +212,27 @@ function useTypeStats(filters: Filters) {
   });
 }
 
-function useOrderItems(orderId: string | null) {
+function useOrderItems(order: any | null) {
   return useQuery({
-    queryKey: ["sales_order_items", orderId],
-    enabled: !!orderId,
+    queryKey: ["sales_order_items", order?.id, order?.jst_o_id],
+    enabled: !!order,
     queryFn: async () => {
+      if (order?.jst_o_id) {
+        const { data: light, error: lightErr } = await (supabase as any).from("sales_order_light_items")
+          .select("sku_id, sku_code, sku_name, style_no, product_name, color, size, qty, sale_price, pay_amount, paid_amount, refund_status, synced_at")
+          .eq("o_id", order.jst_o_id)
+          .order("sku_code");
+        if (!lightErr && (light ?? []).length > 0) {
+          return (light ?? []).map((it: any) => ({
+            ...it,
+            i_id: it.style_no,
+            properties_value: [it.color, it.size].filter(Boolean).join(" / "),
+            amount: it.pay_amount,
+          }));
+        }
+      }
       const { data, error } = await supabase.from("jst_sales_order_items")
-        .select("*").eq("sales_order_id", orderId!).order("item_index");
+        .select("*").eq("sales_order_id", order!.id).order("item_index");
       if (error) throw error;
       return data ?? [];
     },
@@ -332,7 +355,7 @@ export default function SalesOrdersListPage() {
   const statsQ = useStats(filters);
   const typeStatsQ = useTypeStats(filters);
   const listQ = useOrderList(filters, page, sortKey, sortDir);
-  const itemsQ = useOrderItems(detailRow?.id ?? null);
+  const itemsQ = useOrderItems(detailRow ?? null);
   const aftersaleQ = useOrderAftersale(detailRow?.so_id, detailRow?.jst_o_id);
 
   const onSearch = () => { setPage(0); setFilters(draft); };
@@ -712,7 +735,7 @@ export default function SalesOrdersListPage() {
         <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto">
           <SheetHeader>
             <SheetTitle>订单原始数据</SheetTitle>
-            <SheetDescription>聚水潭返回的 raw_data（敏感字段已剥除）</SheetDescription>
+            <SheetDescription>历史订单可能有 raw_data；新同步默认不再保存完整 raw JSON</SheetDescription>
           </SheetHeader>
           {rawOpen && <RawData orderId={rawOpen.id} />}
         </SheetContent>
@@ -734,7 +757,7 @@ function RawData({ orderId }: { orderId: string }) {
   if (q.isLoading) return <div className="text-sm text-muted-foreground mt-4">加载中...</div>;
   return (
     <pre className="bg-muted p-3 rounded text-[11px] overflow-auto max-h-[70vh] mt-4">
-      {JSON.stringify(q.data, null, 2)}
+      {q.data ? JSON.stringify(q.data, null, 2) : "新同步订单默认不保存 raw_data；如需排查，请临时开启短期 debug payload。"}
     </pre>
   );
 }

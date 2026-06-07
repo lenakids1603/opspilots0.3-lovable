@@ -4,8 +4,9 @@
 //
 // 鉴权:Authorization: Bearer <user_jwt>,且用户具 ops_role='admin'
 // 支持的 action:
-//   - sync_recent  { days?: number }            按 modified 时间增量
-//   - sync_all     { max_pages?: number }       不带时间窗口的全量(慎用)
+//   - sync_recent  { days?: number, max_pages?: number } 按 modified 时间增量
+//   - sync_range   { modified_begin, modified_end, max_pages } 明确时间窗
+//   - sync_all     默认禁用；仅 ENABLE_JST_PRODUCT_FULL_SYNC=true 时允许
 //   - sync_by_style{ style_no: string }         按款号补同步
 //   - sync_by_sku  { sku_code: string }         按 SKU 编码补同步
 //   - sync_images  { limit?: number }           仅图片转存,处理待转存的 N 条
@@ -34,6 +35,9 @@ const md5 = (s: string) => createHash("md5").update(s).digest("hex");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const RATE_DELAY_MS = 260;
 const BUCKET = "product-images";
+const DEFAULT_PRODUCT_MAX_PAGES = 10;
+const HARD_PRODUCT_MAX_PAGES = 50;
+const ENABLE_JST_PRODUCT_FULL_SYNC = Deno.env.get("ENABLE_JST_PRODUCT_FULL_SYNC") === "true";
 
 function sanitize(s: unknown) {
   return String(s ?? "").replace(/[A-Fa-f0-9]{32,}/g, "***");
@@ -288,7 +292,6 @@ async function upsertSku(rec: any): Promise<{ productId: string; skuId: string }
     cost_price: costPrice,
     sale_price: salePrice,
     is_active: true,
-    raw_jst_json: rec,
     last_synced_at: new Date().toISOString(),
   };
   // 先按 jst_product_id 查
@@ -325,7 +328,6 @@ async function upsertSku(rec: any): Promise<{ productId: string; skuId: string }
     supplier_id: supplierId,
     external_image_url: skuImageUrl || null,
     is_active: true,
-    raw_jst_json: rec,
     last_synced_at: new Date().toISOString(),
   };
   let skuId: string | null = null;
@@ -412,7 +414,7 @@ async function runMinimalSkuQuery(logId: string) {
   return res;
 }
 
-async function syncByBiz(biz: Record<string, unknown>, logId: string) {
+async function syncByBiz(biz: Record<string, unknown>, logId: string, options: { maxPages?: number } = {}) {
   const minimal = await runMinimalSkuQuery(logId);
   if (!minimal.ok) {
     await finishLog(logId, minimal.permissionDenied ? "permission_denied" : "failed", {
@@ -425,8 +427,11 @@ async function syncByBiz(biz: Record<string, unknown>, logId: string) {
   let page = 1;
   let success = 0, failed = 0;
   const errors: string[] = [];
-  const MAX_PAGES = 200;
-  while (page <= MAX_PAGES) {
+  const maxPages = Math.min(
+    HARD_PRODUCT_MAX_PAGES,
+    Math.max(1, Number(options.maxPages ?? DEFAULT_PRODUCT_MAX_PAGES) || DEFAULT_PRODUCT_MAX_PAGES),
+  );
+  while (page <= maxPages) {
     const callBiz = { flds: "purchase_price,pics", ...biz, page_index: page, page_size: 50 };
     const res = await callOpenweb(SKU_QUERY_PATH, callBiz);
     if (!res.ok) {
@@ -461,7 +466,7 @@ async function syncByBiz(biz: Record<string, unknown>, logId: string) {
   }
   await finishLog(logId, failed === 0 ? "success" : (success > 0 ? "partial_failed" : "failed"), {
     success,
-    message: `共写入 ${success}, 失败 ${failed}, 页数 ${page}`,
+    message: `共写入 ${success}, 失败 ${failed}, 页数 ${Math.min(page, maxPages)}, max_pages=${maxPages}`,
     error_detail: errors.length ? errors.slice(0, 5).join(" | ").slice(0, 1500) : null,
   });
   return { permissionDenied: false, success, failed };
@@ -628,9 +633,10 @@ Deno.serve(async (req) => {
 
     // 商品/SKU 同步
     let biz: Record<string, unknown> = {};
+    let maxPages = Math.min(HARD_PRODUCT_MAX_PAGES, Math.max(1, Number(body.max_pages ?? DEFAULT_PRODUCT_MAX_PAGES) || DEFAULT_PRODUCT_MAX_PAGES));
     let syncType = "jst_products";
     if (action === "sync_recent") {
-      const days = Math.max(1, Math.min(90, Number(body.days ?? 30)));
+      const days = Math.max(1, Math.min(7, Number(body.days ?? 3)));
       const to = new Date();
       const from = new Date(Date.now() - days * 86400_000);
       const fmt = (d: Date) => {
@@ -638,7 +644,19 @@ Deno.serve(async (req) => {
         return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
       };
       biz = { modified_begin: fmt(from), modified_end: fmt(to) };
+    } else if (action === "sync_range") {
+      const modifiedBegin = String(body.modified_begin ?? "").trim();
+      const modifiedEnd = String(body.modified_end ?? "").trim();
+      if (!modifiedBegin || !modifiedEnd) throw new Error("缺少 modified_begin / modified_end");
+      if (!body.max_pages) throw new Error("缺少 max_pages；商品同步必须限制页数");
+      maxPages = Math.min(HARD_PRODUCT_MAX_PAGES, Math.max(1, Number(body.max_pages) || DEFAULT_PRODUCT_MAX_PAGES));
+      biz = { modified_begin: modifiedBegin, modified_end: modifiedEnd };
     } else if (action === "sync_all") {
+      if (!ENABLE_JST_PRODUCT_FULL_SYNC) {
+        throw new Error("商品全量同步已禁用。请使用 sync_recent / sync_range / sync_by_style / sync_by_sku，并显式限制 max_pages。");
+      }
+      if (!body.max_pages) throw new Error("sync_all 必须显式传入 max_pages");
+      maxPages = Math.min(10, Math.max(1, Number(body.max_pages) || 1));
       biz = {};
     } else if (action === "sync_by_style") {
       const styleNo = String(body.style_no ?? "").trim();
@@ -652,10 +670,10 @@ Deno.serve(async (req) => {
       throw new Error(`未知 action: ${action}`);
     }
 
-    const logId = await startLog(syncType, { action, biz });
+    const logId = await startLog(syncType, { action, biz, max_pages: maxPages, full_sync_enabled: ENABLE_JST_PRODUCT_FULL_SYNC });
 
     const runBg = async () => {
-      try { await syncByBiz(biz, logId); }
+      try { await syncByBiz(biz, logId, { maxPages }); }
       catch (e) {
         await finishLog(logId, "failed", { success: 0, message: "同步失败", error_detail: sanitize((e as Error).message).slice(0, 1000) });
       }

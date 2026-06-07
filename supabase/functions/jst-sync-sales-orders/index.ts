@@ -1,6 +1,6 @@
 // Edge Function: 聚水潭销售订单同步（断点续跑 + 进度条）
 // API: /open/orders/single/query  (date_type=modified)
-// 写入 jst_sales_orders + jst_sales_order_items
+// 写入 jst_sales_orders(轻量主表) + sales_order_light_items + sales summaries + shipping_risk_orders
 // Actions:
 //   - start_sales_job / tick_sales_job / cancel_sales_job  (推荐, 走 jst_sync_jobs)
 //   - (无 action) 兼容旧的一次性后台同步, 可用于 cron
@@ -17,6 +17,7 @@ const SYNC_TYPE = "sales_orders";
 const METHOD_PATH = "orders/single/query";
 const PAGE_SIZE = 50;
 const SALES_REQUEST_VERSION = 2;
+const ENABLE_LEGACY_SALES_ORDER_ITEMS = Deno.env.get("ENABLE_LEGACY_SALES_ORDER_ITEMS") === "true";
 
 // 隐私字段：raw_data 写库前剥除
 const PRIVACY_KEYS = new Set([
@@ -49,6 +50,24 @@ function str(v: any): string | null {
   return s.length === 0 ? null : s;
 }
 
+function splitProps(v: string | null): { color: string | null; size: string | null } {
+  if (!v) return { color: null, size: null };
+  const parts = String(v).split(/[,;|，；\s]+/).map((s) => s.trim()).filter(Boolean);
+  return { color: parts[0] ?? null, size: parts[1] ?? null };
+}
+
+function riskFromDeadline(deadlineIso: string | null) {
+  if (!deadlineIso) {
+    return { remainingHours: null as number | null, isTimeout: false, riskLevel: "unknown" };
+  }
+  const remainingHours = (new Date(deadlineIso).getTime() - Date.now()) / 3_600_000;
+  const riskLevel =
+    remainingHours < 0 ? "timeout" :
+    remainingHours <= 6 ? "high" :
+    remainingHours <= 24 ? "medium" : "low";
+  return { remainingHours, isTimeout: remainingHours < 0, riskLevel };
+}
+
 function pickItems(o: any): any[] {
   return pickItemsArray(o);
 }
@@ -57,7 +76,6 @@ async function upsertSalesOrder(o: any): Promise<{ orderId: string; itemsUpserte
   const jstOId = str(o.o_id ?? o.oId);
   if (!jstOId) throw new Error("missing o_id");
 
-  const safeRaw = sanitize(o);
   const orderRow = {
     jst_o_id: jstOId,
     so_id: str(o.so_id),
@@ -89,7 +107,7 @@ async function upsertSalesOrder(o: any): Promise<{ orderId: string; itemsUpserte
     receiver_city: str(o.receiver_city),
     receiver_district: str(o.receiver_district),
     receiver_mobile_masked: null,
-    raw_data: safeRaw,
+    raw_data: null,
     synced_at: new Date().toISOString(),
   } as any;
 
@@ -120,44 +138,10 @@ async function upsertSalesOrder(o: any): Promise<{ orderId: string; itemsUpserte
     .from("jst_sales_orders").upsert(orderRow, { onConflict: "jst_o_id" }).select("id").single();
   if (error) throw error;
 
-  const itemList = pickItems(o);
-  let itemsUpserted = 0;
-  for (let i = 0; i < itemList.length; i++) {
-    const it = itemList[i];
-    const jstItemId = str(it.oi_id ?? it.item_id ?? it.id);
-    const skuId = str(it.sku_id);
-    const itemUniqueKey = `${jstOId}|${jstItemId ?? ""}|${skuId ?? ""}|${i}`;
-    const itemRow = {
-      sales_order_id: up.id,
-      jst_o_id: jstOId,
-      so_id: str(o.so_id),
-      shop_id: str(o.shop_id),
-      item_index: i,
-      jst_item_id: jstItemId,
-      sku_id: skuId,
-      i_id: str(it.i_id),
-      sku_code: str(it.sku_code ?? it.sku),
-      shop_sku_id: str(it.shop_sku_id),
-      product_name: str(it.name ?? it.product_name),
-      sku_name: str(it.sku_name ?? it.properties_value),
-      qty: num(it.qty ?? it.amount_qty ?? it.sale_qty),
-      sale_price: num(it.sale_price ?? it.price),
-      amount: num(it.amount ?? it.sale_amount),
-      paid_amount: num(it.paid_amount ?? it.pay_amount),
-      refund_status: str(it.refund_status),
-      pic: str(it.pic),
-      supplier_id: str(it.supplier_id),
-      supplier_name: str(it.supplier_name),
-      item_unique_key: itemUniqueKey,
-      raw_item_data: sanitize(it),
-      synced_at: new Date().toISOString(),
-    };
-    const { error: itErr } = await admin
-      .from("jst_sales_order_items").upsert(itemRow, { onConflict: "item_unique_key" });
-    if (itErr) throw itErr;
-    itemsUpserted++;
-  }
-  return { orderId: up.id as string, itemsUpserted };
+  const sourceByOId = new Map<string, any>([[jstOId, o]]);
+  const idByOId = new Map<string, string>([[jstOId, up.id as string]]);
+  const derived = await persistDerivedSalesState([orderRow], sourceByOId, idByOId);
+  return { orderId: up.id as string, itemsUpserted: derived.itemUpserted };
 }
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
@@ -204,7 +188,7 @@ function buildSalesOrderRowForBatch(o: any, hasRefund: boolean) {
     receiver_city: str(o.receiver_city),
     receiver_district: str(o.receiver_district),
     receiver_mobile_masked: null,
-    raw_data: sanitize(o),
+    raw_data: null,
     synced_at: new Date().toISOString(),
   } as any;
 
@@ -253,11 +237,244 @@ function buildSalesItemRowsForBatch(o: any, salesOrderId: string) {
       supplier_id: str(it.supplier_id),
       supplier_name: str(it.supplier_name),
       item_unique_key: `${jstOId}|${jstItemId ?? ""}|${skuId ?? ""}|${i}`,
-      raw_item_data: sanitize(it),
+      raw_item_data: null,
       synced_at: new Date().toISOString(),
     });
   }
   return rows;
+}
+
+function buildSalesLightItemRowsForBatch(o: any, orderRow: any) {
+  const jstOId = str(o.o_id ?? o.oId);
+  if (!jstOId) throw new Error("missing o_id");
+  const rows: any[] = [];
+  const itemList = pickItems(o);
+  const isShipped = ["shipped", "returned_after_ship"].includes(String(orderRow.internal_order_type ?? ""));
+  const hasRefund = ["paid_cancelled_before_ship", "returned_after_ship"].includes(String(orderRow.internal_order_type ?? ""));
+  for (let i = 0; i < itemList.length; i++) {
+    const it = itemList[i];
+    const jstItemId = str(it.oi_id ?? it.item_id ?? it.id);
+    const skuId = str(it.sku_id);
+    const props = splitProps(str(it.properties_value ?? it.sku_name));
+    const qty = num(it.qty ?? it.amount_qty ?? it.sale_qty);
+    const payAmount = num(it.paid_amount ?? it.pay_amount ?? it.amount ?? it.sale_amount);
+    const costPrice = num(it.cost_price ?? it.purchase_price, 0);
+    rows.push({
+      item_unique_key: `${jstOId}|${jstItemId ?? ""}|${skuId ?? ""}|${i}`,
+      o_id: jstOId,
+      so_id: str(o.so_id),
+      shop_id: str(o.shop_id),
+      shop_name: str(o.shop_name),
+      platform: str(o.platform ?? o.shop_site ?? o.platform_type),
+      order_status: orderRow.status,
+      internal_order_type: orderRow.internal_order_type,
+      internal_order_type_name: orderRow.internal_order_type_name,
+      created_time: orderRow.created_time,
+      pay_time: orderRow.pay_time,
+      modified_time: orderRow.modified_time,
+      plan_delivery_date: orderRow.plan_delivery_date,
+      io_id: orderRow.io_id,
+      io_date: orderRow.io_date,
+      l_id: orderRow.l_id,
+      sku_id: skuId,
+      sku_code: str(it.sku_code ?? it.sku),
+      sku_name: str(it.sku_name ?? it.properties_value),
+      style_no: str(it.style_no ?? it.styleNo ?? it.i_id),
+      product_name: str(it.name ?? it.product_name),
+      color: str(it.color) ?? props.color,
+      size: str(it.size) ?? props.size,
+      supplier_id: str(it.supplier_id),
+      supplier_name: str(it.supplier_name),
+      qty,
+      sale_price: num(it.sale_price ?? it.price),
+      pay_amount: payAmount,
+      paid_amount: payAmount,
+      refund_status: str(it.refund_status),
+      estimated_cost_price: costPrice > 0 ? costPrice : null,
+      estimated_cost_amount: costPrice > 0 ? costPrice * qty : 0,
+      is_shipped: isShipped,
+      has_refund: hasRefund,
+      last_jst_modified: orderRow.modified_time,
+      synced_at: new Date().toISOString(),
+    });
+  }
+  return rows;
+}
+
+async function upsertLightItemRows(rows: any[]) {
+  let upserted = 0;
+  let failed = 0;
+  let lastErr = "";
+  for (const itemChunk of chunk(rows, 500)) {
+    const { error } = await admin
+      .from("sales_order_light_items")
+      .upsert(itemChunk, { onConflict: "item_unique_key" });
+    if (!error) {
+      upserted += itemChunk.length;
+      continue;
+    }
+    for (const itemRow of itemChunk) {
+      const { error: rowErr } = await admin
+        .from("sales_order_light_items")
+        .upsert(itemRow, { onConflict: "item_unique_key" });
+      if (rowErr) {
+        failed++;
+        lastErr = String(rowErr.message ?? rowErr);
+      } else {
+        upserted++;
+      }
+    }
+  }
+  return { upserted, failed, errorDetail: lastErr };
+}
+
+async function maybeUpsertLegacyItemRows(rows: any[]) {
+  if (!ENABLE_LEGACY_SALES_ORDER_ITEMS || rows.length === 0) return { upserted: 0, failed: 0, errorDetail: "" };
+  let upserted = 0;
+  let failed = 0;
+  let lastErr = "";
+  for (const itemChunk of chunk(rows, 500)) {
+    const { error } = await admin
+      .from("jst_sales_order_items")
+      .upsert(itemChunk, { onConflict: "item_unique_key" });
+    if (!error) {
+      upserted += itemChunk.length;
+      continue;
+    }
+    for (const itemRow of itemChunk) {
+      const { error: rowErr } = await admin
+        .from("jst_sales_order_items")
+        .upsert(itemRow, { onConflict: "item_unique_key" });
+      if (rowErr) {
+        failed++;
+        lastErr = String(rowErr.message ?? rowErr);
+      } else {
+        upserted++;
+      }
+    }
+  }
+  return { upserted, failed, errorDetail: lastErr };
+}
+
+async function refreshSalesSummaries(itemKeys: string[]) {
+  const keys = Array.from(new Set(itemKeys.filter(Boolean)));
+  if (keys.length === 0) return { refreshed: false, detail: null as any };
+  const { data, error } = await admin.rpc("refresh_sales_summaries_for_order_items", { _item_keys: keys });
+  if (error) throw error;
+  return { refreshed: true, detail: data };
+}
+
+async function upsertOrderLookup(lightRows: any[]) {
+  const byOrder = new Map<string, any>();
+  for (const row of lightRows) {
+    const key = row.o_id;
+    if (!key) continue;
+    const cur = byOrder.get(key) ?? {
+      o_id: key,
+      so_id: row.so_id,
+      shop_id: row.shop_id,
+      shop_name: row.shop_name,
+      platform: row.platform,
+      order_status: row.order_status,
+      pay_time: row.pay_time,
+      pay_amount: 0,
+      item_count: 0,
+      qty: 0,
+      has_refund: false,
+      jst_modified: row.last_jst_modified,
+      synced_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 90 * 86400_000).toISOString(),
+    };
+    cur.pay_amount += Number(row.pay_amount ?? 0);
+    cur.qty += Number(row.qty ?? 0);
+    cur.item_count += 1;
+    cur.has_refund = cur.has_refund || !!row.has_refund;
+    cur.jst_modified = row.last_jst_modified ?? cur.jst_modified;
+    byOrder.set(key, cur);
+  }
+  const rows = Array.from(byOrder.values());
+  if (rows.length === 0) return 0;
+  const { error } = await admin.from("order_lookup_index").upsert(rows, { onConflict: "o_id" });
+  if (error) throw error;
+  return rows.length;
+}
+
+async function syncShippingRisks(orderRows: any[], lightRows: any[]) {
+  const removeOIds = orderRows
+    .filter((row) => row.jst_o_id && row.internal_order_type !== "paid_pending_ship")
+    .map((row) => String(row.jst_o_id));
+  let deleted = 0;
+  for (const ids of chunk(Array.from(new Set(removeOIds)), 200)) {
+    const { data, error } = await admin.from("shipping_risk_orders").delete().in("o_id", ids).select("id");
+    if (error) throw error;
+    deleted += data?.length ?? 0;
+  }
+
+  const riskRows = lightRows
+    .filter((row) => row.internal_order_type === "paid_pending_ship")
+    .map((row) => {
+      const risk = riskFromDeadline(row.plan_delivery_date);
+      return {
+        item_unique_key: row.item_unique_key,
+        o_id: row.o_id,
+        so_id: row.so_id,
+        shop_id: row.shop_id,
+        shop_name: row.shop_name,
+        platform: row.platform,
+        order_status: row.order_status,
+        pay_time: row.pay_time,
+        jst_modified: row.last_jst_modified,
+        latest_ship_time: row.plan_delivery_date,
+        remaining_hours: risk.remainingHours,
+        is_timeout: risk.isTimeout,
+        risk_level: risk.riskLevel,
+        sku_code: row.sku_code,
+        sku_name: row.sku_name,
+        style_no: row.style_no,
+        color: row.color,
+        size: row.size,
+        qty: row.qty,
+        supplier_name: row.supplier_name,
+        last_checked_at: new Date().toISOString(),
+      };
+    });
+  if (riskRows.length > 0) {
+    const { error } = await admin.from("shipping_risk_orders").upsert(riskRows, { onConflict: "item_unique_key" });
+    if (error) throw error;
+  }
+  return { riskUpserted: riskRows.length, riskDeleted: deleted };
+}
+
+async function persistDerivedSalesState(orderRows: any[], sourceByOId: Map<string, any>, idByOId: Map<string, string>) {
+  const lightRows: any[] = [];
+  const legacyRows: any[] = [];
+  for (const orderRow of orderRows) {
+    const source = sourceByOId.get(orderRow.jst_o_id);
+    if (!source) continue;
+    const rows = buildSalesLightItemRowsForBatch(source, orderRow);
+    lightRows.push(...rows);
+    const salesOrderId = idByOId.get(orderRow.jst_o_id);
+    if (salesOrderId && ENABLE_LEGACY_SALES_ORDER_ITEMS) {
+      legacyRows.push(...buildSalesItemRowsForBatch(source, salesOrderId));
+    }
+  }
+
+  const light = await upsertLightItemRows(lightRows);
+  const legacy = await maybeUpsertLegacyItemRows(legacyRows);
+  const summary = await refreshSalesSummaries(lightRows.map((row) => row.item_unique_key));
+  const lookupUpserted = await upsertOrderLookup(lightRows);
+  const risks = await syncShippingRisks(orderRows, lightRows);
+  const failed = light.failed + legacy.failed;
+  const errorDetail = [light.errorDetail, legacy.errorDetail].filter(Boolean).join(" | ");
+  return {
+    itemUpserted: light.upserted,
+    legacyItemUpserted: legacy.upserted,
+    failed,
+    errorDetail,
+    lookupUpserted,
+    summary,
+    ...risks,
+  };
 }
 
 async function loadRefundKeySet(orders: any[]): Promise<Set<string>> {
@@ -338,41 +555,22 @@ async function upsertSalesOrdersBatch(orders: any[]) {
   const idByOId = new Map<string, string>();
   for (const row of upsertedOrders ?? []) idByOId.set(String(row.jst_o_id), String(row.id));
 
-  const itemRows: any[] = [];
-  for (const orderRow of orderRows) {
-    const salesOrderId = idByOId.get(orderRow.jst_o_id);
-    const source = sourceByOId.get(orderRow.jst_o_id);
-    if (!salesOrderId || !source) {
-      failed++;
-      lastErr = `missing upserted id for o_id=${orderRow.jst_o_id}`;
-      continue;
-    }
-    itemRows.push(...buildSalesItemRowsForBatch(source, salesOrderId));
+  const missingIds = orderRows.filter((row) => !idByOId.get(row.jst_o_id)).map((row) => row.jst_o_id);
+  if (missingIds.length > 0) {
+    failed += missingIds.length;
+    lastErr = `missing upserted id for o_id=${missingIds.slice(0, 5).join(",")}`;
   }
 
-  let itemUpserted = 0;
-  for (const itemChunk of chunk(itemRows, 500)) {
-    const { error: itemErr } = await admin
-      .from("jst_sales_order_items")
-      .upsert(itemChunk, { onConflict: "item_unique_key" });
-    if (!itemErr) {
-      itemUpserted += itemChunk.length;
-      continue;
-    }
-    for (const itemRow of itemChunk) {
-      const { error } = await admin
-        .from("jst_sales_order_items")
-        .upsert(itemRow, { onConflict: "item_unique_key" });
-      if (error) {
-        failed++;
-        lastErr = String(error.message ?? error);
-      } else {
-        itemUpserted++;
-      }
-    }
+  try {
+    const derived = await persistDerivedSalesState(orderRows, sourceByOId, idByOId);
+    failed += derived.failed;
+    lastErr = derived.errorDetail || lastErr;
+    return { mainUpserted: orderRows.length, itemUpserted: derived.itemUpserted, failed, errorDetail: lastErr };
+  } catch (e) {
+    failed++;
+    lastErr = String((e as Error).message ?? e);
+    return { mainUpserted: orderRows.length, itemUpserted: 0, failed, errorDetail: lastErr };
   }
-
-  return { mainUpserted: orderRows.length, itemUpserted, failed, errorDetail: lastErr };
 }
 
 type SalesParamMode = "start_time" | "modified_begin";

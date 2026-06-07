@@ -920,7 +920,7 @@ export default function JstDataIntegrationPage() {
             {/* ====== 订单API ====== */}
             <TabsContent value="order" className="m-0 p-5 space-y-4">
               <div className="rounded-md border border-sky-300 bg-sky-50/60 px-4 py-2.5 text-xs text-sky-800">
-                聚水潭销售订单同步（断点续跑）：调用 <code>/open/orders/single/query</code>，按修改时间窗口分页拉取，自动 upsert 到 <code>jst_sales_orders</code> + <code>jst_sales_order_items</code>。隐私字段（收件人姓名/手机/详细地址）不会落库，仅保留省/市/区用于地域分析。销售 GMV / GSV / 退款分析 / 订单列表均以此正式表为准。
+                聚水潭销售订单同步（断点续跑）：调用 <code>/open/orders/single/query</code>，按修改时间窗口分页拉取，写入轻量订单主表、轻量明细、销售汇总和未发货风险表。默认不再保存完整 raw JSON；旧订单明细表仅作历史兼容。
               </div>
               <InboundSyncJobPanel
                 cancelAllVersion={cancelAllVersion}

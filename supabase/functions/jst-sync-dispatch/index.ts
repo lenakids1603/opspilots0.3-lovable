@@ -24,6 +24,7 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession:
 const md5 = (s: string) => createHash("md5").update(s).digest("hex");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const RATE_DELAY_MS = 260;
+const ENABLE_LEGACY_RAW_SYNC = Deno.env.get("ENABLE_LEGACY_RAW_SYNC") === "true";
 
 // ---------- proxy ----------
 let _proxyClient: Deno.HttpClient | null = null;
@@ -1003,6 +1004,13 @@ Deno.serve(async (req) => {
 
     // ============ sales_refund ============
     if (moduleKey === "sales_refund") {
+      if (!ENABLE_LEGACY_RAW_SYNC) {
+        return respJson({
+          ok: false,
+          disabled: true,
+          error: "旧版 sales_refund RAW 同步已禁用，避免继续写入 jst_sales_refund_raw.raw_json。请使用订单/退款专用断点同步与新汇总表。",
+        }, 410);
+      }
       const precheck = await shopMappingPrecheck();
       const startedAt = new Date().toISOString();
       const t0 = Date.now();
