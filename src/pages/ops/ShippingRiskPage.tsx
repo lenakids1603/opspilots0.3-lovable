@@ -87,7 +87,7 @@ export default function ShippingRiskPage() {
       let q = (supabase as any)
         .from("shipping_risk_orders")
         .select(
-          "id,o_id,so_id,shop_id,shop_name,platform,order_status,order_created_at,pay_time,latest_ship_time,remaining_hours,is_timeout,risk_level,sku_code,sku_name,style_no,color,size,qty,supplier_name,last_checked_at",
+          "id,o_id,so_id,shop_id,shop_name,platform,order_status,order_created_at,pay_time,created_at,latest_ship_time,remaining_hours,is_timeout,risk_level,sku_code,sku_name,style_no,color,size,qty,supplier_name,last_checked_at",
           { count: "exact" }
         )
         .order("order_created_at", { ascending: true, nullsFirst: false })
