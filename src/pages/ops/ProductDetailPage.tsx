@@ -77,8 +77,8 @@ export default function ProductDetailPage() {
         const filters = [orSku("sku_code"), orJst("sku_id")].filter(Boolean).join(",");
         if (filters) {
           const { data: light, error: lightErr } = await (supabase as any).from("sales_order_light_items")
-            .select("o_id, so_id, shop_id, product_name, sku_code, sku_name, qty, pay_amount, paid_amount, refund_status, synced_at")
-            .or(filters).order("synced_at", { ascending: false }).limit(200);
+            .select("o_id, so_id, shop_id, product_name, sku_code, sku_name, qty, pay_amount, paid_amount, refund_status, order_created_at, pay_time, synced_at")
+            .or(filters).order("order_created_at", { ascending: false, nullsFirst: false }).limit(200);
           if (!lightErr && (light ?? []).length > 0) {
             setSales((light ?? []).map((r: any) => ({ ...r, jst_o_id: r.o_id, amount: r.pay_amount })));
             setSalesSource("light");
@@ -264,9 +264,12 @@ export default function ProductDetailPage() {
               </Card>
             </div>
             <Card className="p-4">
+              <div className="mb-2 text-[11px] text-muted-foreground">
+                时间列为下单时间（order_created_at → pay_time）；历史 fallback 行若无下单时间，则显示同步入库时间。
+              </div>
               <DataTable
-                columns={["订单号", "店铺", "商品名", "SKU", "数量", "金额", "实付", "退款状态", "时间"]}
-                rows={sales.map(s => [s.jst_o_id ?? s.so_id, s.shop_id, s.product_name, s.sku_code, s.qty, s.amount, s.paid_amount, s.refund_status, fmt(s.synced_at)])}
+                columns={["订单号", "店铺", "商品名", "SKU", "数量", "金额", "实付", "退款状态", "下单时间"]}
+                rows={sales.map(s => [s.jst_o_id ?? s.so_id, s.shop_id, s.product_name, s.sku_code, s.qty, s.amount, s.paid_amount, s.refund_status, fmt(s.order_created_at ?? s.pay_time ?? s.synced_at)])}
               />
             </Card>
           </div>

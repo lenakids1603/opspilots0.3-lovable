@@ -450,7 +450,7 @@ export default function SalesOrdersListPage() {
         <Stat label="退款/退货订单" value={fmtInt(s?.refund)} error={err} accent="danger" />
       </div>
       <div className="mb-2 text-[11px] text-muted-foreground">
-        当前以上统计来自历史明细表（jst_sales_orders）。下方为今日汇总（sales_daily_summary，新轻量来源）：
+        当前以上统计来自历史明细表（jst_sales_orders）。下方为今日汇总（sales_daily_summary，新轻量来源；以 order_created_at / pay_time 为口径，旧明细仅做对照）：
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         {todaySummaryQ.data?.present ? (
@@ -479,9 +479,9 @@ export default function SalesOrdersListPage() {
               <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="order_created_at">下单时间</SelectItem>
-                <SelectItem value="pay_time">支付时间</SelectItem>
-                <SelectItem value="created_time">创建时间</SelectItem>
-                <SelectItem value="modified_time">修改时间</SelectItem>
+                <SelectItem value="pay_time">付款时间</SelectItem>
+                <SelectItem value="created_time">聚水潭创建时间</SelectItem>
+                <SelectItem value="modified_time">聚水潭修改时间</SelectItem>
               </SelectContent></Select></div>
           <div><label className="text-[11px] text-muted-foreground">店铺</label>
             <Input className="h-9" value={draft.shop} onChange={e => setDraft({ ...draft, shop: e.target.value })} placeholder="店铺名称" /></div>
@@ -657,8 +657,9 @@ export default function SalesOrdersListPage() {
                   <div><span className="text-muted-foreground">实付金额：</span><span className="tabular-nums">{fmtMoney(detailRow.paid_amount)}</span></div>
                   <div><span className="text-muted-foreground">商品件数：</span>{fmtInt(detailRow.item_count)}</div>
                   <div><span className="text-muted-foreground">下单时间：</span>{formatDateTimeCN(orderBusinessTime(detailRow))}</div>
-                  <div><span className="text-muted-foreground">支付时间：</span>{formatDateTimeCN(detailRow.pay_time)}</div>
-                  <div><span className="text-muted-foreground">修改时间：</span>{formatDateTimeCN(detailRow.modified_time)}</div>
+                  <div><span className="text-muted-foreground">付款时间：</span>{formatDateTimeCN(detailRow.pay_time)}</div>
+                  <div><span className="text-muted-foreground">聚水潭修改时间：</span>{formatDateTimeCN(detailRow.modified_time)}</div>
+                  <div className="text-xs text-muted-foreground col-span-2">系统入库时间：{formatDateTimeCN(detailRow.created_at)}（仅技术信息，非客户下单时间）</div>
                 </div>
               </section>
 

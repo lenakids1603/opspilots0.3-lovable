@@ -27,6 +27,7 @@ type RiskRow = {
   order_status: string | null;
   order_created_at: string | null;
   pay_time: string | null;
+  created_at: string | null;
   latest_ship_time: string | null;
   remaining_hours: number | null;
   is_timeout: boolean | null;
@@ -74,7 +75,7 @@ function fmtHours(h: number | null) {
   return `${n.toFixed(1)}h`;
 }
 
-const orderBusinessTime = (row: RiskRow) => row.order_created_at ?? row.pay_time ?? null;
+const orderBusinessTime = (row: RiskRow) => row.order_created_at ?? row.pay_time ?? (row as any).created_at ?? null;
 
 export default function ShippingRiskPage() {
   const [filters, setFilters] = useState<Filters>(defaultFilters());
@@ -86,7 +87,7 @@ export default function ShippingRiskPage() {
       let q = (supabase as any)
         .from("shipping_risk_orders")
         .select(
-          "id,o_id,so_id,shop_id,shop_name,platform,order_status,order_created_at,pay_time,latest_ship_time,remaining_hours,is_timeout,risk_level,sku_code,sku_name,style_no,color,size,qty,supplier_name,last_checked_at",
+          "id,o_id,so_id,shop_id,shop_name,platform,order_status,order_created_at,pay_time,created_at,latest_ship_time,remaining_hours,is_timeout,risk_level,sku_code,sku_name,style_no,color,size,qty,supplier_name,last_checked_at",
           { count: "exact" }
         )
         .order("order_created_at", { ascending: true, nullsFirst: false })
@@ -137,6 +138,7 @@ export default function ShippingRiskPage() {
         <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
         <span>
           本页面只读 shipping_risk_orders，不触发同步、不调用回填。订单变为已发货 / 已取消后会被同步任务自动从该表移除。完整订单明细仍以聚水潭为准。
+          时间口径：下单时间 = <code>order_created_at</code>（回退 <code>pay_time</code>），付款时间 = <code>pay_time</code>，最晚发货 = <code>latest_ship_time</code>，最后检查 = <code>last_checked_at</code>。系统入库时间（<code>created_at</code>）不作为下单时间展示。
         </span>
       </div>
 
@@ -218,6 +220,7 @@ export default function ShippingRiskPage() {
                 <TableHead>尺码</TableHead>
                 <TableHead className="text-right">数量</TableHead>
                 <TableHead>下单时间</TableHead>
+                <TableHead>付款时间</TableHead>
                 <TableHead>最晚发货</TableHead>
                 <TableHead className="text-right">剩余</TableHead>
                 <TableHead>超时</TableHead>
@@ -228,15 +231,15 @@ export default function ShippingRiskPage() {
             </TableHeader>
             <TableBody>
               {query.isLoading && (
-                <TableRow><TableCell colSpan={14} className="text-center py-10 text-muted-foreground">加载中…</TableCell></TableRow>
+                <TableRow><TableCell colSpan={15} className="text-center py-10 text-muted-foreground">加载中…</TableCell></TableRow>
               )}
               {!query.isLoading && tableUnavailable && (
-                <TableRow><TableCell colSpan={14} className="text-center py-10 text-muted-foreground">
+                <TableRow><TableCell colSpan={15} className="text-center py-10 text-muted-foreground">
                   风险订单表暂不可用。请稍后刷新或联系运维确认同步状态。
                 </TableCell></TableRow>
               )}
               {!query.isLoading && !tableUnavailable && (query.data?.rows.length ?? 0) === 0 && (
-                <TableRow><TableCell colSpan={14} className="text-center py-10 text-muted-foreground">
+                <TableRow><TableCell colSpan={15} className="text-center py-10 text-muted-foreground">
                   暂无未发货风险订单
                 </TableCell></TableRow>
               )}
@@ -252,6 +255,7 @@ export default function ShippingRiskPage() {
                     <TableCell className="text-xs">{r.size ?? "-"}</TableCell>
                     <TableCell className="text-right text-xs">{r.qty ?? 0}</TableCell>
                     <TableCell className="text-xs">{formatDateTimeCN(orderBusinessTime(r))}</TableCell>
+                    <TableCell className="text-xs">{formatDateTimeCN(r.pay_time)}</TableCell>
                     <TableCell className="text-xs">{formatDateTimeCN(r.latest_ship_time)}</TableCell>
                     <TableCell className={"text-right text-xs " + (r.is_timeout ? "text-rose-600 font-semibold" : "")}>{fmtHours(r.remaining_hours)}</TableCell>
                     <TableCell>{r.is_timeout ? <Badge variant="destructive">是</Badge> : <Badge variant="secondary">否</Badge>}</TableCell>
