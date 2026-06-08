@@ -657,8 +657,9 @@ export default function SalesOrdersListPage() {
                   <div><span className="text-muted-foreground">实付金额：</span><span className="tabular-nums">{fmtMoney(detailRow.paid_amount)}</span></div>
                   <div><span className="text-muted-foreground">商品件数：</span>{fmtInt(detailRow.item_count)}</div>
                   <div><span className="text-muted-foreground">下单时间：</span>{formatDateTimeCN(orderBusinessTime(detailRow))}</div>
-                  <div><span className="text-muted-foreground">支付时间：</span>{formatDateTimeCN(detailRow.pay_time)}</div>
-                  <div><span className="text-muted-foreground">修改时间：</span>{formatDateTimeCN(detailRow.modified_time)}</div>
+                  <div><span className="text-muted-foreground">付款时间：</span>{formatDateTimeCN(detailRow.pay_time)}</div>
+                  <div><span className="text-muted-foreground">聚水潭修改时间：</span>{formatDateTimeCN(detailRow.modified_time)}</div>
+                  <div className="text-xs text-muted-foreground col-span-2">系统入库时间：{formatDateTimeCN(detailRow.created_at)}（仅技术信息，非客户下单时间）</div>
                 </div>
               </section>
 
