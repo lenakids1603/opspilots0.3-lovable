@@ -77,8 +77,8 @@ export default function ProductDetailPage() {
         const filters = [orSku("sku_code"), orJst("sku_id")].filter(Boolean).join(",");
         if (filters) {
           const { data: light, error: lightErr } = await (supabase as any).from("sales_order_light_items")
-            .select("o_id, so_id, shop_id, product_name, sku_code, sku_name, qty, pay_amount, paid_amount, refund_status, synced_at")
-            .or(filters).order("synced_at", { ascending: false }).limit(200);
+            .select("o_id, so_id, shop_id, product_name, sku_code, sku_name, qty, pay_amount, paid_amount, refund_status, order_created_at, pay_time, synced_at")
+            .or(filters).order("order_created_at", { ascending: false, nullsFirst: false }).limit(200);
           if (!lightErr && (light ?? []).length > 0) {
             setSales((light ?? []).map((r: any) => ({ ...r, jst_o_id: r.o_id, amount: r.pay_amount })));
             setSalesSource("light");
