@@ -859,122 +859,6 @@ export type Database = {
         }
         Relationships: []
       }
-      warehouse_shipping_package_items: {
-        Row: {
-          id: string
-          item_unique_key: string
-          package_id: string
-          package_unique_key: string
-          io_id: string
-          so_id: string | null
-          o_id: string | null
-          sku_id: string | null
-          sku_code: string | null
-          style_no: string | null
-          product_name: string | null
-          qty: number
-          synced_at: string
-        }
-        Insert: {
-          id?: string
-          item_unique_key: string
-          package_id: string
-          package_unique_key: string
-          io_id: string
-          so_id?: string | null
-          o_id?: string | null
-          sku_id?: string | null
-          sku_code?: string | null
-          style_no?: string | null
-          product_name?: string | null
-          qty?: number
-          synced_at?: string
-        }
-        Update: {
-          id?: string
-          item_unique_key?: string
-          package_id?: string
-          package_unique_key?: string
-          io_id?: string
-          so_id?: string | null
-          o_id?: string | null
-          sku_id?: string | null
-          sku_code?: string | null
-          style_no?: string | null
-          product_name?: string | null
-          qty?: number
-          synced_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "warehouse_shipping_package_items_package_id_fkey"
-            columns: ["package_id"]
-            isOneToOne: false
-            referencedRelation: "warehouse_shipping_packages"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      warehouse_shipping_packages: {
-        Row: {
-          id: string
-          package_unique_key: string
-          io_id: string
-          so_id: string | null
-          o_id: string | null
-          shop_id: string | null
-          shop_name: string | null
-          wh_id: string | null
-          warehouse_name: string | null
-          send_date: string | null
-          logistics_company: string | null
-          tracking_number: string | null
-          weight: number | null
-          shipping_method: string | null
-          status: string | null
-          modified_at_jst: string | null
-          synced_at: string
-        }
-        Insert: {
-          id?: string
-          package_unique_key: string
-          io_id: string
-          so_id?: string | null
-          o_id?: string | null
-          shop_id?: string | null
-          shop_name?: string | null
-          wh_id?: string | null
-          warehouse_name?: string | null
-          send_date?: string | null
-          logistics_company?: string | null
-          tracking_number?: string | null
-          weight?: number | null
-          shipping_method?: string | null
-          status?: string | null
-          modified_at_jst?: string | null
-          synced_at?: string
-        }
-        Update: {
-          id?: string
-          package_unique_key?: string
-          io_id?: string
-          so_id?: string | null
-          o_id?: string | null
-          shop_id?: string | null
-          shop_name?: string | null
-          wh_id?: string | null
-          warehouse_name?: string | null
-          send_date?: string | null
-          logistics_company?: string | null
-          tracking_number?: string | null
-          weight?: number | null
-          shipping_method?: string | null
-          status?: string | null
-          modified_at_jst?: string | null
-          synced_at?: string
-        }
-        Relationships: []
-      }
       jst_refund_order_items: {
         Row: {
           amount: number
@@ -1245,7 +1129,6 @@ export type Database = {
         Row: {
           buyer_message: string | null
           created_at: string
-          order_created_at: string | null
           created_time: string | null
           f_weight: number
           free_amount: number
@@ -1287,7 +1170,6 @@ export type Database = {
         Insert: {
           buyer_message?: string | null
           created_at?: string
-          order_created_at?: string | null
           created_time?: string | null
           f_weight?: number
           free_amount?: number
@@ -1329,7 +1211,6 @@ export type Database = {
         Update: {
           buyer_message?: string | null
           created_at?: string
-          order_created_at?: string | null
           created_time?: string | null
           f_weight?: number
           free_amount?: number
@@ -2878,7 +2759,6 @@ export type Database = {
           o_id: string
           order_created_at: string | null
           order_status: string | null
-          order_created_at: string | null
           pay_amount: number
           pay_time: string | null
           platform: string | null
@@ -2898,7 +2778,6 @@ export type Database = {
           o_id: string
           order_created_at?: string | null
           order_status?: string | null
-          order_created_at?: string | null
           pay_amount?: number
           pay_time?: string | null
           platform?: string | null
@@ -2918,7 +2797,6 @@ export type Database = {
           o_id?: string
           order_created_at?: string | null
           order_status?: string | null
-          order_created_at?: string | null
           pay_amount?: number
           pay_time?: string | null
           platform?: string | null
@@ -3518,7 +3396,6 @@ export type Database = {
         Row: {
           color: string | null
           created_at: string
-          order_created_at: string | null
           created_time: string | null
           estimated_cost_amount: number
           estimated_cost_price: number | null
@@ -3560,7 +3437,6 @@ export type Database = {
         Insert: {
           color?: string | null
           created_at?: string
-          order_created_at?: string | null
           created_time?: string | null
           estimated_cost_amount?: number
           estimated_cost_price?: number | null
@@ -3602,7 +3478,6 @@ export type Database = {
         Update: {
           color?: string | null
           created_at?: string
-          order_created_at?: string | null
           created_time?: string | null
           estimated_cost_amount?: number
           estimated_cost_price?: number | null
@@ -3812,7 +3687,6 @@ export type Database = {
           o_id: string
           order_created_at: string | null
           order_status: string | null
-          order_created_at: string | null
           pay_time: string | null
           platform: string | null
           qty: number
@@ -3841,7 +3715,6 @@ export type Database = {
           o_id: string
           order_created_at?: string | null
           order_status?: string | null
-          order_created_at?: string | null
           pay_time?: string | null
           platform?: string | null
           qty?: number
@@ -3870,7 +3743,6 @@ export type Database = {
           o_id?: string
           order_created_at?: string | null
           order_status?: string | null
-          order_created_at?: string | null
           pay_time?: string | null
           platform?: string | null
           qty?: number
