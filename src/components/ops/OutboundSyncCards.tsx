@@ -43,7 +43,7 @@ export function OutboundSyncCards() {
   const countQ = useQuery({
     queryKey: ["warehouse_shipping_package_count"],
     queryFn: async () => {
-      const { count, error } = await supabase
+      const { count, error } = await (supabase as any)
         .from("warehouse_shipping_packages")
         .select("id", { count: "exact", head: true });
       if (error) throw error;
@@ -71,7 +71,7 @@ export function OutboundSyncCards() {
   const listQ = useQuery({
     queryKey: ["warehouse_shipping_package_preview", page, keyword],
     queryFn: async () => {
-      let query = supabase
+      let query = (supabase as any)
         .from("warehouse_shipping_packages")
         .select("id,io_id,o_id,shop_name,warehouse_name,wh_id,status,logistics_company,tracking_number,send_date,weight,shipping_method", { count: "exact" })
         .order("send_date", { ascending: false, nullsFirst: false })
@@ -89,8 +89,8 @@ export function OutboundSyncCards() {
     queryKey: ["warehouse_shipping_package_detail", detailId],
     queryFn: async () => {
       const [pkg, items] = await Promise.all([
-        supabase.from("warehouse_shipping_packages").select("*").eq("id", detailId!).maybeSingle(),
-        supabase.from("warehouse_shipping_package_items").select("*").eq("package_id", detailId!).order("sku_id", { ascending: true, nullsFirst: false }),
+        (supabase as any).from("warehouse_shipping_packages").select("*").eq("id", detailId!).maybeSingle(),
+        (supabase as any).from("warehouse_shipping_package_items").select("*").eq("package_id", detailId!).order("sku_id", { ascending: true, nullsFirst: false }),
       ]);
       if (pkg.error) throw pkg.error;
       if (items.error) throw items.error;
