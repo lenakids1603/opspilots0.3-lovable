@@ -127,7 +127,7 @@ export default function SalesBoardPage() {
       <div className="mx-6 mb-3 rounded-md border border-sky-300 bg-sky-50/60 px-4 py-2.5 text-xs text-sky-800 flex items-start gap-2">
         <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
         <span>
-          本看板只读轻量汇总表，不触发任何同步或回填。当前为页面骨架；汇总写入由最近 10 分钟订单同步任务持续刷新。今日尚未付款时段会显示 0。
+          本看板只读轻量汇总表，不触发任何同步或回填。当前为页面骨架；汇总按下单时间聚合，由最近 10 分钟订单同步任务持续刷新。
         </span>
       </div>
 
@@ -139,7 +139,7 @@ export default function SalesBoardPage() {
 
       <div className="px-6 space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <Kpi label="今日销售额 (付款)" value={fmtMoney(today.data?.todayAmount)} sub={`订单 ${fmtInt(today.data?.todayOrders)} / 件 ${fmtInt(today.data?.todayQty)}`} />
+          <Kpi label="今日销售额 (下单)" value={fmtMoney(today.data?.todayAmount)} sub={`订单 ${fmtInt(today.data?.todayOrders)} / 件 ${fmtInt(today.data?.todayQty)}`} />
           <Kpi label="今日预估成本" value={fmtMoney(today.data?.todayCost)} sub="基于 SKU 成本估算" />
           <Kpi label="今日预估毛利" value={fmtMoney(today.data?.todayProfit)} sub="销售额 - 预估成本" />
           <Kpi
@@ -157,7 +157,7 @@ export default function SalesBoardPage() {
         )}
 
         <Card className="p-4">
-          <h2 className="text-sm font-semibold mb-3">今日小时销售趋势（按付款时间，Asia/Shanghai）</h2>
+          <h2 className="text-sm font-semibold mb-3">今日小时销售趋势（按下单时间，Asia/Shanghai）</h2>
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={today.data?.hourlyChart ?? []} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
@@ -165,7 +165,7 @@ export default function SalesBoardPage() {
                 <XAxis dataKey="hour" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
                 <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" tickFormatter={(v) => `¥${(v/10000).toFixed(1)}w`} />
                 <Tooltip formatter={(v: any) => fmtMoney(Number(v))} />
-                <Line type="monotone" dataKey="amount" name="付款金额" stroke="#2563eb" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="amount" name="下单金额" stroke="#2563eb" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -173,7 +173,7 @@ export default function SalesBoardPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card className="p-4">
-            <h2 className="text-sm font-semibold mb-3">SKU 销售 Top 10（今日付款金额）</h2>
+            <h2 className="text-sm font-semibold mb-3">SKU 销售 Top 10（今日下单金额）</h2>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -202,7 +202,7 @@ export default function SalesBoardPage() {
           </Card>
 
           <Card className="p-4">
-            <h2 className="text-sm font-semibold mb-3">款号销售 Top 10（今日付款金额）</h2>
+            <h2 className="text-sm font-semibold mb-3">款号销售 Top 10（今日下单金额）</h2>
             <Table>
               <TableHeader>
                 <TableRow>

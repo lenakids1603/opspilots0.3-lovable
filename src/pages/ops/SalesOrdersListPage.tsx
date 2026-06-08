@@ -29,8 +29,9 @@ const fmtMoney = (n: number | null | undefined) =>
   "¥" + Number(n ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 const fmtInt = (n: number | null | undefined) =>
   Number(n ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 });
+const orderBusinessTime = (row: any) => row?.order_created_at ?? row?.pay_time ?? row?.created_at ?? null;
 
-type TimeField = "pay_time" | "created_time" | "modified_time";
+type TimeField = "order_created_at" | "pay_time" | "created_time" | "modified_time";
 
 type Filters = {
   startDate: string;
@@ -49,7 +50,7 @@ function defaultFilters(): Filters {
   const start = beijingYMD(d);
   return {
     startDate: start, endDate: end,
-    timeField: "modified_time",
+    timeField: "order_created_at",
     shop: "", keyword: "",
     internalType: "all", hasShipped: "all",
   };
@@ -84,14 +85,14 @@ function useStats(filters: Filters) {
       const inFilter = (q: any) => applyFilters(q, filters);
 
       const [todayPaidCntRes, todayAmtRes, pendingRes, overdueRes, shippedRes, refundRes] = await Promise.all([
-        // 今日付款订单数 (按 pay_time)
+        // 今日下单订单数 (按 order_created_at)
         supabase.from("jst_sales_orders")
           .select("id", { count: "exact", head: true })
-          .gte("pay_time", todayR.gte).lte("pay_time", todayR.lte),
-        // 今日实付金额 (按 pay_time)
+          .gte("order_created_at", todayR.gte).lte("order_created_at", todayR.lte),
+        // 今日实付金额 (按 order_created_at)
         supabase.from("jst_sales_orders")
           .select("paid_amount")
-          .gte("pay_time", todayR.gte).lte("pay_time", todayR.lte).limit(5000),
+          .gte("order_created_at", todayR.gte).lte("order_created_at", todayR.lte).limit(5000),
         // 待发货 (按当前筛选)
         inFilter(supabase.from("jst_sales_orders")
           .select("id", { count: "exact", head: true })
@@ -128,7 +129,7 @@ function useStats(filters: Filters) {
 
 type SortDir = "asc" | "desc";
 type SortKey =
-  | "modified_time" | "created_time" | "pay_time"
+  | "order_created_at" | "modified_time" | "created_time" | "pay_time"
   | "so_id" | "jst_o_id" | "shop_name" | "status" | "paid_amount"
   | "internal_order_type" | "plan_delivery_date";
 
@@ -137,7 +138,7 @@ function useOrderList(filters: Filters, page: number, sortKey: SortKey, sortDir:
     queryKey: ["sales_orders_list_v2", filters, page, sortKey, sortDir],
     queryFn: async () => {
       let q = supabase.from("jst_sales_orders")
-        .select("id, jst_o_id, so_id, shop_id, shop_name, status, internal_order_type, internal_order_type_name, order_type, created_time, modified_time, pay_time, plan_delivery_date, paid_amount, pay_amount, io_id, io_date, l_id, lc_id, logistics_company", { count: "exact" });
+        .select("id, jst_o_id, so_id, shop_id, shop_name, status, internal_order_type, internal_order_type_name, order_type, order_created_at, created_at, created_time, modified_time, pay_time, plan_delivery_date, paid_amount, pay_amount, io_id, io_date, l_id, lc_id, logistics_company", { count: "exact" });
       q = applyFilters(q, filters);
       q = q.order(sortKey, { ascending: sortDir === "asc", nullsFirst: false });
       if (sortKey !== "jst_o_id") {
@@ -372,7 +373,7 @@ export default function SalesOrdersListPage() {
   const [detailRow, setDetailRow] = useState<any | null>(null);
   const [rawOpen, setRawOpen] = useState<any | null>(null);
 
-  const [sortKey, setSortKey] = useState<SortKey>("modified_time");
+  const [sortKey, setSortKey] = useState<SortKey>("order_created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const statsQ = useStats(filters);
@@ -386,12 +387,12 @@ export default function SalesOrdersListPage() {
   const onReset = () => {
     const d = defaultFilters();
     setDraft(d); setFilters(d); setPage(0);
-    setSortKey("modified_time"); setSortDir("desc");
+    setSortKey("order_created_at"); setSortDir("desc");
   };
   const onSort = (k: SortKey) => {
     if (sortKey !== k) { setSortKey(k); setSortDir("desc"); setPage(0); return; }
     if (sortDir === "desc") { setSortDir("asc"); setPage(0); return; }
-    setSortKey("modified_time"); setSortDir("desc"); setPage(0);
+    setSortKey("order_created_at"); setSortDir("desc"); setPage(0);
   };
   const applyQuickRange = (kind: "today" | "7d" | "30d" | "month" | "all") => {
     const end = todayCN();
@@ -408,12 +409,12 @@ export default function SalesOrdersListPage() {
   const onExport = () => {
     const rows = listQ.data?.rows ?? [];
     if (!rows.length) return toast({ title: "无订单数据可导出" });
-    const headers = ["线上订单号", "店铺", "订单类型", "支付时间", "实付金额", "商品件数", "聚水潭状态", "聚水潭单号", "出库单号", "物流单号", "物流公司"];
+    const headers = ["线上订单号", "店铺", "订单类型", "下单时间", "实付金额", "商品件数", "聚水潭状态", "聚水潭单号", "出库单号", "物流单号", "物流公司"];
     const lines = [headers.join(",")];
     for (const r of rows) {
       lines.push([
         r.so_id ?? "", r.shop_name ?? "", r.internal_order_type_name ?? "",
-        formatDateTimeCN(r.pay_time), Number(r.paid_amount ?? 0).toFixed(2),
+        formatDateTimeCN(orderBusinessTime(r)), Number(r.paid_amount ?? 0).toFixed(2),
         r.item_count, r.status ?? "", r.jst_o_id ?? "", r.io_id ?? "", r.l_id ?? "", r.logistics_company ?? "",
       ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
     }
@@ -441,8 +442,8 @@ export default function SalesOrdersListPage() {
 
       {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-2">
-        <Stat label="今日付款订单" value={fmtInt(s?.todayPaidOrders)} error={err} />
-        <Stat label="今日实付金额" value={fmtMoney(s?.todayAmt)} error={err} />
+        <Stat label="今日下单订单" value={fmtInt(s?.todayPaidOrders)} error={err} />
+        <Stat label="今日下单实付金额" value={fmtMoney(s?.todayAmt)} error={err} />
         <Stat label="待发货订单" value={fmtInt(s?.pendingShip)} error={err} accent="warn" />
         <Stat label="超时未发货" value={fmtInt(s?.overdueShip)} error={err} accent="danger" />
         <Stat label="已发货订单" value={fmtInt(s?.shipped)} error={err} accent="ok" />
@@ -454,9 +455,9 @@ export default function SalesOrdersListPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         {todaySummaryQ.data?.present ? (
           <>
-            <Stat label="今日付款订单（汇总）" value={fmtInt(todaySummaryQ.data.orders)} />
-            <Stat label="今日付款件数（汇总）" value={fmtInt(todaySummaryQ.data.qty)} />
-            <Stat label="今日付款金额（汇总）" value={fmtMoney(todaySummaryQ.data.amount)} />
+            <Stat label="今日下单订单（汇总）" value={fmtInt(todaySummaryQ.data.orders)} />
+            <Stat label="今日下单件数（汇总）" value={fmtInt(todaySummaryQ.data.qty)} />
+            <Stat label="今日下单金额（汇总）" value={fmtMoney(todaySummaryQ.data.amount)} />
             <Stat label="今日预估毛利" value={fmtMoney(todaySummaryQ.data.profit)} />
           </>
         ) : (
@@ -477,6 +478,7 @@ export default function SalesOrdersListPage() {
             <Select value={draft.timeField} onValueChange={v => setDraft({ ...draft, timeField: v as TimeField })}>
               <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
+                <SelectItem value="order_created_at">下单时间</SelectItem>
                 <SelectItem value="pay_time">支付时间</SelectItem>
                 <SelectItem value="created_time">创建时间</SelectItem>
                 <SelectItem value="modified_time">修改时间</SelectItem>
@@ -576,7 +578,7 @@ export default function SalesOrdersListPage() {
               <SortHead sortKey="shop_name" currentKey={sortKey} dir={sortDir} onSort={onSort}>店铺</SortHead>
               <SortHead sortKey="internal_order_type" currentKey={sortKey} dir={sortDir} onSort={onSort}>订单类型</SortHead>
               <SortHead sortKey="plan_delivery_date" currentKey={sortKey} dir={sortDir} onSort={onSort}>发货时效</SortHead>
-              <SortHead sortKey="pay_time" currentKey={sortKey} dir={sortDir} onSort={onSort}>支付时间</SortHead>
+              <SortHead sortKey="order_created_at" currentKey={sortKey} dir={sortDir} onSort={onSort}>下单时间</SortHead>
               <SortHead sortKey="paid_amount" currentKey={sortKey} dir={sortDir} onSort={onSort} align="right">实付金额</SortHead>
               <TableHead className="text-right">商品件数</TableHead>
               <SortHead sortKey="status" currentKey={sortKey} dir={sortDir} onSort={onSort}>聚水潭状态</SortHead>
@@ -603,7 +605,7 @@ export default function SalesOrdersListPage() {
                   <AnomalyChips row={r} />
                 </TableCell>
                 <TableCell><RemainingShipTime planDeliveryDate={r.plan_delivery_date} internalOrderType={r.internal_order_type} ioId={r.io_id} ioDate={r.io_date} lId={r.l_id} /></TableCell>
-                <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.pay_time, { withSeconds: false })}</TableCell>
+                <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(orderBusinessTime(r), { withSeconds: false })}</TableCell>
                 <TableCell className="text-right tabular-nums">{Number(r.paid_amount) > 0 ? fmtMoney(r.paid_amount) : "-"}</TableCell>
                 <TableCell className="text-right tabular-nums">{Number(r.item_count) > 0 ? fmtInt(r.item_count) : "-"}</TableCell>
                 <TableCell><Badge variant="outline" className="font-normal text-muted-foreground">{zhStatus(r.status)}</Badge></TableCell>
@@ -654,8 +656,8 @@ export default function SalesOrdersListPage() {
                   <div><span className="text-muted-foreground">聚水潭状态：</span>{zhStatus(detailRow.status)}</div>
                   <div><span className="text-muted-foreground">实付金额：</span><span className="tabular-nums">{fmtMoney(detailRow.paid_amount)}</span></div>
                   <div><span className="text-muted-foreground">商品件数：</span>{fmtInt(detailRow.item_count)}</div>
+                  <div><span className="text-muted-foreground">下单时间：</span>{formatDateTimeCN(orderBusinessTime(detailRow))}</div>
                   <div><span className="text-muted-foreground">支付时间：</span>{formatDateTimeCN(detailRow.pay_time)}</div>
-                  <div><span className="text-muted-foreground">创建时间：</span>{formatDateTimeCN(detailRow.created_time)}</div>
                   <div><span className="text-muted-foreground">修改时间：</span>{formatDateTimeCN(detailRow.modified_time)}</div>
                 </div>
               </section>

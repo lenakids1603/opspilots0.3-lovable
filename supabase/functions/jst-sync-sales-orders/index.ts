@@ -18,6 +18,7 @@ const METHOD_PATH = "orders/single/query";
 const PAGE_SIZE = 50;
 const SALES_REQUEST_VERSION = 2;
 const ENABLE_LEGACY_SALES_ORDER_ITEMS = Deno.env.get("ENABLE_LEGACY_SALES_ORDER_ITEMS") === "true";
+const SHIPPING_DEADLINE_FALLBACK_HOURS = 48;
 
 // 隐私字段：raw_data 写库前剥除
 const PRIVACY_KEYS = new Set([
@@ -68,6 +69,22 @@ function riskFromDeadline(deadlineIso: string | null) {
   return { remainingHours, isTimeout: remainingHours < 0, riskLevel };
 }
 
+function pickOrderCreatedAt(o: any): string | null {
+  return parseJstBeijingDateTime(
+    o.order_time ?? o.orderTime ??
+    o.create_time ?? o.createTime ??
+    o.created ?? o.created_time ??
+    o.order_date ?? o.orderDate
+  );
+}
+
+function resolveShippingDeadline(planDeliveryDateIso: string | null, payTimeIso: string | null, orderCreatedAtIso: string | null) {
+  if (planDeliveryDateIso) return planDeliveryDateIso;
+  const baseIso = payTimeIso ?? orderCreatedAtIso;
+  if (!baseIso) return null;
+  return new Date(new Date(baseIso).getTime() + SHIPPING_DEADLINE_FALLBACK_HOURS * 3_600_000).toISOString();
+}
+
 function pickItems(o: any): any[] {
   return pickItemsArray(o);
 }
@@ -75,6 +92,7 @@ function pickItems(o: any): any[] {
 async function upsertSalesOrder(o: any): Promise<{ orderId: string; itemsUpserted: number }> {
   const jstOId = str(o.o_id ?? o.oId);
   if (!jstOId) throw new Error("missing o_id");
+  const orderCreatedAt = pickOrderCreatedAt(o);
 
   const orderRow = {
     jst_o_id: jstOId,
@@ -83,7 +101,8 @@ async function upsertSalesOrder(o: any): Promise<{ orderId: string; itemsUpserte
     shop_name: str(o.shop_name),
     status: str(o.status),
     order_type: str(o.order_type ?? o.type),
-    created_time: parseJstBeijingDateTime(o.created ?? o.create_time),
+    order_created_at: orderCreatedAt,
+    created_time: orderCreatedAt,
     modified_time: parseJstBeijingDateTime(o.modified ?? o.modified_time),
     pay_time: parseJstBeijingDateTime(o.pay_date ?? o.paytime ?? o.pay_time),
     plan_delivery_date: parseJstBeijingDateTime(o.plan_delivery_date),
@@ -156,6 +175,7 @@ function chunk<T>(rows: T[], size: number): T[][] {
 function buildSalesOrderRowForBatch(o: any, hasRefund: boolean) {
   const jstOId = str(o.o_id ?? o.oId);
   if (!jstOId) throw new Error("missing o_id");
+  const orderCreatedAt = pickOrderCreatedAt(o);
 
   const orderRow = {
     jst_o_id: jstOId,
@@ -164,7 +184,8 @@ function buildSalesOrderRowForBatch(o: any, hasRefund: boolean) {
     shop_name: str(o.shop_name),
     status: str(o.status),
     order_type: str(o.order_type ?? o.type),
-    created_time: parseJstBeijingDateTime(o.created ?? o.create_time),
+    order_created_at: orderCreatedAt,
+    created_time: orderCreatedAt,
     modified_time: parseJstBeijingDateTime(o.modified ?? o.modified_time),
     pay_time: parseJstBeijingDateTime(o.pay_date ?? o.paytime ?? o.pay_time),
     plan_delivery_date: parseJstBeijingDateTime(o.plan_delivery_date),
@@ -266,6 +287,7 @@ function buildSalesLightItemRowsForBatch(o: any, orderRow: any) {
       order_status: orderRow.status,
       internal_order_type: orderRow.internal_order_type,
       internal_order_type_name: orderRow.internal_order_type_name,
+      order_created_at: orderRow.order_created_at,
       created_time: orderRow.created_time,
       pay_time: orderRow.pay_time,
       modified_time: orderRow.modified_time,
@@ -373,6 +395,7 @@ async function upsertOrderLookup(lightRows: any[]) {
       shop_name: row.shop_name,
       platform: row.platform,
       order_status: row.order_status,
+      order_created_at: row.order_created_at,
       pay_time: row.pay_time,
       pay_amount: 0,
       item_count: 0,
@@ -387,6 +410,7 @@ async function upsertOrderLookup(lightRows: any[]) {
     cur.item_count += 1;
     cur.has_refund = cur.has_refund || !!row.has_refund;
     cur.jst_modified = row.last_jst_modified ?? cur.jst_modified;
+    cur.order_created_at = cur.order_created_at ?? row.order_created_at;
     byOrder.set(key, cur);
   }
   const rows = Array.from(byOrder.values());
@@ -410,7 +434,8 @@ async function syncShippingRisks(orderRows: any[], lightRows: any[]) {
   const riskRows = lightRows
     .filter((row) => row.internal_order_type === "paid_pending_ship")
     .map((row) => {
-      const risk = riskFromDeadline(row.plan_delivery_date);
+      const latestShipTime = resolveShippingDeadline(row.plan_delivery_date, row.pay_time, row.order_created_at);
+      const risk = riskFromDeadline(latestShipTime);
       return {
         item_unique_key: row.item_unique_key,
         o_id: row.o_id,
@@ -419,9 +444,10 @@ async function syncShippingRisks(orderRows: any[], lightRows: any[]) {
         shop_name: row.shop_name,
         platform: row.platform,
         order_status: row.order_status,
+        order_created_at: row.order_created_at,
         pay_time: row.pay_time,
         jst_modified: row.last_jst_modified,
-        latest_ship_time: row.plan_delivery_date,
+        latest_ship_time: latestShipTime,
         remaining_hours: risk.remainingHours,
         is_timeout: risk.isTimeout,
         risk_level: risk.riskLevel,

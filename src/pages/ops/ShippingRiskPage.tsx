@@ -25,6 +25,7 @@ type RiskRow = {
   shop_name: string | null;
   platform: string | null;
   order_status: string | null;
+  order_created_at: string | null;
   pay_time: string | null;
   latest_ship_time: string | null;
   remaining_hours: number | null;
@@ -73,6 +74,8 @@ function fmtHours(h: number | null) {
   return `${n.toFixed(1)}h`;
 }
 
+const orderBusinessTime = (row: RiskRow) => row.order_created_at ?? row.pay_time ?? null;
+
 export default function ShippingRiskPage() {
   const [filters, setFilters] = useState<Filters>(defaultFilters());
   const [page, setPage] = useState(0);
@@ -83,9 +86,10 @@ export default function ShippingRiskPage() {
       let q = (supabase as any)
         .from("shipping_risk_orders")
         .select(
-          "id,o_id,so_id,shop_id,shop_name,platform,order_status,pay_time,latest_ship_time,remaining_hours,is_timeout,risk_level,sku_code,sku_name,style_no,color,size,qty,supplier_name,last_checked_at",
+          "id,o_id,so_id,shop_id,shop_name,platform,order_status,order_created_at,pay_time,latest_ship_time,remaining_hours,is_timeout,risk_level,sku_code,sku_name,style_no,color,size,qty,supplier_name,last_checked_at",
           { count: "exact" }
         )
+        .order("order_created_at", { ascending: true, nullsFirst: false })
         .order("latest_ship_time", { ascending: true, nullsFirst: false })
         .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
 
@@ -213,7 +217,7 @@ export default function ShippingRiskPage() {
                 <TableHead>颜色</TableHead>
                 <TableHead>尺码</TableHead>
                 <TableHead className="text-right">数量</TableHead>
-                <TableHead>付款时间</TableHead>
+                <TableHead>下单时间</TableHead>
                 <TableHead>最晚发货</TableHead>
                 <TableHead className="text-right">剩余</TableHead>
                 <TableHead>超时</TableHead>
@@ -247,7 +251,7 @@ export default function ShippingRiskPage() {
                     <TableCell className="text-xs">{r.color ?? "-"}</TableCell>
                     <TableCell className="text-xs">{r.size ?? "-"}</TableCell>
                     <TableCell className="text-right text-xs">{r.qty ?? 0}</TableCell>
-                    <TableCell className="text-xs">{formatDateTimeCN(r.pay_time)}</TableCell>
+                    <TableCell className="text-xs">{formatDateTimeCN(orderBusinessTime(r))}</TableCell>
                     <TableCell className="text-xs">{formatDateTimeCN(r.latest_ship_time)}</TableCell>
                     <TableCell className={"text-right text-xs " + (r.is_timeout ? "text-rose-600 font-semibold" : "")}>{fmtHours(r.remaining_hours)}</TableCell>
                     <TableCell>{r.is_timeout ? <Badge variant="destructive">是</Badge> : <Badge variant="secondary">否</Badge>}</TableCell>
