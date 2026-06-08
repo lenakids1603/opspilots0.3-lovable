@@ -120,7 +120,7 @@ function useStyleAggregate(filters: OutboundByStyleFilters) {
   return useQuery({
     queryKey: ["warehouse_shipping_by_style", filters],
     queryFn: async () => {
-      let q = supabase
+      let q = (supabase as any)
         .from("warehouse_shipping_packages")
         .select("id, io_id, o_id, shop_name, wh_id, warehouse_name, status, logistics_company, tracking_number, send_date")
         .order("send_date", { ascending: false, nullsFirst: false })
@@ -137,7 +137,7 @@ function useStyleAggregate(filters: OutboundByStyleFilters) {
       const allItems: AggItem[] = [];
       for (let i = 0; i < packageIds.length; i += 200) {
         const slice = packageIds.slice(i, i + 200);
-        let itemQuery = supabase
+        let itemQuery = (supabase as any)
           .from("warehouse_shipping_package_items")
           .select("id, package_id, io_id, sku_id, sku_code, style_no, product_name, qty")
           .in("package_id", slice)
