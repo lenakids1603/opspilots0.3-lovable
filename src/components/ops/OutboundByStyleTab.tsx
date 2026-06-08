@@ -9,7 +9,6 @@ import {
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
-import { Download } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { formatDateTimeCN, beijingDayRangeToUTC, todayCN } from "@/lib/datetime";
 
@@ -18,180 +17,213 @@ const fmtInt = (n: number | null | undefined) =>
   Number(n ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 });
 
 export type OutboundByStyleFilters = {
-  startDate: string; endDate: string; shop: string; warehouse: string;
-  ioId: string; oId: string; lId: string; sku: string; status: string;
-  hasItems: string; abnormal: string;
+  startDate: string;
+  endDate: string;
+  shop: string;
+  warehouse: string;
+  logistics: string;
+  ioId: string;
+  oId: string;
+  trackingNumber: string;
+  sku: string;
+  status: string;
+  hasItems: string;
+  abnormal: string;
+};
+
+type PackageMeta = {
+  id: string;
+  io_id: string;
+  o_id: string | null;
+  shop_name: string | null;
+  wh_id: string | null;
+  warehouse_name: string | null;
+  status: string | null;
+  logistics_company: string | null;
+  tracking_number: string | null;
+  send_date: string | null;
 };
 
 type AggItem = {
-  outbound_order_id: string;
-  io_id: string | null;
+  id: string;
+  package_id: string;
+  io_id: string;
   sku_id: string | null;
-  i_id: string | null;
-  name: string | null;
-  color: string | null;
-  size: string | null;
+  sku_code: string | null;
+  style_no: string | null;
+  product_name: string | null;
   qty: number;
   _style: string;
 };
 
-type OrderMeta = {
-  id: string; io_id: string | null; o_id: string | null;
-  shop_name: string | null; warehouse: string | null; status: string | null;
-  logistics_company: string | null; l_id: string | null;
-  io_date: string | null; consign_time: string | null;
-};
-
 type StyleRow = {
-  key: string; style_no: string; product_name: string; shop_name: string;
+  key: string;
+  style_no: string;
+  product_name: string;
+  shop_name: string;
   qty: number;
-  io_set: Set<string>; o_set: Set<string>; sku_set: Set<string>; wh_set: Set<string>;
-  first_io: string | null; last_io: string | null;
+  package_set: Set<string>;
+  order_set: Set<string>;
+  sku_set: Set<string>;
+  wh_set: Set<string>;
+  first_ship: string | null;
+  last_ship: string | null;
 };
 
-function styleFallback(iid: string | null | undefined, sku: string | null | undefined, name: string | null | undefined) {
-  const i = (iid ?? "").trim();
-  if (i) return i;
-  const s = (sku ?? "").trim();
-  if (s) {
-    const m = s.match(/^\d{6,12}/);
-    if (m) return m[0];
-    const seg = s.split(/[-_/\s]/)[0];
-    if (seg) return seg;
+function styleFallback(styleNo: string | null | undefined, sku: string | null | undefined, name: string | null | undefined) {
+  const direct = (styleNo ?? "").trim();
+  if (direct) return direct;
+  const skuText = (sku ?? "").trim();
+  if (skuText) {
+    const matched = skuText.match(/^\d{6,12}/);
+    if (matched) return matched[0];
+    const segment = skuText.split(/[-_/\s]/)[0];
+    if (segment) return segment;
   }
   return (name ?? "").trim() || "(未知款号)";
 }
 
-function applyOrderFilters(q: any, f: OutboundByStyleFilters) {
-  if (f.startDate) { const r = beijingDayRangeToUTC(f.startDate); if (r) q = q.gte("io_date", r.gte); }
-  if (f.endDate)   { const r = beijingDayRangeToUTC(f.endDate);   if (r) q = q.lte("io_date", r.lte); }
-  if (f.shop) q = q.ilike("shop_name", `%${f.shop}%`);
-  if (f.warehouse) q = q.ilike("warehouse", `%${f.warehouse}%`);
-  if (f.ioId) q = q.ilike("io_id", `%${f.ioId}%`);
-  if (f.oId) q = q.ilike("o_id", `%${f.oId}%`);
-  if (f.lId) q = q.ilike("l_id", `%${f.lId}%`);
-  if (f.status !== "all") q = q.eq("status", f.status);
+type FilterQuery<T> = T & {
+  gte: (column: string, value: string) => FilterQuery<T>;
+  lte: (column: string, value: string) => FilterQuery<T>;
+  ilike: (column: string, value: string) => FilterQuery<T>;
+  eq: (column: string, value: string) => FilterQuery<T>;
+};
+
+function applyPackageFilters<T>(q: FilterQuery<T>, filters: OutboundByStyleFilters): FilterQuery<T> {
+  if (filters.startDate) {
+    const range = beijingDayRangeToUTC(filters.startDate);
+    if (range) q = q.gte("send_date", range.gte);
+  }
+  if (filters.endDate) {
+    const range = beijingDayRangeToUTC(filters.endDate);
+    if (range) q = q.lte("send_date", range.lte);
+  }
+  if (filters.shop) q = q.ilike("shop_name", `%${filters.shop}%`);
+  if (filters.warehouse) q = q.ilike("warehouse_name", `%${filters.warehouse}%`);
+  if (filters.logistics) q = q.ilike("logistics_company", `%${filters.logistics}%`);
+  if (filters.ioId) q = q.ilike("io_id", `%${filters.ioId}%`);
+  if (filters.oId) q = q.ilike("o_id", `%${filters.oId}%`);
+  if (filters.trackingNumber) q = q.ilike("tracking_number", `%${filters.trackingNumber}%`);
+  if (filters.status !== "all") q = q.eq("status", filters.status);
   return q;
+}
+
+function whLabel(set: Set<string>) {
+  const values = Array.from(set).filter(Boolean);
+  if (!values.length) return "-";
+  if (values.length === 1) return values[0];
+  return `${values.length} 个仓库`;
 }
 
 function useStyleAggregate(filters: OutboundByStyleFilters) {
   return useQuery({
-    queryKey: ["outbound_by_style", filters],
+    queryKey: ["warehouse_shipping_by_style", filters],
     queryFn: async () => {
-      let q = supabase.from("jst_outbound_orders")
-        .select("id, io_id, o_id, shop_name, warehouse, status, logistics_company, l_id, io_date, consign_time")
-        .order("io_date", { ascending: false, nullsFirst: false })
-        .limit(2000);
-      q = applyOrderFilters(q, filters);
-      const { data: recs, error } = await q;
-      if (error) {
-        const e: any = error;
-        throw new Error(
-          `主表查询失败: ${e.message || ""}${e.details ? ` | details=${e.details}` : ""}${e.hint ? ` | hint=${e.hint}` : ""}${e.code ? ` | code=${e.code}` : ""}`,
-        );
-      }
-      const orders = (recs ?? []) as OrderMeta[];
-      const orderMap = new Map<string, OrderMeta>(orders.map(r => [r.id, r]));
-      const ids = orders.map(r => r.id);
-      if (!ids.length) return { rows: [] as StyleRow[], items: [] as AggItem[], orderMap };
+      let q = supabase
+        .from("warehouse_shipping_packages")
+        .select("id, io_id, o_id, shop_name, wh_id, warehouse_name, status, logistics_company, tracking_number, send_date")
+        .order("send_date", { ascending: false, nullsFirst: false })
+        .limit(3000);
+      q = applyPackageFilters(q, filters);
+
+      const { data: packages, error } = await q;
+      if (error) throw error;
+      const packageRows = (packages ?? []) as PackageMeta[];
+      const packageMap = new Map<string, PackageMeta>(packageRows.map((row) => [row.id, row]));
+      const packageIds = packageRows.map((row) => row.id);
+      if (!packageIds.length) return { rows: [] as StyleRow[], items: [] as AggItem[], packageMap };
 
       const allItems: AggItem[] = [];
-      const BATCH = 150;
-      for (let i = 0; i < ids.length; i += BATCH) {
-        const slice = ids.slice(i, i + BATCH);
-        let iq = supabase.from("jst_outbound_order_items")
-          .select("outbound_order_id, io_id, sku_id, i_id, name, color, size, qty")
-          .in("outbound_order_id", slice)
+      for (let i = 0; i < packageIds.length; i += 200) {
+        const slice = packageIds.slice(i, i + 200);
+        let itemQuery = supabase
+          .from("warehouse_shipping_package_items")
+          .select("id, package_id, io_id, sku_id, sku_code, style_no, product_name, qty")
+          .in("package_id", slice)
           .limit(10000);
         if (filters.sku) {
-          const s = filters.sku.replace(/[,()]/g, "");
-          iq = iq.or(`sku_id.ilike.%${s}%,i_id.ilike.%${s}%`);
+          const safeSku = filters.sku.replace(/[,()]/g, "");
+          itemQuery = itemQuery.or(`sku_id.ilike.%${safeSku}%,sku_code.ilike.%${safeSku}%,style_no.ilike.%${safeSku}%,product_name.ilike.%${safeSku}%`);
         }
-        const { data: items, error: itErr } = await iq;
-        if (itErr) {
-          const e: any = itErr;
-          throw new Error(
-            `明细查询失败 [batch ${i}-${i + slice.length}, ids=${slice.length}]: ${e.message || ""}${e.details ? ` | details=${e.details}` : ""}${e.hint ? ` | hint=${e.hint}` : ""}${e.code ? ` | code=${e.code}` : ""}`,
-          );
-        }
-        for (const it of items ?? []) {
+        const { data: items, error: itemError } = await itemQuery;
+        if (itemError) throw itemError;
+        for (const item of items ?? []) {
           allItems.push({
-            outbound_order_id: (it as any).outbound_order_id,
-            io_id: (it as any).io_id,
-            sku_id: (it as any).sku_id,
-            i_id: (it as any).i_id,
-            name: (it as any).name,
-            color: (it as any).color,
-            size: (it as any).size,
-            qty: Number((it as any).qty ?? 0),
+            id: item.id,
+            package_id: item.package_id,
+            io_id: item.io_id,
+            sku_id: item.sku_id,
+            sku_code: item.sku_code,
+            style_no: item.style_no,
+            product_name: item.product_name,
+            qty: Number(item.qty ?? 0),
             _style: "",
           });
         }
       }
-      for (const it of allItems) {
-        it._style = styleFallback(it.i_id, it.sku_id, it.name);
+
+      const packageItemCount = new Map<string, number>();
+      for (const item of allItems) {
+        item._style = styleFallback(item.style_no, item.sku_code ?? item.sku_id, item.product_name);
+        packageItemCount.set(item.package_id, (packageItemCount.get(item.package_id) ?? 0) + 1);
       }
 
-      const orderItemCount = new Map<string, number>();
-      for (const it of allItems) {
-        orderItemCount.set(it.outbound_order_id, (orderItemCount.get(it.outbound_order_id) ?? 0) + 1);
-      }
       const allowed = new Set<string>();
-      for (const r of orders) {
-        const c = orderItemCount.get(r.id) ?? 0;
-        if (filters.hasItems === "yes" && c === 0) continue;
-        if (filters.hasItems === "no" && c > 0) continue;
-        if (filters.abnormal === "yes" && c > 0) continue;
-        if (filters.abnormal === "no" && c === 0) continue;
-        allowed.add(r.id);
+      for (const row of packageRows) {
+        const count = packageItemCount.get(row.id) ?? 0;
+        if (filters.hasItems === "yes" && count === 0) continue;
+        if (filters.hasItems === "no" && count > 0) continue;
+        if (filters.abnormal === "yes" && count > 0) continue;
+        if (filters.abnormal === "no" && count === 0) continue;
+        allowed.add(row.id);
       }
-      const filteredItems = allItems.filter(it => allowed.has(it.outbound_order_id));
 
+      const filteredItems = allItems.filter((item) => allowed.has(item.package_id));
       const styleMap = new Map<string, StyleRow>();
-      for (const it of filteredItems) {
-        const rec = orderMap.get(it.outbound_order_id);
-        const shop = (rec?.shop_name ?? "").trim() || "(未知店铺)";
-        const style = it._style;
+      for (const item of filteredItems) {
+        const pkg = packageMap.get(item.package_id);
+        const shop = (pkg?.shop_name ?? "").trim() || "(未知店铺)";
+        const style = item._style;
         const key = `${style}__${shop}`;
         let row = styleMap.get(key);
         if (!row) {
           row = {
-            key, style_no: style, product_name: it.name ?? "", shop_name: shop,
+            key,
+            style_no: style,
+            product_name: item.product_name ?? "",
+            shop_name: shop,
             qty: 0,
-            io_set: new Set(), o_set: new Set(), sku_set: new Set(), wh_set: new Set(),
-            first_io: null, last_io: null,
+            package_set: new Set(),
+            order_set: new Set(),
+            sku_set: new Set(),
+            wh_set: new Set(),
+            first_ship: null,
+            last_ship: null,
           };
           styleMap.set(key, row);
         }
-        row.qty += it.qty;
-        const ioNo = rec?.io_id ?? it.io_id ?? "";
-        if (ioNo) row.io_set.add(ioNo);
-        const oNo = rec?.o_id ?? "";
-        if (oNo) row.o_set.add(oNo);
-        const sk = it.sku_id || "";
-        if (sk) row.sku_set.add(sk);
-        const wh = rec?.warehouse ?? "";
-        if (wh) row.wh_set.add(wh);
-        const d = rec?.io_date ?? null;
-        if (d) {
-          if (!row.first_io || d < row.first_io) row.first_io = d;
-          if (!row.last_io || d > row.last_io) row.last_io = d;
+        row.qty += item.qty;
+        if (pkg?.io_id) row.package_set.add(pkg.io_id);
+        if (pkg?.o_id) row.order_set.add(pkg.o_id);
+        const sku = item.sku_code || item.sku_id || "";
+        if (sku) row.sku_set.add(sku);
+        const warehouse = pkg?.warehouse_name || pkg?.wh_id || "";
+        if (warehouse) row.wh_set.add(warehouse);
+        const shipDate = pkg?.send_date ?? null;
+        if (shipDate) {
+          if (!row.first_ship || shipDate < row.first_ship) row.first_ship = shipDate;
+          if (!row.last_ship || shipDate > row.last_ship) row.last_ship = shipDate;
         }
-        if (!row.product_name && it.name) row.product_name = it.name;
+        if (!row.product_name && item.product_name) row.product_name = item.product_name;
       }
+
       const rows = Array.from(styleMap.values())
-        .sort((a, b) => String(b.last_io ?? "").localeCompare(String(a.last_io ?? "")));
-      return { rows, items: filteredItems, orderMap };
+        .sort((a, b) => String(b.last_ship ?? "").localeCompare(String(a.last_ship ?? "")));
+      return { rows, items: filteredItems, packageMap };
     },
     retry: 1,
   });
-}
-
-function whLabel(set: Set<string>) {
-  const arr = Array.from(set);
-  if (arr.length === 0) return "-";
-  if (arr.length === 1) return arr[0];
-  return `${arr.length} 个仓库`;
 }
 
 type Props = {
@@ -205,37 +237,41 @@ export default function OutboundByStyleTab({ filters, exportRef }: Props) {
   const [detailKey, setDetailKey] = useState<string | null>(null);
   useEffect(() => { setPage(0); }, [filters]);
 
-  const rows = aggQ.data?.rows ?? [];
+  const rows = useMemo(() => aggQ.data?.rows ?? [], [aggQ.data?.rows]);
   const totalCount = rows.length;
   const pageRows = useMemo(() => rows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE), [rows, page]);
-  const detailRow = useMemo(() => rows.find(r => r.key === detailKey) ?? null, [rows, detailKey]);
+  const detailRow = useMemo(() => rows.find((row) => row.key === detailKey) ?? null, [rows, detailKey]);
   const detailItems = useMemo(() => {
     if (!detailRow || !aggQ.data) return [] as AggItem[];
-    return aggQ.data.items.filter(it => {
-      const rec = aggQ.data.orderMap.get(it.outbound_order_id);
-      const sp = (rec?.shop_name ?? "").trim() || "(未知店铺)";
-      return it._style === detailRow.style_no && sp === detailRow.shop_name;
+    return aggQ.data.items.filter((item) => {
+      const pkg = aggQ.data.packageMap.get(item.package_id);
+      const shop = (pkg?.shop_name ?? "").trim() || "(未知店铺)";
+      return item._style === detailRow.style_no && shop === detailRow.shop_name;
     });
   }, [detailRow, aggQ.data]);
 
   const exportRows = () => {
     if (!rows.length) return toast({ title: "无数据可导出" });
-    const headers = ["款号/商品编码", "商品名称", "店铺", "出库件数", "出库单数", "订单数", "SKU数",
-      "首次出库时间", "最近出库时间", "涉及仓库"];
+    const headers = ["款号", "商品名称", "店铺", "发货件数", "包裹数", "订单数", "SKU数", "首次发货", "最近发货", "涉及仓库"];
     const lines = [headers.join(",")];
-    for (const r of rows) {
+    for (const row of rows) {
       lines.push([
-        r.style_no, r.product_name, r.shop_name, r.qty,
-        r.io_set.size, r.o_set.size, r.sku_set.size,
-        formatDateTimeCN(r.first_io, { withSeconds: false }),
-        formatDateTimeCN(r.last_io, { withSeconds: false }),
-        whLabel(r.wh_set),
-      ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
+        row.style_no,
+        row.product_name,
+        row.shop_name,
+        row.qty,
+        row.package_set.size,
+        row.order_set.size,
+        row.sku_set.size,
+        formatDateTimeCN(row.first_ship, { withSeconds: false }),
+        formatDateTimeCN(row.last_ship, { withSeconds: false }),
+        whLabel(row.wh_set),
+      ].map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","));
     }
     const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `出库款式统计_${todayCN()}.csv`;
+    a.download = `仓库发货款式统计_${todayCN()}.csv`;
     a.click();
   };
 
@@ -245,113 +281,112 @@ export default function OutboundByStyleTab({ filters, exportRef }: Props) {
   });
 
   return (
-    <Card><CardContent className="p-0">
-      <div className="flex items-center justify-between p-3 border-b">
-        <div className="text-xs text-muted-foreground">
-          按「款号 + 店铺」聚合 · 当前筛选 {totalCount} 个款式
+    <Card>
+      <CardContent className="p-0">
+        <div className="flex items-center justify-between p-3 border-b">
+          <div className="text-xs text-muted-foreground">
+            按“款号 + 店铺”聚合 · 当前筛选 {totalCount} 个款式
+          </div>
         </div>
-      </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>款号 / 商品编码</TableHead>
-            <TableHead>商品名称</TableHead>
-            <TableHead>店铺</TableHead>
-            <TableHead className="text-right">出库件数</TableHead>
-            <TableHead className="text-right">出库单数</TableHead>
-            <TableHead className="text-right">订单数</TableHead>
-            <TableHead className="text-right">SKU 数</TableHead>
-            <TableHead>最近出库</TableHead>
-            <TableHead>首次出库</TableHead>
-            <TableHead>仓库</TableHead>
-            <TableHead>操作</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {aggQ.isLoading && <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">聚合中...</TableCell></TableRow>}
-          {aggQ.error && <TableRow><TableCell colSpan={11} className="text-center py-12 text-rose-600">读取失败：{(aggQ.error as any).message}</TableCell></TableRow>}
-          {!aggQ.isLoading && !aggQ.error && totalCount === 0 && (
-            <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">当前筛选下没有出库款式数据</TableCell></TableRow>
-          )}
-          {pageRows.map(r => (
-            <TableRow key={r.key}>
-              <TableCell className="font-mono text-xs">{r.style_no}</TableCell>
-              <TableCell className="text-xs">{r.product_name || "-"}</TableCell>
-              <TableCell className="text-xs">{r.shop_name}</TableCell>
-              <TableCell className="text-right">{fmtInt(r.qty)}</TableCell>
-              <TableCell className="text-right">{fmtInt(r.io_set.size)}</TableCell>
-              <TableCell className="text-right">{fmtInt(r.o_set.size)}</TableCell>
-              <TableCell className="text-right">{fmtInt(r.sku_set.size)}</TableCell>
-              <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.last_io, { withSeconds: false })}</TableCell>
-              <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.first_io, { withSeconds: false })}</TableCell>
-              <TableCell className="text-xs">{whLabel(r.wh_set)}</TableCell>
-              <TableCell>
-                <Button size="sm" variant="ghost" onClick={() => setDetailKey(r.key)}>详情</Button>
-              </TableCell>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>款号</TableHead>
+              <TableHead>商品名称</TableHead>
+              <TableHead>店铺</TableHead>
+              <TableHead className="text-right">发货件数</TableHead>
+              <TableHead className="text-right">包裹数</TableHead>
+              <TableHead className="text-right">订单数</TableHead>
+              <TableHead className="text-right">SKU 数</TableHead>
+              <TableHead>最近发货</TableHead>
+              <TableHead>首次发货</TableHead>
+              <TableHead>仓库</TableHead>
+              <TableHead>操作</TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      {totalCount > PAGE_SIZE && (
-        <div className="flex items-center justify-between p-3 border-t">
-          <div className="text-xs text-muted-foreground">共 {totalCount} 条 · 第 {page + 1} / {Math.ceil(totalCount / PAGE_SIZE)} 页</div>
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage(p => p - 1)}>上一页</Button>
-            <Button size="sm" variant="outline" disabled={(page + 1) * PAGE_SIZE >= totalCount} onClick={() => setPage(p => p + 1)}>下一页</Button>
+          </TableHeader>
+          <TableBody>
+            {aggQ.isLoading && <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">聚合中...</TableCell></TableRow>}
+            {aggQ.error && <TableRow><TableCell colSpan={11} className="text-center py-12 text-rose-600">读取失败：{(aggQ.error as Error).message}</TableCell></TableRow>}
+            {!aggQ.isLoading && !aggQ.error && totalCount === 0 && (
+              <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">当前筛选下没有款式发货数据</TableCell></TableRow>
+            )}
+            {pageRows.map((row) => (
+              <TableRow key={row.key}>
+                <TableCell className="font-mono text-xs">{row.style_no}</TableCell>
+                <TableCell className="text-xs">{row.product_name || "-"}</TableCell>
+                <TableCell className="text-xs">{row.shop_name}</TableCell>
+                <TableCell className="text-right">{fmtInt(row.qty)}</TableCell>
+                <TableCell className="text-right">{fmtInt(row.package_set.size)}</TableCell>
+                <TableCell className="text-right">{fmtInt(row.order_set.size)}</TableCell>
+                <TableCell className="text-right">{fmtInt(row.sku_set.size)}</TableCell>
+                <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(row.last_ship, { withSeconds: false })}</TableCell>
+                <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(row.first_ship, { withSeconds: false })}</TableCell>
+                <TableCell className="text-xs">{whLabel(row.wh_set)}</TableCell>
+                <TableCell>
+                  <Button size="sm" variant="ghost" onClick={() => setDetailKey(row.key)}>详情</Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        {totalCount > PAGE_SIZE && (
+          <div className="flex items-center justify-between p-3 border-t">
+            <div className="text-xs text-muted-foreground">共 {totalCount} 条 · 第 {page + 1} / {Math.ceil(totalCount / PAGE_SIZE)} 页</div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>上一页</Button>
+              <Button size="sm" variant="outline" disabled={page + 1 >= Math.ceil(totalCount / PAGE_SIZE)} onClick={() => setPage((value) => value + 1)}>下一页</Button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* 详情抽屉 */}
-      <Sheet open={!!detailKey} onOpenChange={(o) => !o && setDetailKey(null)}>
-        <SheetContent side="right" className="w-full sm:max-w-4xl overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>款式出库明细 · {detailRow?.style_no}</SheetTitle>
-            <SheetDescription>
-              {detailRow?.product_name || "-"} · 店铺 {detailRow?.shop_name} · 共 {detailItems.length} 条明细 · 合计 {fmtInt(detailRow?.qty)} 件
-            </SheetDescription>
-          </SheetHeader>
-          <div className="mt-4">
-            <Table>
-              <TableHeader><TableRow>
-                <TableHead>出库单号</TableHead>
-                <TableHead>订单号</TableHead>
-                <TableHead>店铺</TableHead>
-                <TableHead>仓库</TableHead>
-                <TableHead>SKU</TableHead>
-                <TableHead>商品名称</TableHead>
-                <TableHead>颜色</TableHead>
-                <TableHead>尺码</TableHead>
-                <TableHead className="text-right">数量</TableHead>
-                <TableHead>快递公司</TableHead>
-                <TableHead>快递单号</TableHead>
-                <TableHead>出库时间</TableHead>
-              </TableRow></TableHeader>
-              <TableBody>
-                {detailItems.map((it, idx) => {
-                  const rec = aggQ.data?.orderMap.get(it.outbound_order_id);
-                  return (
-                    <TableRow key={idx}>
-                      <TableCell className="font-mono text-xs">{rec?.io_id || "-"}</TableCell>
-                      <TableCell className="font-mono text-xs">{rec?.o_id || "-"}</TableCell>
-                      <TableCell className="text-xs">{rec?.shop_name || "-"}</TableCell>
-                      <TableCell className="text-xs">{rec?.warehouse || "-"}</TableCell>
-                      <TableCell className="font-mono text-xs">{it.sku_id || "-"}</TableCell>
-                      <TableCell className="text-xs">{it.name || "-"}</TableCell>
-                      <TableCell className="text-xs">{it.color || "-"}</TableCell>
-                      <TableCell className="text-xs">{it.size || "-"}</TableCell>
-                      <TableCell className="text-right">{fmtInt(it.qty)}</TableCell>
-                      <TableCell className="text-xs">{rec?.logistics_company || "-"}</TableCell>
-                      <TableCell className="font-mono text-xs">{rec?.l_id || "-"}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(rec?.io_date, { withSeconds: false })}</TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </SheetContent>
-      </Sheet>
-    </CardContent></Card>
+        <Sheet open={!!detailKey} onOpenChange={(open) => !open && setDetailKey(null)}>
+          <SheetContent side="right" className="w-full sm:max-w-4xl overflow-y-auto">
+            <SheetHeader>
+              <SheetTitle>款式发货明细 · {detailRow?.style_no}</SheetTitle>
+              <SheetDescription>
+                {detailRow?.product_name || "-"} · 店铺 {detailRow?.shop_name} · 共 {detailItems.length} 条明细 · 合计 {fmtInt(detailRow?.qty)} 件
+              </SheetDescription>
+            </SheetHeader>
+            <div className="mt-4">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>包裹号</TableHead>
+                    <TableHead>订单号</TableHead>
+                    <TableHead>店铺</TableHead>
+                    <TableHead>仓库</TableHead>
+                    <TableHead>SKU</TableHead>
+                    <TableHead>商品名称</TableHead>
+                    <TableHead className="text-right">数量</TableHead>
+                    <TableHead>快递公司</TableHead>
+                    <TableHead>快递单号</TableHead>
+                    <TableHead>发货日期</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {detailItems.map((item) => {
+                    const pkg = aggQ.data?.packageMap.get(item.package_id);
+                    return (
+                      <TableRow key={item.id}>
+                        <TableCell className="font-mono text-xs">{pkg?.io_id || item.io_id || "-"}</TableCell>
+                        <TableCell className="font-mono text-xs">{pkg?.o_id || "-"}</TableCell>
+                        <TableCell className="text-xs">{pkg?.shop_name || "-"}</TableCell>
+                        <TableCell className="text-xs">{pkg?.warehouse_name || pkg?.wh_id || "-"}</TableCell>
+                        <TableCell className="font-mono text-xs">{item.sku_code || item.sku_id || "-"}</TableCell>
+                        <TableCell className="text-xs">{item.product_name || "-"}</TableCell>
+                        <TableCell className="text-right">{fmtInt(item.qty)}</TableCell>
+                        <TableCell className="text-xs">{pkg?.logistics_company || "-"}</TableCell>
+                        <TableCell className="font-mono text-xs">{pkg?.tracking_number || "-"}</TableCell>
+                        <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(pkg?.send_date, { withSeconds: false })}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </SheetContent>
+        </Sheet>
+      </CardContent>
+    </Card>
   );
 }

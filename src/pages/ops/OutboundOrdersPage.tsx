@@ -16,7 +16,7 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Search, Download, FileJson, ArrowUp, ArrowDown, ChevronsUpDown } from "lucide-react";
+import { Search, Download, ArrowUp, ArrowDown, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -28,11 +28,60 @@ import OutboundByStyleTab from "@/components/ops/OutboundByStyleTab";
 const PAGE_SIZE = 20;
 const fmtInt = (n: number | null | undefined) =>
   Number(n ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 });
+const fmtWeight = (n: number | null | undefined) =>
+  n == null ? "-" : Number(n).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 
 type Filters = {
-  startDate: string; endDate: string; shop: string; warehouse: string;
-  ioId: string; oId: string; lId: string; sku: string; status: string;
-  hasItems: string; abnormal: string;
+  startDate: string;
+  endDate: string;
+  shop: string;
+  warehouse: string;
+  logistics: string;
+  ioId: string;
+  oId: string;
+  trackingNumber: string;
+  sku: string;
+  status: string;
+  hasItems: string;
+  abnormal: string;
+};
+
+type PackageRow = {
+  id: string;
+  package_unique_key: string;
+  io_id: string;
+  so_id: string | null;
+  o_id: string | null;
+  shop_id: string | null;
+  shop_name: string | null;
+  wh_id: string | null;
+  warehouse_name: string | null;
+  send_date: string | null;
+  logistics_company: string | null;
+  tracking_number: string | null;
+  weight: number | null;
+  shipping_method: string | null;
+  status: string | null;
+  modified_at_jst: string | null;
+  synced_at: string;
+  item_qty?: number;
+  item_count?: number;
+};
+
+type PackageItemRow = {
+  id: string;
+  item_unique_key: string;
+  package_id: string;
+  package_unique_key: string;
+  io_id: string;
+  so_id: string | null;
+  o_id: string | null;
+  sku_id: string | null;
+  sku_code: string | null;
+  style_no: string | null;
+  product_name: string | null;
+  qty: number;
+  synced_at: string;
 };
 
 function defaultFilters(): Filters {
@@ -40,76 +89,112 @@ function defaultFilters(): Filters {
   const d = new Date(`${end}T00:00:00+08:00`);
   d.setUTCDate(d.getUTCDate() - 6);
   return {
-    startDate: beijingYMD(d), endDate: end,
-    shop: "", warehouse: "", ioId: "", oId: "", lId: "", sku: "",
-    status: "all", hasItems: "all", abnormal: "all",
+    startDate: beijingYMD(d),
+    endDate: end,
+    shop: "",
+    warehouse: "",
+    logistics: "",
+    ioId: "",
+    oId: "",
+    trackingNumber: "",
+    sku: "",
+    status: "all",
+    hasItems: "all",
+    abnormal: "all",
   };
 }
 
-function applyFilters(q: any, f: Filters) {
-  if (f.startDate) { const r = beijingDayRangeToUTC(f.startDate); if (r) q = q.gte("io_date", r.gte); }
-  if (f.endDate)   { const r = beijingDayRangeToUTC(f.endDate);   if (r) q = q.lte("io_date", r.lte); }
+function isActiveStatus(status: string | null | undefined) {
+  return !/delete|cancel/i.test(String(status ?? ""));
+}
+
+// Supabase query builders are structurally typed; keep this helper narrow to
+// the filter methods it uses so eslint does not require a broad any.
+type FilterQuery<T> = T & {
+  gte: (column: string, value: string) => FilterQuery<T>;
+  lte: (column: string, value: string) => FilterQuery<T>;
+  ilike: (column: string, value: string) => FilterQuery<T>;
+  eq: (column: string, value: string) => FilterQuery<T>;
+};
+
+function applyFilters<T>(q: FilterQuery<T>, f: Filters): FilterQuery<T> {
+  if (f.startDate) {
+    const range = beijingDayRangeToUTC(f.startDate);
+    if (range) q = q.gte("send_date", range.gte);
+  }
+  if (f.endDate) {
+    const range = beijingDayRangeToUTC(f.endDate);
+    if (range) q = q.lte("send_date", range.lte);
+  }
   if (f.shop) q = q.ilike("shop_name", `%${f.shop}%`);
-  if (f.warehouse) q = q.ilike("warehouse", `%${f.warehouse}%`);
+  if (f.warehouse) q = q.ilike("warehouse_name", `%${f.warehouse}%`);
+  if (f.logistics) q = q.ilike("logistics_company", `%${f.logistics}%`);
   if (f.ioId) q = q.ilike("io_id", `%${f.ioId}%`);
   if (f.oId) q = q.ilike("o_id", `%${f.oId}%`);
-  if (f.lId) q = q.ilike("l_id", `%${f.lId}%`);
+  if (f.trackingNumber) q = q.ilike("tracking_number", `%${f.trackingNumber}%`);
   if (f.status !== "all") q = q.eq("status", f.status);
   return q;
 }
 
+async function aggregateItems(packageIds: string[]) {
+  const agg: Record<string, { qty: number; count: number }> = {};
+  for (let i = 0; i < packageIds.length; i += 800) {
+    const slice = packageIds.slice(i, i + 800);
+    const { data, error } = await supabase
+      .from("warehouse_shipping_package_items")
+      .select("package_id, qty")
+      .in("package_id", slice);
+    if (error) throw error;
+    for (const item of data ?? []) {
+      const key = item.package_id;
+      const cur = agg[key] ?? { qty: 0, count: 0 };
+      cur.qty += Number(item.qty ?? 0);
+      cur.count += 1;
+      agg[key] = cur;
+    }
+  }
+  return agg;
+}
+
 function useStats() {
   return useQuery({
-    queryKey: ["outbound_stats", todayCN()],
+    queryKey: ["warehouse_shipping_stats", todayCN()],
     queryFn: async () => {
       const today = todayCN();
-      const todayR = beijingDayRangeToUTC(today)!;
-      const monthStart = today.slice(0, 8) + "01";
-      const monthR = beijingDayRangeToUTC(monthStart)!;
+      const todayRange = beijingDayRangeToUTC(today)!;
+      const monthRange = beijingDayRangeToUTC(today.slice(0, 8) + "01")!;
 
-      const [tOrdRes, mOrdRes, tItemsRes, mItemsRes, pendingRes] = await Promise.all([
-        supabase.from("jst_outbound_orders").select("id, status", { count: "exact" })
-          .gte("io_date", todayR.gte).lte("io_date", todayR.lte).limit(2000),
-        supabase.from("jst_outbound_orders").select("id, status", { count: "exact" })
-          .gte("io_date", monthR.gte).limit(5000),
-        supabase.from("jst_outbound_order_items")
-          .select("qty, jst_outbound_orders!inner(io_date)")
-          .gte("jst_outbound_orders.io_date", todayR.gte)
-          .lte("jst_outbound_orders.io_date", todayR.lte).limit(5000),
-        supabase.from("jst_outbound_order_items")
-          .select("qty, jst_outbound_orders!inner(io_date)")
-          .gte("jst_outbound_orders.io_date", monthR.gte).limit(20000),
-        supabase.from("jst_outbound_orders").select("id", { count: "exact", head: true })
-          .in("status", ["WaitConfirm", "Cancel"]),
+      const [todayPackagesRes, monthPackagesRes] = await Promise.all([
+        supabase
+          .from("warehouse_shipping_packages")
+          .select("id,o_id,status", { count: "exact" })
+          .gte("send_date", todayRange.gte)
+          .lte("send_date", todayRange.lte)
+          .limit(5000),
+        supabase
+          .from("warehouse_shipping_packages")
+          .select("id,o_id,status", { count: "exact" })
+          .gte("send_date", monthRange.gte)
+          .limit(20000),
       ]);
+      if (todayPackagesRes.error) throw todayPackagesRes.error;
+      if (monthPackagesRes.error) throw monthPackagesRes.error;
 
-      const tOrders = tOrdRes.data ?? [];
-      const mOrders = mOrdRes.data ?? [];
-      const todayQty = (tItemsRes.data ?? []).reduce((s: number, r: any) => s + Number(r.qty ?? 0), 0);
-      const monthQty = (mItemsRes.data ?? []).reduce((s: number, r: any) => s + Number(r.qty ?? 0), 0);
-      const pendingShip = tOrders.filter((r: any) => r.status === "WaitConfirm").length
-        + mOrders.filter((r: any) => r.status === "WaitConfirm" && !tOrders.find((t: any) => t.id === r.id)).length;
-
-      // 异常 = 本月主表中没有任何明细的出库单
-      const { data: monthOrderIds } = await supabase.from("jst_outbound_orders")
-        .select("id").gte("io_date", monthR.gte).limit(5000);
-      const ids = (monthOrderIds ?? []).map((r: any) => r.id);
-      let abnormal = 0;
-      if (ids.length) {
-        const have = new Set<string>();
-        for (let i = 0; i < ids.length; i += 800) {
-          const { data: its } = await supabase.from("jst_outbound_order_items")
-            .select("outbound_order_id").in("outbound_order_id", ids.slice(i, i + 800));
-          for (const it of its ?? []) have.add((it as any).outbound_order_id);
-        }
-        abnormal = ids.filter(id => !have.has(id)).length;
-      }
+      const todayPackages = (todayPackagesRes.data ?? []).filter((p) => isActiveStatus(p.status));
+      const monthPackages = (monthPackagesRes.data ?? []).filter((p) => isActiveStatus(p.status));
+      const todayAgg = await aggregateItems(todayPackages.map((p) => p.id));
+      const monthAgg = await aggregateItems(monthPackages.map((p) => p.id));
+      const todayQty = Object.values(todayAgg).reduce((sum, row) => sum + row.qty, 0);
+      const monthQty = Object.values(monthAgg).reduce((sum, row) => sum + row.qty, 0);
+      const todayOrders = new Set(todayPackages.map((p) => p.o_id || p.id)).size;
+      const abnormal = monthPackages.filter((p) => !monthAgg[p.id]?.count).length;
 
       return {
-        todayOrders: tOrdRes.count ?? tOrders.length,
-        monthOrders: mOrdRes.count ?? mOrders.length,
-        todayQty, monthQty,
-        pendingShip,
+        todayPackages: todayPackages.length,
+        todayOrders,
+        todayQty,
+        monthPackages: monthPackages.length,
+        monthQty,
         abnormal,
       };
     },
@@ -118,91 +203,81 @@ function useStats() {
 }
 
 type SortDir = "asc" | "desc";
-type SortKey = "io_date" | "consign_time" | "io_id" | "o_id" | "shop_name" | "warehouse" | "status" | "item_qty" | "item_count";
+type SortKey =
+  | "send_date"
+  | "package_unique_key"
+  | "o_id"
+  | "shop_name"
+  | "warehouse_name"
+  | "logistics_company"
+  | "tracking_number"
+  | "status"
+  | "item_qty"
+  | "item_count";
 const ITEM_SORT_KEYS = new Set<SortKey>(["item_qty", "item_count"]);
 
 function useOutboundList(filters: Filters, page: number, sortKey: SortKey, sortDir: SortDir) {
   return useQuery({
-    queryKey: ["outbound_list", filters, page, sortKey, sortDir],
+    queryKey: ["warehouse_shipping_packages", filters, page, sortKey, sortDir],
     queryFn: async () => {
-      let needIds: string[] | null = null;
+      let packageIdsFromSku: string[] | null = null;
       if (filters.sku) {
-        const { data: it, error } = await supabase
-          .from("jst_outbound_order_items")
-          .select("outbound_order_id")
-          .or(`sku_id.ilike.%${filters.sku}%,i_id.ilike.%${filters.sku}%`).limit(3000);
+        const safeSku = filters.sku.replace(/[,()]/g, "");
+        const { data, error } = await supabase
+          .from("warehouse_shipping_package_items")
+          .select("package_id")
+          .or(`sku_id.ilike.%${safeSku}%,sku_code.ilike.%${safeSku}%,style_no.ilike.%${safeSku}%,product_name.ilike.%${safeSku}%`)
+          .limit(5000);
         if (error) throw error;
-        needIds = Array.from(new Set((it ?? []).map((r: any) => r.outbound_order_id).filter(Boolean)));
-        if (needIds.length === 0) return { rows: [], count: 0 };
+        packageIdsFromSku = Array.from(new Set((data ?? []).map((row) => row.package_id).filter(Boolean)));
+        if (!packageIdsFromSku.length) return { rows: [] as PackageRow[], count: 0 };
       }
 
-      const aggItems = async (ids: string[]) => {
-        const agg: Record<string, { qty: number; count: number }> = {};
-        if (!ids.length) return agg;
-        for (let i = 0; i < ids.length; i += 800) {
-          const slice = ids.slice(i, i + 800);
-          const { data: items } = await supabase.from("jst_outbound_order_items")
-            .select("outbound_order_id, qty").in("outbound_order_id", slice);
-          for (const it of items ?? []) {
-            const k = (it as any).outbound_order_id as string;
-            const cur = agg[k] ?? { qty: 0, count: 0 };
-            cur.qty += Number((it as any).qty ?? 0);
-            cur.count += 1;
-            agg[k] = cur;
-          }
-        }
-        return agg;
+      const isItemSort = ITEM_SORT_KEYS.has(sortKey);
+      const attachAgg = async (rows: PackageRow[]) => {
+        const agg = await aggregateItems(rows.map((row) => row.id));
+        return rows
+          .map((row) => ({
+            ...row,
+            item_qty: agg[row.id]?.qty ?? 0,
+            item_count: agg[row.id]?.count ?? 0,
+          }))
+          .filter((row) => {
+            if (filters.hasItems === "yes" && !row.item_count) return false;
+            if (filters.hasItems === "no" && row.item_count) return false;
+            if (filters.abnormal === "yes" && row.item_count) return false;
+            if (filters.abnormal === "no" && !row.item_count) return false;
+            return true;
+          });
       };
 
-      const isItemSort = ITEM_SORT_KEYS.has(sortKey);
-
       if (!isItemSort) {
-        let q = supabase.from("jst_outbound_orders").select("*", { count: "exact" });
+        let q = supabase.from("warehouse_shipping_packages").select("*", { count: "exact" });
         q = applyFilters(q, filters);
-        if (needIds) q = q.in("id", needIds);
+        if (packageIdsFromSku) q = q.in("id", packageIdsFromSku);
         q = q.order(sortKey, { ascending: sortDir === "asc", nullsFirst: false });
-        if (sortKey !== "io_id") q = q.order("io_id", { ascending: false, nullsFirst: false });
+        if (sortKey !== "package_unique_key") q = q.order("package_unique_key", { ascending: false, nullsFirst: false });
         q = q.range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
         const { data, error, count } = await q;
         if (error) throw error;
-        const ids = (data ?? []).map((r: any) => r.id);
-        const agg = await aggItems(ids);
-        let rows = (data ?? []).map((r: any) => ({
-          ...r,
-          item_qty: agg[r.id]?.qty ?? Number(r.qty ?? 0),
-          item_count: agg[r.id]?.count ?? 0,
-        }));
-        if (filters.hasItems === "yes") rows = rows.filter((r: any) => r.item_count > 0);
-        if (filters.hasItems === "no") rows = rows.filter((r: any) => r.item_count === 0);
-        if (filters.abnormal === "yes") rows = rows.filter((r: any) => r.item_count === 0);
-        if (filters.abnormal === "no") rows = rows.filter((r: any) => r.item_count > 0);
+        const rows = await attachAgg((data ?? []) as PackageRow[]);
         return { rows, count: count ?? rows.length };
       }
 
-      let qAll = supabase.from("jst_outbound_orders").select("*").limit(5000);
+      let qAll = supabase.from("warehouse_shipping_packages").select("*").limit(5000);
       qAll = applyFilters(qAll, filters);
-      if (needIds) qAll = qAll.in("id", needIds);
-      const { data: all, error: allErr } = await qAll;
-      if (allErr) throw allErr;
-      const ids = (all ?? []).map((r: any) => r.id);
-      const agg = await aggItems(ids);
-      let rows = (all ?? []).map((r: any) => ({
-        ...r,
-        item_qty: agg[r.id]?.qty ?? Number(r.qty ?? 0),
-        item_count: agg[r.id]?.count ?? 0,
-      }));
-      if (filters.hasItems === "yes") rows = rows.filter((r: any) => r.item_count > 0);
-      if (filters.hasItems === "no") rows = rows.filter((r: any) => r.item_count === 0);
-      if (filters.abnormal === "yes") rows = rows.filter((r: any) => r.item_count === 0);
-      if (filters.abnormal === "no") rows = rows.filter((r: any) => r.item_count > 0);
-      rows.sort((a: any, b: any) => {
-        const va = Number(a[sortKey] ?? 0); const vb = Number(b[sortKey] ?? 0);
-        if (va === vb) return String(b.io_id ?? "").localeCompare(String(a.io_id ?? ""));
+      if (packageIdsFromSku) qAll = qAll.in("id", packageIdsFromSku);
+      const { data, error } = await qAll;
+      if (error) throw error;
+      const rows = await attachAgg((data ?? []) as PackageRow[]);
+      rows.sort((a, b) => {
+        const va = Number(a[sortKey] ?? 0);
+        const vb = Number(b[sortKey] ?? 0);
+        if (va === vb) return String(b.package_unique_key ?? "").localeCompare(String(a.package_unique_key ?? ""));
         return sortDir === "asc" ? va - vb : vb - va;
       });
-      const count = rows.length;
       const start = page * PAGE_SIZE;
-      return { rows: rows.slice(start, start + PAGE_SIZE), count };
+      return { rows: rows.slice(start, start + PAGE_SIZE), count: rows.length };
     },
     retry: 1,
   });
@@ -223,7 +298,7 @@ function SortHead({
         onClick={() => onSort(sortKey)}
         className={cn(
           "inline-flex items-center gap-1 select-none hover:text-foreground transition cursor-pointer",
-          active ? "text-foreground font-semibold" : "text-muted-foreground"
+          active ? "text-foreground font-semibold" : "text-muted-foreground",
         )}
       >
         <span>{children}</span>
@@ -233,28 +308,32 @@ function SortHead({
   );
 }
 
-function useOutboundItems(outboundOrderId: string | null) {
+function usePackageItems(packageId: string | null) {
   return useQuery({
-    queryKey: ["outbound_items", outboundOrderId],
-    enabled: !!outboundOrderId,
+    queryKey: ["warehouse_shipping_package_items", packageId],
+    enabled: !!packageId,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("jst_outbound_order_items").select("*")
-        .eq("outbound_order_id", outboundOrderId!).order("id");
+        .from("warehouse_shipping_package_items")
+        .select("*")
+        .eq("package_id", packageId!)
+        .order("sku_id", { ascending: true, nullsFirst: false });
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as PackageItemRow[];
     },
   });
 }
 
-function Stat({ label, value, error }: { label: string; value: any; error?: any }) {
+function Stat({ label, value, error }: { label: string; value: React.ReactNode; error?: unknown }) {
   return (
-    <Card><CardContent className="p-4">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className={"text-2xl font-semibold mt-1 " + (error ? "text-rose-600 text-base font-normal" : "")}>
-        {error ? "读取失败" : value}
-      </div>
-    </CardContent></Card>
+    <Card>
+      <CardContent className="p-4">
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div className={"text-2xl font-semibold mt-1 " + (error ? "text-rose-600 text-base font-normal" : "")}>
+          {error ? "读取失败" : value}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -263,60 +342,85 @@ export default function OutboundOrdersPage() {
   const [draft, setDraft] = useState<Filters>(defaultFilters());
   const [page, setPage] = useState(0);
   const [detailId, setDetailId] = useState<string | null>(null);
-  const [detailRow, setDetailRow] = useState<any | null>(null);
-  const [rawOpen, setRawOpen] = useState<any | null>(null);
-  const [tab, setTab] = useState<"byOrder" | "byStyle">("byOrder");
+  const [detailRow, setDetailRow] = useState<PackageRow | null>(null);
+  const [tab, setTab] = useState<"byPackage" | "byStyle">("byPackage");
   const styleExportRef = useRef<(() => void) | null>(null);
-
-  const [sortKey, setSortKey] = useState<SortKey>("io_date");
+  const [sortKey, setSortKey] = useState<SortKey>("send_date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const statsQ = useStats();
   const listQ = useOutboundList(filters, page, sortKey, sortDir);
-  const itemsQ = useOutboundItems(detailId);
+  const itemsQ = usePackageItems(detailId);
 
   const onSearch = () => { setPage(0); setFilters(draft); };
   const onReset = () => {
-    const d = defaultFilters();
-    setDraft(d); setFilters(d); setPage(0);
-    setSortKey("io_date"); setSortDir("desc");
+    const next = defaultFilters();
+    setDraft(next);
+    setFilters(next);
+    setPage(0);
+    setSortKey("send_date");
+    setSortDir("desc");
   };
 
-  const onSort = (k: SortKey) => {
-    if (sortKey !== k) { setSortKey(k); setSortDir("desc"); setPage(0); return; }
-    if (sortDir === "desc") { setSortDir("asc"); setPage(0); return; }
-    setSortKey("io_date"); setSortDir("desc"); setPage(0);
+  const onSort = (key: SortKey) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir("desc");
+      setPage(0);
+      return;
+    }
+    if (sortDir === "desc") {
+      setSortDir("asc");
+      setPage(0);
+      return;
+    }
+    setSortKey("send_date");
+    setSortDir("desc");
+    setPage(0);
   };
 
-  const applyQuickRange = (kind: "today" | "7d" | "30d" | "month" | "all") => {
+  const applyQuickRange = (kind: "today" | "7d" | "month" | "all") => {
     const end = todayCN();
-    let start = ""; let endDate = end;
+    let start = "";
+    let endDate = end;
     if (kind === "today") start = end;
-    else if (kind === "7d") { const d = new Date(`${end}T00:00:00+08:00`); d.setUTCDate(d.getUTCDate() - 6); start = beijingYMD(d); }
-    else if (kind === "30d") { const d = new Date(`${end}T00:00:00+08:00`); d.setUTCDate(d.getUTCDate() - 29); start = beijingYMD(d); }
-    else if (kind === "month") start = end.slice(0, 8) + "01";
-    else { start = ""; endDate = ""; }
+    else if (kind === "7d") {
+      const d = new Date(`${end}T00:00:00+08:00`);
+      d.setUTCDate(d.getUTCDate() - 6);
+      start = beijingYMD(d);
+    } else if (kind === "month") start = end.slice(0, 8) + "01";
+    else endDate = "";
     const next = { ...draft, startDate: start, endDate };
-    setDraft(next); setFilters(next); setPage(0);
+    setDraft(next);
+    setFilters(next);
+    setPage(0);
   };
 
-  const onExportByOrder = () => {
+  const onExportByPackage = () => {
     const rows = listQ.data?.rows ?? [];
-    if (!rows.length) return toast({ title: "无出库单数据可导出" });
-    const headers = ["出库单号", "订单号", "店铺", "仓库", "出库状态", "快递公司", "快递单号", "商品数量", "明细行数", "出库时间", "发货时间"];
+    if (!rows.length) return toast({ title: "无包裹数据可导出" });
+    const headers = ["包裹号", "订单号", "店铺", "仓库", "状态", "快递公司", "快递单号", "重量", "发货方式", "SKU件数", "明细行数", "发货日期"];
     const lines = [headers.join(",")];
-    for (const r of rows as any[]) {
+    for (const row of rows) {
       lines.push([
-        r.io_id, r.o_id ?? "", r.shop_name ?? "", r.warehouse ?? "", r.status ?? "",
-        r.logistics_company ?? "", r.l_id ?? "",
-        r.item_qty, r.item_count,
-        formatDateTimeCN(r.io_date), formatDateTimeCN(r.consign_time),
-      ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
+        row.io_id,
+        row.o_id ?? "",
+        row.shop_name ?? "",
+        row.warehouse_name ?? row.wh_id ?? "",
+        row.status ?? "",
+        row.logistics_company ?? "",
+        row.tracking_number ?? "",
+        row.weight ?? "",
+        row.shipping_method ?? "",
+        row.item_qty ?? 0,
+        row.item_count ?? 0,
+        formatDateTimeCN(row.send_date),
+      ].map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","));
     }
     const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `出库单列表_${todayCN()}.csv`;
+    a.download = `仓库发货包裹_${todayCN()}.csv`;
     a.click();
   };
 
@@ -325,171 +429,193 @@ export default function OutboundOrdersPage() {
     else toast({ title: "按款式数据尚未加载" });
   };
 
-  const s = statsQ.data;
-  const err = statsQ.error;
+  const stats = statsQ.data;
+  const totalPages = Math.max(1, Math.ceil((listQ.data?.count ?? 0) / PAGE_SIZE));
 
   return (
     <div>
       <PageHeader
         breadcrumb={["仓库系统", "出库信息"]}
-        title="出库信息"
-        description="展示从聚水潭同步过来的销售出库单数据，按出库单或按款式两种维度查看。"
+        title="仓库发货统计"
+        description="轻量展示聚水潭出库 API 的实际发货包裹、物流和 SKU 数量；销售主数据以订单 API 为准。"
       />
 
       <div className="mb-3 rounded-md border border-sky-300 bg-sky-50/60 px-4 py-2.5 text-xs text-sky-800">
-        新架构提示：完整出库明细请以聚水潭为准。新同步默认不保存完整 raw JSON，以避免数据库被海量出库数据撑爆。
+        新出库同步只写轻量包裹表和包裹 SKU 明细，不保存 raw JSON，不再继续写旧出库重型表。
       </div>
 
-      {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
-        <Stat label="今日出库单数" value={fmtInt(s?.todayOrders)} error={err} />
-        <Stat label="今日出库件数" value={fmtInt(s?.todayQty)} error={err} />
-        <Stat label="本月出库单数" value={fmtInt(s?.monthOrders)} error={err} />
-        <Stat label="本月出库件数" value={fmtInt(s?.monthQty)} error={err} />
-        <Stat label="待发货" value={fmtInt(s?.pendingShip)} error={err} />
-        <Stat label="异常出库单（无明细）" value={fmtInt(s?.abnormal)} error={err} />
+        <Stat label="今日发货包裹" value={fmtInt(stats?.todayPackages)} error={statsQ.error} />
+        <Stat label="今日发货订单" value={fmtInt(stats?.todayOrders)} error={statsQ.error} />
+        <Stat label="今日 SKU 件数" value={fmtInt(stats?.todayQty)} error={statsQ.error} />
+        <Stat label="本月发货包裹" value={fmtInt(stats?.monthPackages)} error={statsQ.error} />
+        <Stat label="本月 SKU 件数" value={fmtInt(stats?.monthQty)} error={statsQ.error} />
+        <Stat label="无明细包裹" value={fmtInt(stats?.abnormal)} error={statsQ.error} />
       </div>
 
-      {/* 筛选 */}
-      <Card className="mb-3"><CardContent className="p-4 space-y-3">
-        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2">
-          <div><label className="text-xs text-muted-foreground">起始出库日期</label>
-            <Input type="date" value={draft.startDate} onChange={e => setDraft({ ...draft, startDate: e.target.value })} /></div>
-          <div><label className="text-xs text-muted-foreground">截止出库日期</label>
-            <Input type="date" value={draft.endDate} onChange={e => setDraft({ ...draft, endDate: e.target.value })} /></div>
-          <div><label className="text-xs text-muted-foreground">店铺</label>
-            <Input value={draft.shop} onChange={e => setDraft({ ...draft, shop: e.target.value })} placeholder="店铺名称" /></div>
-          <div><label className="text-xs text-muted-foreground">仓库</label>
-            <Input value={draft.warehouse} onChange={e => setDraft({ ...draft, warehouse: e.target.value })} placeholder="仓库名称" /></div>
-          <div><label className="text-xs text-muted-foreground">出库单号</label>
-            <Input value={draft.ioId} onChange={e => setDraft({ ...draft, ioId: e.target.value })} /></div>
-          <div><label className="text-xs text-muted-foreground">订单号</label>
-            <Input value={draft.oId} onChange={e => setDraft({ ...draft, oId: e.target.value })} /></div>
-          <div><label className="text-xs text-muted-foreground">快递单号</label>
-            <Input value={draft.lId} onChange={e => setDraft({ ...draft, lId: e.target.value })} /></div>
-          <div><label className="text-xs text-muted-foreground">SKU / 商品编码</label>
-            <Input value={draft.sku} onChange={e => setDraft({ ...draft, sku: e.target.value })} /></div>
-          <div><label className="text-xs text-muted-foreground">出库状态</label>
-            <Select value={draft.status} onValueChange={v => setDraft({ ...draft, status: v })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部</SelectItem>
-                <SelectItem value="WaitConfirm">待出库</SelectItem>
-                <SelectItem value="Confirmed">已出库</SelectItem>
-                <SelectItem value="Cancelled">已取消</SelectItem>
-              </SelectContent></Select></div>
-          <div><label className="text-xs text-muted-foreground">是否有明细</label>
-            <Select value={draft.hasItems} onValueChange={v => setDraft({ ...draft, hasItems: v })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部</SelectItem>
-                <SelectItem value="yes">有明细</SelectItem>
-                <SelectItem value="no">无明细</SelectItem>
-              </SelectContent></Select></div>
-          <div><label className="text-xs text-muted-foreground">是否异常</label>
-            <Select value={draft.abnormal} onValueChange={v => setDraft({ ...draft, abnormal: v })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部</SelectItem>
-                <SelectItem value="yes">异常</SelectItem>
-                <SelectItem value="no">正常</SelectItem>
-              </SelectContent></Select></div>
-        </div>
-        <div className="flex flex-wrap gap-2 pt-1 items-center">
-          <Button size="sm" onClick={onSearch}><Search className="w-4 h-4 mr-1" />查询</Button>
-          <Button size="sm" variant="outline" onClick={onReset}>重置</Button>
-          <div className="h-5 w-px bg-border mx-1" />
-          <span className="text-xs text-muted-foreground">快捷范围：</span>
-          <Button size="sm" variant="outline" onClick={() => applyQuickRange("today")}>今天</Button>
-          <Button size="sm" variant="outline" onClick={() => applyQuickRange("7d")}>最近 7 天</Button>
-          <Button size="sm" variant="outline" onClick={() => applyQuickRange("30d")}>最近 30 天</Button>
-          <Button size="sm" variant="outline" onClick={() => applyQuickRange("month")}>本月</Button>
-          <Button size="sm" variant="outline" onClick={() => applyQuickRange("all")}>全部</Button>
-          <div className="flex-1" />
-          <Button size="sm" variant="outline" onClick={onExportByStyle}><Download className="w-4 h-4 mr-1" />按款式导出</Button>
-          <Button size="sm" variant="outline" onClick={onExportByOrder}><Download className="w-4 h-4 mr-1" />按出库单导出</Button>
-        </div>
-        <div className="text-xs text-muted-foreground border-t pt-2">
-          说明：数据来源于聚水潭 <span className="font-medium text-foreground">销售出库查询接口</span>，由后台自动同步任务定时拉取。时间筛选按业务出库时间 (io_date)。
-        </div>
-      </CardContent></Card>
+      <Card className="mb-3">
+        <CardContent className="p-4 space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground">开始发货日期</label>
+              <Input type="date" value={draft.startDate} onChange={(e) => setDraft({ ...draft, startDate: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">结束发货日期</label>
+              <Input type="date" value={draft.endDate} onChange={(e) => setDraft({ ...draft, endDate: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">店铺</label>
+              <Input value={draft.shop} onChange={(e) => setDraft({ ...draft, shop: e.target.value })} placeholder="店铺名称" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">仓库</label>
+              <Input value={draft.warehouse} onChange={(e) => setDraft({ ...draft, warehouse: e.target.value })} placeholder="仓库名称" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">快递公司</label>
+              <Input value={draft.logistics} onChange={(e) => setDraft({ ...draft, logistics: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">包裹号</label>
+              <Input value={draft.ioId} onChange={(e) => setDraft({ ...draft, ioId: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">订单号</label>
+              <Input value={draft.oId} onChange={(e) => setDraft({ ...draft, oId: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">快递单号</label>
+              <Input value={draft.trackingNumber} onChange={(e) => setDraft({ ...draft, trackingNumber: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">SKU / 款号</label>
+              <Input value={draft.sku} onChange={(e) => setDraft({ ...draft, sku: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">包裹状态</label>
+              <Select value={draft.status} onValueChange={(value) => setDraft({ ...draft, status: value })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部</SelectItem>
+                  <SelectItem value="Confirmed">已确认</SelectItem>
+                  <SelectItem value="Delete">已删除</SelectItem>
+                  <SelectItem value="Cancelled">已取消</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">是否有明细</label>
+              <Select value={draft.hasItems} onValueChange={(value) => setDraft({ ...draft, hasItems: value })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部</SelectItem>
+                  <SelectItem value="yes">有明细</SelectItem>
+                  <SelectItem value="no">无明细</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">是否异常</label>
+              <Select value={draft.abnormal} onValueChange={(value) => setDraft({ ...draft, abnormal: value })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部</SelectItem>
+                  <SelectItem value="yes">异常</SelectItem>
+                  <SelectItem value="no">正常</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1 items-center">
+            <Button size="sm" onClick={onSearch}><Search className="w-4 h-4 mr-1" />查询</Button>
+            <Button size="sm" variant="outline" onClick={onReset}>重置</Button>
+            <div className="h-5 w-px bg-border mx-1" />
+            <span className="text-xs text-muted-foreground">快捷范围：</span>
+            <Button size="sm" variant="outline" onClick={() => applyQuickRange("today")}>今天</Button>
+            <Button size="sm" variant="outline" onClick={() => applyQuickRange("7d")}>最近 7 天</Button>
+            <Button size="sm" variant="outline" onClick={() => applyQuickRange("month")}>本月</Button>
+            <Button size="sm" variant="outline" onClick={() => applyQuickRange("all")}>全部</Button>
+            <div className="flex-1" />
+            <Button size="sm" variant="outline" onClick={onExportByStyle}><Download className="w-4 h-4 mr-1" />按款式导出</Button>
+            <Button size="sm" variant="outline" onClick={onExportByPackage}><Download className="w-4 h-4 mr-1" />按包裹导出</Button>
+          </div>
+        </CardContent>
+      </Card>
 
-      {/* Tabs */}
-      <Tabs value={tab} onValueChange={(v) => { setTab(v as any); setPage(0); }}>
+      <Tabs value={tab} onValueChange={(value) => { setTab(value as "byPackage" | "byStyle"); setPage(0); }}>
         <TabsList>
-          <TabsTrigger value="byOrder">按出库单查看</TabsTrigger>
+          <TabsTrigger value="byPackage">按包裹查看</TabsTrigger>
           <TabsTrigger value="byStyle">按款式统计</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="byOrder">
-          <Card><CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <SortHead sortKey="io_id" currentKey={sortKey} dir={sortDir} onSort={onSort}>出库单号</SortHead>
-                  <SortHead sortKey="o_id" currentKey={sortKey} dir={sortDir} onSort={onSort}>订单号</SortHead>
-                  <SortHead sortKey="shop_name" currentKey={sortKey} dir={sortDir} onSort={onSort}>店铺</SortHead>
-                  <SortHead sortKey="warehouse" currentKey={sortKey} dir={sortDir} onSort={onSort}>仓库</SortHead>
-                  <SortHead sortKey="status" currentKey={sortKey} dir={sortDir} onSort={onSort}>出库状态</SortHead>
-                  <TableHead>快递公司</TableHead>
-                  <TableHead>快递单号</TableHead>
-                  <SortHead sortKey="item_qty" currentKey={sortKey} dir={sortDir} onSort={onSort} align="right">商品数量</SortHead>
-                  <SortHead sortKey="item_count" currentKey={sortKey} dir={sortDir} onSort={onSort} align="right">明细行数</SortHead>
-                  <SortHead sortKey="io_date" currentKey={sortKey} dir={sortDir} onSort={onSort}>出库时间</SortHead>
-                  <SortHead sortKey="consign_time" currentKey={sortKey} dir={sortDir} onSort={onSort}>发货时间</SortHead>
-                  <TableHead>异常</TableHead>
-                  <TableHead>操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {listQ.isLoading && <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">加载中...</TableCell></TableRow>}
-                {listQ.error && <TableRow><TableCell colSpan={13} className="text-center py-12 text-rose-600">读取失败：{(listQ.error as any).message}</TableCell></TableRow>}
-                {!listQ.isLoading && !listQ.error && (listQ.data?.rows.length ?? 0) === 0 && (
-                  <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
-                    暂无出库单。请扩大日期范围或检查「数据中心 / 聚水潭同步」中的销售出库同步任务。
-                  </TableCell></TableRow>
-                )}
-                {(listQ.data?.rows ?? []).map((r: any) => {
-                  const abnormal = r.item_count === 0;
-                  return (
-                    <TableRow key={r.id}>
-                      <TableCell className="font-mono text-xs">{r.io_id}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.o_id ?? "-"}</TableCell>
-                      <TableCell className="text-xs">{r.shop_name || "-"}</TableCell>
-                      <TableCell className="text-xs">{r.warehouse || "-"}</TableCell>
-                      <TableCell><Badge variant="outline">{zhStatus(r.status)}</Badge></TableCell>
-                      <TableCell className="text-xs">{r.logistics_company || "-"}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.l_id || "-"}</TableCell>
-                      <TableCell className="text-right">{fmtInt(r.item_qty)}</TableCell>
-                      <TableCell className="text-right">{fmtInt(r.item_count)}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.io_date, { withSeconds: false })}</TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(r.consign_time, { withSeconds: false })}</TableCell>
-                      <TableCell>
-                        {abnormal
-                          ? <Badge className="bg-rose-100 text-rose-700 text-[10px] px-1.5 py-0">无明细</Badge>
-                          : <span className="text-xs text-muted-foreground">—</span>}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
-                          <Button size="sm" variant="ghost" onClick={() => { setDetailId(r.id); setDetailRow(r); }}>详情</Button>
-                          <Button size="sm" variant="ghost" onClick={() => setRawOpen(r)}><FileJson className="w-3 h-3" /></Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-            {(listQ.data?.count ?? 0) > PAGE_SIZE && (
-              <div className="flex items-center justify-between p-3 border-t">
-                <div className="text-xs text-muted-foreground">共 {listQ.data?.count} 条 · 第 {page + 1} / {Math.ceil((listQ.data!.count) / PAGE_SIZE)} 页</div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage(p => p - 1)}>上一页</Button>
-                  <Button size="sm" variant="outline" disabled={(page + 1) * PAGE_SIZE >= (listQ.data?.count ?? 0)} onClick={() => setPage(p => p + 1)}>下一页</Button>
+        <TabsContent value="byPackage">
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <SortHead sortKey="package_unique_key" currentKey={sortKey} dir={sortDir} onSort={onSort}>包裹号</SortHead>
+                    <SortHead sortKey="o_id" currentKey={sortKey} dir={sortDir} onSort={onSort}>订单号</SortHead>
+                    <SortHead sortKey="shop_name" currentKey={sortKey} dir={sortDir} onSort={onSort}>店铺</SortHead>
+                    <SortHead sortKey="warehouse_name" currentKey={sortKey} dir={sortDir} onSort={onSort}>仓库</SortHead>
+                    <TableHead>快递公司</TableHead>
+                    <SortHead sortKey="tracking_number" currentKey={sortKey} dir={sortDir} onSort={onSort}>快递单号</SortHead>
+                    <TableHead className="text-right">重量</TableHead>
+                    <TableHead>发货方式</TableHead>
+                    <SortHead sortKey="item_qty" currentKey={sortKey} dir={sortDir} onSort={onSort} align="right">SKU 件数</SortHead>
+                    <SortHead sortKey="item_count" currentKey={sortKey} dir={sortDir} onSort={onSort} align="right">明细行数</SortHead>
+                    <SortHead sortKey="send_date" currentKey={sortKey} dir={sortDir} onSort={onSort}>发货日期</SortHead>
+                    <SortHead sortKey="status" currentKey={sortKey} dir={sortDir} onSort={onSort}>状态</SortHead>
+                    <TableHead>操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {listQ.isLoading && <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">加载中...</TableCell></TableRow>}
+                  {listQ.error && <TableRow><TableCell colSpan={13} className="text-center py-12 text-rose-600">读取失败：{(listQ.error as Error).message}</TableCell></TableRow>}
+                  {!listQ.isLoading && !listQ.error && (listQ.data?.rows.length ?? 0) === 0 && (
+                    <TableRow><TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
+                      暂无发货包裹数据。请先在 dev/staging 应用轻量表 migration，并运行最近 2 小时测试同步。
+                    </TableCell></TableRow>
+                  )}
+                  {(listQ.data?.rows ?? []).map((row) => {
+                    const abnormal = !row.item_count;
+                    return (
+                      <TableRow key={row.id}>
+                        <TableCell className="font-mono text-xs">{row.io_id}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.o_id ?? "-"}</TableCell>
+                        <TableCell className="text-xs">{row.shop_name || "-"}</TableCell>
+                        <TableCell className="text-xs">{row.warehouse_name || row.wh_id || "-"}</TableCell>
+                        <TableCell className="text-xs">{row.logistics_company || "-"}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.tracking_number || "-"}</TableCell>
+                        <TableCell className="text-right">{fmtWeight(row.weight)}</TableCell>
+                        <TableCell className="text-xs">{row.shipping_method || "-"}</TableCell>
+                        <TableCell className="text-right">{fmtInt(row.item_qty)}</TableCell>
+                        <TableCell className="text-right">{fmtInt(row.item_count)}</TableCell>
+                        <TableCell className="text-xs whitespace-nowrap">{formatDateTimeCN(row.send_date, { withSeconds: false })}</TableCell>
+                        <TableCell><Badge variant="outline">{zhStatus(row.status)}</Badge></TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button size="sm" variant="ghost" onClick={() => { setDetailId(row.id); setDetailRow(row); }}>详情</Button>
+                            {abnormal && <Badge className="bg-rose-100 text-rose-700 text-[10px] px-1.5 py-0">无明细</Badge>}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+              {(listQ.data?.count ?? 0) > PAGE_SIZE && (
+                <div className="flex items-center justify-between p-3 border-t">
+                  <div className="text-xs text-muted-foreground">共 {listQ.data?.count} 条 · 第 {page + 1} / {totalPages} 页</div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>上一页</Button>
+                    <Button size="sm" variant="outline" disabled={page + 1 >= totalPages} onClick={() => setPage((value) => value + 1)}>下一页</Button>
+                  </div>
                 </div>
-              </div>
-            )}
-          </CardContent></Card>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="byStyle">
@@ -497,102 +623,59 @@ export default function OutboundOrdersPage() {
         </TabsContent>
       </Tabs>
 
-      {/* 详情抽屉 */}
-      <Sheet open={!!detailId} onOpenChange={(o) => { if (!o) { setDetailId(null); setDetailRow(null); } }}>
+      <Sheet open={!!detailId} onOpenChange={(open) => { if (!open) { setDetailId(null); setDetailRow(null); } }}>
         <SheetContent side="right" className="w-full sm:max-w-3xl overflow-y-auto">
           <SheetHeader>
-            <SheetTitle>出库单详情 · {detailRow?.io_id}</SheetTitle>
-            <SheetDescription>聚水潭销售出库单基础信息与商品明细</SheetDescription>
+            <SheetTitle>发货包裹详情 · {detailRow?.io_id}</SheetTitle>
+            <SheetDescription>轻量包裹信息与 SKU 明细</SheetDescription>
           </SheetHeader>
           {detailRow && (
             <div className="space-y-5 mt-4">
               <section>
-                <h3 className="font-medium mb-2">A. 基础信息</h3>
+                <h3 className="font-medium mb-2">基础信息</h3>
                 <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div><span className="text-muted-foreground">出库单号：</span>{detailRow.io_id}</div>
+                  <div><span className="text-muted-foreground">包裹号：</span>{detailRow.io_id}</div>
                   <div><span className="text-muted-foreground">订单号：</span>{detailRow.o_id ?? "-"}</div>
                   <div><span className="text-muted-foreground">店铺：</span>{detailRow.shop_name || "-"}</div>
-                  <div><span className="text-muted-foreground">仓库：</span>{detailRow.warehouse || "-"}</div>
-                  <div><span className="text-muted-foreground">出库状态：</span>{zhStatus(detailRow.status)}</div>
+                  <div><span className="text-muted-foreground">仓库：</span>{detailRow.warehouse_name || detailRow.wh_id || "-"}</div>
+                  <div><span className="text-muted-foreground">状态：</span>{zhStatus(detailRow.status)}</div>
                   <div><span className="text-muted-foreground">快递公司：</span>{detailRow.logistics_company || "-"}</div>
-                  <div><span className="text-muted-foreground">快递单号：</span>{detailRow.l_id || "-"}</div>
-                  <div><span className="text-muted-foreground">商品总数：</span>{fmtInt(detailRow.item_qty)}</div>
-                  <div><span className="text-muted-foreground">出库时间：</span>{formatDateTimeCN(detailRow.io_date)}</div>
-                  <div><span className="text-muted-foreground">发货时间：</span>{formatDateTimeCN(detailRow.consign_time)}</div>
+                  <div><span className="text-muted-foreground">快递单号：</span>{detailRow.tracking_number || "-"}</div>
+                  <div><span className="text-muted-foreground">重量：</span>{fmtWeight(detailRow.weight)}</div>
+                  <div><span className="text-muted-foreground">发货方式：</span>{detailRow.shipping_method || "-"}</div>
+                  <div><span className="text-muted-foreground">发货日期：</span>{formatDateTimeCN(detailRow.send_date)}</div>
                   <div><span className="text-muted-foreground">JST 修改时间：</span>{formatDateTimeCN(detailRow.modified_at_jst)}</div>
                   <div><span className="text-muted-foreground">同步时间：</span>{formatDateTimeCN(detailRow.synced_at)}</div>
                 </div>
               </section>
 
               <section>
-                <h3 className="font-medium mb-2">B. 商品明细</h3>
+                <h3 className="font-medium mb-2">SKU 明细</h3>
                 <Table>
-                  <TableHeader><TableRow>
-                    <TableHead>SKU</TableHead>
-                    <TableHead>款号</TableHead>
-                    <TableHead>商品名称</TableHead>
-                    <TableHead>颜色</TableHead>
-                    <TableHead>尺码</TableHead>
-                    <TableHead className="text-right">数量</TableHead>
-                  </TableRow></TableHeader>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>SKU</TableHead>
+                      <TableHead>款号</TableHead>
+                      <TableHead>商品名称</TableHead>
+                      <TableHead className="text-right">数量</TableHead>
+                    </TableRow>
+                  </TableHeader>
                   <TableBody>
-                    {itemsQ.isLoading && <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-6">加载中...</TableCell></TableRow>}
+                    {itemsQ.isLoading && <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-6">加载中...</TableCell></TableRow>}
                     {!itemsQ.isLoading && (itemsQ.data ?? []).length === 0 && (
-                      <TableRow><TableCell colSpan={6} className="text-center text-rose-600 py-6">该出库单暂无明细 — 可能聚水潭未返回 items 或写入失败</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={4} className="text-center text-rose-600 py-6">该包裹暂无 SKU 明细</TableCell></TableRow>
                     )}
-                    {(itemsQ.data ?? []).map((it: any) => (
-                      <TableRow key={it.id}>
-                        <TableCell className="font-mono text-xs">{it.sku_id || "-"}</TableCell>
-                        <TableCell className="font-mono text-xs">{it.i_id || "-"}</TableCell>
-                        <TableCell className="text-xs">{it.name || "-"}</TableCell>
-                        <TableCell className="text-xs">{it.color || "-"}</TableCell>
-                        <TableCell className="text-xs">{it.size || "-"}</TableCell>
-                        <TableCell className="text-right">{fmtInt(it.qty)}</TableCell>
+                    {(itemsQ.data ?? []).map((item) => (
+                      <TableRow key={item.id}>
+                        <TableCell className="font-mono text-xs">{item.sku_code || item.sku_id || "-"}</TableCell>
+                        <TableCell className="font-mono text-xs">{item.style_no || "-"}</TableCell>
+                        <TableCell className="text-xs">{item.product_name || "-"}</TableCell>
+                        <TableCell className="text-right">{fmtInt(item.qty)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
               </section>
-
-              <section>
-                <h3 className="font-medium mb-2">C. 历史调试数据（raw JSON）</h3>
-                {detailRow.raw_data ? (
-                  <details>
-                    <summary className="text-xs text-muted-foreground cursor-pointer select-none mb-2">
-                      展开历史 raw JSON（默认收起，仅供排查）
-                    </summary>
-                    <pre className="bg-muted p-3 rounded text-[11px] overflow-auto max-h-80">{JSON.stringify(detailRow.raw_data, null, 2)}</pre>
-                  </details>
-                ) : (
-                  <div className="text-xs text-muted-foreground rounded border border-dashed p-3">
-                    新同步默认不保存完整 raw JSON，以避免数据库被海量订单和商品数据撑爆。完整出库明细请以聚水潭为准。
-                  </div>
-                )}
-              </section>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
-
-      {/* 历史调试数据（raw JSON） */}
-      <Sheet open={!!rawOpen} onOpenChange={(o) => !o && setRawOpen(null)}>
-        <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>历史调试数据（raw JSON）</SheetTitle>
-            <SheetDescription className="font-mono text-xs">{rawOpen?.io_id}</SheetDescription>
-          </SheetHeader>
-          {rawOpen?.raw_data ? (
-            <details className="mt-4">
-              <summary className="text-xs text-muted-foreground cursor-pointer select-none mb-2">
-                展开历史 raw JSON（默认收起，仅供排查）
-              </summary>
-              <pre className="bg-muted p-3 rounded text-[11px] overflow-auto">
-                {JSON.stringify(rawOpen.raw_data, null, 2)}
-              </pre>
-            </details>
-          ) : (
-            <div className="mt-4 text-xs text-muted-foreground rounded border border-dashed p-3">
-              新同步默认不保存完整 raw JSON，以避免数据库被海量订单和商品数据撑爆。完整出库明细请以聚水潭为准。
             </div>
           )}
         </SheetContent>

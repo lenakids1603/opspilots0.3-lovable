@@ -1011,18 +1011,22 @@ export default function JstDataIntegrationPage() {
 
             <TabsContent value="outbound" className="m-0 p-5 space-y-3">
               <div className="rounded-md border border-sky-300 bg-sky-50/60 px-4 py-2.5 text-xs text-sky-800">
-                聚水潭销售出库同步（只读 · 断点续跑）：调用 <code>/open/orders/out/simple/query</code>，按修改时间窗口分页拉取，自动 upsert <code>jst_outbound_orders</code> + 明细表。出库单列表请前往【仓库系统 / 出库信息】查看。
+                聚水潭出库轻量同步（只读 · 断点续跑）：调用 <code>/open/orders/out/simple/query</code>，按修改时间窗口分页拉取，只写入 <code>warehouse_shipping_packages</code> + 包裹 SKU 明细。出库 API 仅用于仓库实际发货包裹统计。
               </div>
               <InboundSyncJobPanel
                 cancelAllVersion={cancelAllVersion}
-                title="销售出库同步任务（断点续跑）"
+                title="出库包裹轻量同步任务（断点续跑）"
                 syncType="outbound_orders"
                 functionName="jst-sync-outbound-orders"
                 startAction="start_outbound_job"
                 tickAction="tick_outbound_job"
                 cancelAction="cancel_outbound_job"
-                unitLabel="出库单"
-                toastTitle="已创建销售出库同步任务"
+                unitLabel="包裹"
+                toastTitle="已创建出库包裹轻量同步任务"
+                presets={[
+                  { label: "最近 2 小时测试同步", hours: 2, requested_range: "2h_test" },
+                  { label: "最近 1 天同步", days: 1, requested_range: "1d" },
+                ]}
               />
             </TabsContent>
             <TabsContent value="aftersales" className="m-0 p-5 space-y-3">

@@ -14,7 +14,7 @@ const SYNC_TYPE = "outbound_orders";
 const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   success: { label: "正常", cls: "bg-emerald-100 text-emerald-700" },
   partial_failed: { label: "部分失败", cls: "bg-amber-100 text-amber-700" },
-  partial: { label: "部分失败", cls: "bg-amber-100 text-amber-700" },
+  partial: { label: "部分完成", cls: "bg-amber-100 text-amber-700" },
   timeout_partial: { label: "超时未完成", cls: "bg-amber-100 text-amber-700" },
   running: { label: "同步中", cls: "bg-blue-100 text-blue-700" },
   failed: { label: "异常", cls: "bg-rose-100 text-rose-700" },
@@ -22,7 +22,7 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
 };
 
 const fmt = (iso?: string | null) =>
-  iso ? new Date(iso).toLocaleString("zh-CN", { hour12: false }) : "—";
+  iso ? new Date(iso).toLocaleString("zh-CN", { hour12: false }) : "-";
 
 export function OutboundSyncCompactCard() {
   const qc = useQueryClient();
@@ -30,10 +30,10 @@ export function OutboundSyncCompactCard() {
   const [customEnd, setCustomEnd] = useState("");
 
   const countQ = useQuery({
-    queryKey: ["outbound_count_compact"],
+    queryKey: ["warehouse_shipping_package_count_compact"],
     queryFn: async () => {
       const { count, error } = await supabase
-        .from("jst_outbound_orders")
+        .from("warehouse_shipping_packages")
         .select("id", { count: "exact", head: true });
       if (error) throw error;
       return count ?? 0;
@@ -58,22 +58,22 @@ export function OutboundSyncCompactCard() {
   });
 
   const syncMut = useMutation({
-    mutationFn: async (payload: { hours?: number; days?: number; start_time?: string; end_time?: string }) => {
+    mutationFn: async (payload: { hours?: number; days?: number; start_time?: string; end_time?: string; requested_range?: string }) => {
       const { data, error } = await supabase.functions.invoke(FUNCTION_NAME, {
-        body: { ...payload, manual: true },
+        body: { action: "start_outbound_job", ...payload },
       });
       if (error) throw new Error(error.message);
       if (data?.ok === false) throw new Error(data?.error ?? "同步失败");
       return data;
     },
     onSuccess: () => {
-      toast({ title: "已启动出库单同步", description: "后台运行中，进度会在卡片刷新" });
-      qc.invalidateQueries({ queryKey: ["outbound_count_compact"] });
+      toast({ title: "已创建出库轻量同步任务", description: "后台按小窗口运行，进度会在卡片刷新" });
+      qc.invalidateQueries({ queryKey: ["warehouse_shipping_package_count_compact"] });
       qc.invalidateQueries({ queryKey: ["outbound_last_log_compact"] });
       qc.invalidateQueries({ queryKey: ["jst_sync_logs", "purchase"] });
     },
-    onError: (e: any) => {
-      toast({ title: "出库单同步失败", description: e.message, variant: "destructive" });
+    onError: (error: unknown) => {
+      toast({ title: "出库轻量同步失败", description: (error as Error).message, variant: "destructive" });
     },
   });
 
@@ -84,24 +84,24 @@ export function OutboundSyncCompactCard() {
   return (
     <div className="p-5 space-y-4">
       <div className="rounded-md border border-sky-300 bg-sky-50/60 px-4 py-2.5 text-xs text-sky-800">
-        聚水潭出库同步：只读拉取 <code>/open/orders/out/simple/query</code>，写入 <code>jst_outbound_orders</code> + 明细表。出库单列表请前往【仓库系统 / 出库信息】查看。
+        聚水潭出库 API 仅用于仓库实际发货包裹统计；新同步写入 <code>warehouse_shipping_packages</code> 和明细表，不再写旧重型出库表。
       </div>
       <Card>
         <CardContent className="p-4 space-y-3">
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4 text-muted-foreground" />
-            <div className="font-medium text-sm">销售出库单</div>
+            <div className="font-medium text-sm">出库轻量同步</div>
             <Badge variant="secondary" className={meta.cls}>{meta.label}</Badge>
             <div className="flex-1" />
             <span className="text-xs text-muted-foreground">
-              已同步 <span className="font-semibold tabular-nums text-foreground">{(countQ.data ?? 0).toLocaleString("zh-CN")}</span> 条
+              已同步 <span className="font-semibold tabular-nums text-foreground">{(countQ.data ?? 0).toLocaleString("zh-CN")}</span> 个包裹
             </span>
           </div>
 
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <div>最近同步：<span className="text-foreground">{fmt(log?.ended_at ?? log?.started_at)}</span></div>
             <div>本次结果：<span className="text-foreground">
-              {log ? `${log.fetched_orders_count ?? 0} 单 / ${log.fetched_items_count ?? 0} 明细` : "—"}
+              {log ? `${log.fetched_orders_count ?? 0} 包裹 / ${log.fetched_items_count ?? 0} 明细` : "-"}
             </span></div>
           </div>
 
@@ -116,16 +116,12 @@ export function OutboundSyncCompactCard() {
 
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="secondary" disabled={syncMut.isPending}
-              onClick={() => syncMut.mutate({ hours: 1 })}>
+              onClick={() => syncMut.mutate({ hours: 2, requested_range: "2h_test" })}>
               <RefreshCw className={`w-3.5 h-3.5 mr-1 ${syncMut.isPending ? "animate-spin" : ""}`} />
-              同步最近 1 小时
+              最近 2 小时测试同步
             </Button>
             <Button size="sm" disabled={syncMut.isPending}
-              onClick={() => syncMut.mutate({ days: 1 })}>同步最近 1 天</Button>
-            <Button size="sm" variant="outline" disabled={syncMut.isPending}
-              onClick={() => syncMut.mutate({ days: 7 })}>同步最近 7 天</Button>
-            <Button size="sm" variant="outline" disabled={syncMut.isPending}
-              onClick={() => syncMut.mutate({ days: 30 })}>同步最近 30 天</Button>
+              onClick={() => syncMut.mutate({ days: 1, requested_range: "1d" })}>最近 1 天同步</Button>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border">
@@ -139,6 +135,7 @@ export function OutboundSyncCompactCard() {
               onClick={() => syncMut.mutate({
                 start_time: new Date(customStart).toISOString(),
                 end_time: new Date(customEnd).toISOString(),
+                requested_range: "custom",
               })}>同步该范围</Button>
           </div>
         </CardContent>

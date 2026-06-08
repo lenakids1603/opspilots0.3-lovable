@@ -1,21 +1,42 @@
-// Edge Function: 聚水潭销售出库单同步（最小请求参数 + 自动 fallback + 详细日志）
+// Edge Function: JST outbound lightweight sync.
 // API: /open/orders/out/simple/query
-// 写入 jst_outbound_orders + jst_outbound_order_items
+// Purpose: warehouse shipping package statistics only.
+// Writes warehouse_shipping_packages + warehouse_shipping_package_items.
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import {
-  admin, callOpenweb, fmtBJ, parseJstBeijingDateTime, computeHasNext, pickList, pickItemsArray,
-  resolveCaller, resolveWindow, sleep, RATE_DELAY_MS, MAX_PAGE_NO,
+  admin,
+  callOpenweb,
+  computeHasNext,
+  fmtBJ,
+  MAX_PAGE_NO,
+  parseJstBeijingDateTime,
+  pickItemsArray,
+  pickList,
+  RATE_DELAY_MS,
+  resolveCaller,
+  resolveWindow,
+  sleep,
 } from "../_shared/jst-client.ts";
 import { handleJobActions, PageResult, ProcessPageArgs } from "../_shared/jst-sync-job.ts";
-import { loadSkippedShops, shopIdOf, shouldSkipShop, formatSkipNote } from "../_shared/shop-filter.ts";
+import { formatSkipNote, loadSkippedShops, shopIdOf, shouldSkipShop } from "../_shared/shop-filter.ts";
 
 const SYNC_TYPE = "outbound_orders";
 const METHOD_PATH = "orders/out/simple/query";
 const PAGE_SIZE = 50;
+type JstRecord = Record<string, unknown>;
+type JstError = Error & {
+  code?: unknown;
+  apiMsg?: unknown;
+  requestBody?: Record<string, unknown>;
+  apiPath?: string;
+  responseCode?: unknown;
+  responseMsg?: unknown;
+  durationMs?: number;
+};
 
-// 参数形态：
-//  - "with_status": 最小参数 + status=Confirmed
-//  - "minimal":     仅最小参数（modified_begin/end + page_index/size 字符串）
+// The field probe showed the API rejects the full InoutFlds/InoutItemFlds
+// candidate set with code=130, so production sync keeps the minimal request and
+// stores only the lightweight fields we actually need.
 type ParamMode = "with_status" | "minimal";
 
 function buildReqBody(mode: ParamMode, pageIndex: number, pageSize: number, from: Date, to: Date) {
@@ -30,88 +51,139 @@ function buildReqBody(mode: ParamMode, pageIndex: number, pageSize: number, from
   return body;
 }
 
-function splitProps(v: string | null): { color: string | null; size: string | null } {
-  if (!v) return { color: null, size: null };
-  const parts = String(v).split(/[,;|，；]/).map((s) => s.trim()).filter(Boolean);
-  return { color: parts[0] ?? null, size: parts[1] ?? null };
-}
-
-async function upsertOutboundOrder(r: any): Promise<{ orderId: string; itemsUpserted: number }> {
-  const ioId = String(r.io_id ?? r.ioId ?? "");
-  if (!ioId) throw new Error("missing io_id");
-  const itemList = pickItemsArray(r);
-  const aggQty = itemList.reduce((s, it) => s + Number(it.qty ?? it.sale_qty ?? it.total_qty ?? 0), 0);
-  const row = {
-    io_id: ioId,
-    o_id: r.o_id ?? null,
-    so_id: r.so_id ?? null,
-    shop_id: r.shop_id != null ? String(r.shop_id) : null,
-    shop_name: r.shop_name ?? null,
-    warehouse: r.warehouse ?? null,
-    wms_co_id: r.wms_co_id != null ? String(r.wms_co_id) : null,
-    status: r.status ?? null,
-    logistics_company: r.logistics_company ?? null,
-    l_id: r.l_id ?? null,
-    lc_id: r.lc_id != null ? String(r.lc_id) : null,
-    io_date: parseJstBeijingDateTime(r.io_date),
-    consign_time: parseJstBeijingDateTime(r.consign_time ?? r.consigntime),
-    modified_at_jst: parseJstBeijingDateTime(r.modified),
-    qty: aggQty > 0 ? aggQty : Number(r.qty ?? 0),
-    synced_at: new Date().toISOString(),
-  };
-  const { data: up, error } = await admin
-    .from("jst_outbound_orders").upsert(row, { onConflict: "io_id" }).select("id").single();
-  if (error) throw error;
-  let itemsUpserted = 0;
-  for (const it of itemList) {
-    const skuId = it.sku_id != null ? String(it.sku_id) : it.shop_sku_id != null ? String(it.shop_sku_id) : null;
-    const oiId = it.oi_id != null ? String(it.oi_id) : null;
-    const ioiId = it.ioi_id != null ? String(it.ioi_id) : null;
-    const props = splitProps(it.properties_value ?? null);
-    const itemUniqueKey = `${ioId}|${ioiId ?? ""}|${skuId ?? ""}|${oiId ?? ""}`;
-    const itemRow = {
-      outbound_order_id: up.id, io_id: ioId, oi_id: oiId, ioi_id: ioiId, sku_id: skuId,
-      i_id: it.i_id != null ? String(it.i_id) : it.item_id != null ? String(it.item_id) : null,
-      name: it.name ?? it.sku_name ?? null,
-      properties_value: it.properties_value ?? null,
-      color: props.color, size: props.size,
-      qty: Number(it.qty ?? it.sale_qty ?? it.total_qty ?? 0),
-      amount: Number(it.amount ?? it.sale_amount ?? 0),
-      pic: it.pic ?? null, item_unique_key: itemUniqueKey,
-      synced_at: new Date().toISOString(),
-    };
-    const { error: itErr } = await admin
-      .from("jst_outbound_order_items").upsert(itemRow, { onConflict: "item_unique_key" });
-    if (itErr) throw itErr;
-    itemsUpserted++;
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    if (value == null) continue;
+    const text = String(value).trim();
+    if (text) return text;
   }
-  return { orderId: up.id as string, itemsUpserted };
+  return null;
 }
 
-// 调用一次接口，遇到 code=130 时自动尝试移除 status 再试一次。
-// 返回结果同时携带最终采用的 mode，方便上层持久化。
+function numberOrNull(value: unknown) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function styleFallback(styleNo: unknown, sku: unknown, name: unknown) {
+  const direct = firstText(styleNo);
+  if (direct) return direct;
+  const skuText = firstText(sku);
+  if (skuText) {
+    const matched = skuText.match(/^\d{6,12}/);
+    if (matched) return matched[0];
+    const segment = skuText.split(/[-_/\s]/)[0];
+    if (segment) return segment;
+  }
+  return firstText(name);
+}
+
+function resolveShippingDate(row: JstRecord) {
+  // Business shipping date priority: send_date -> consign_time -> io_date.
+  return parseJstBeijingDateTime(row.send_date ?? row.consign_time ?? row.consigntime ?? row.io_date);
+}
+
+function buildItemUniqueKey(ioId: string, item: JstRecord, index: number) {
+  const ioiId = firstText(item.ioi_id, item.ioiId);
+  if (ioiId) return `${ioId}|${ioiId}`;
+
+  const oiId = firstText(item.oi_id, item.oiId);
+  const skuId = firstText(item.sku_id, item.shop_sku_id, item.sku_code);
+  if (oiId && skuId) return `${ioId}|${oiId}|${skuId}`;
+
+  return `${ioId}|${skuId ?? "item"}|${index}`;
+}
+
+async function upsertShippingPackage(rowFromJst: JstRecord): Promise<{ packageId: string; itemsUpserted: number }> {
+  const ioId = firstText(rowFromJst.io_id, rowFromJst.ioId);
+  if (!ioId) throw new Error("missing io_id");
+
+  const itemList = pickItemsArray(rowFromJst) as JstRecord[];
+  const packageUniqueKey = ioId;
+  const syncedAt = new Date().toISOString();
+  const packageRow = {
+    package_unique_key: packageUniqueKey,
+    io_id: ioId,
+    so_id: firstText(rowFromJst.so_id, rowFromJst.soId),
+    o_id: firstText(rowFromJst.o_id, rowFromJst.oId),
+    shop_id: firstText(rowFromJst.shop_id, rowFromJst.shopId),
+    shop_name: firstText(rowFromJst.shop_name, rowFromJst.shopName),
+    wh_id: firstText(rowFromJst.wh_id, rowFromJst.whId, rowFromJst.wms_co_id, rowFromJst.wmsCoId),
+    warehouse_name: firstText(rowFromJst.warehouse_name, rowFromJst.warehouseName, rowFromJst.warehouse),
+    send_date: resolveShippingDate(rowFromJst),
+    logistics_company: firstText(rowFromJst.logistics_company, rowFromJst.logisticsCompany),
+    tracking_number: firstText(
+      rowFromJst.tracking_number,
+      rowFromJst.waybill_no,
+      rowFromJst.express_no,
+      rowFromJst.l_id,
+      rowFromJst.lId,
+    ),
+    weight: numberOrNull(rowFromJst.weight ?? rowFromJst.f_weight),
+    shipping_method: firstText(rowFromJst.shipping_method, rowFromJst.delivery_type),
+    status: firstText(rowFromJst.status),
+    modified_at_jst: parseJstBeijingDateTime(rowFromJst.modified),
+    synced_at: syncedAt,
+  };
+
+  const { data: pkg, error } = await admin
+    .from("warehouse_shipping_packages")
+    .upsert(packageRow, { onConflict: "package_unique_key" })
+    .select("id")
+    .single();
+  if (error) throw error;
+
+  const itemRows = itemList.map((item, index) => {
+    const skuId = firstText(item.sku_id, item.shop_sku_id, item.sku_code);
+    const productName = firstText(item.product_name, item.name, item.sku_name);
+    return {
+      item_unique_key: buildItemUniqueKey(ioId, item, index),
+      package_id: pkg.id,
+      package_unique_key: packageUniqueKey,
+      io_id: ioId,
+      so_id: packageRow.so_id,
+      o_id: packageRow.o_id,
+      sku_id: skuId,
+      sku_code: firstText(item.sku_code, skuId),
+      style_no: styleFallback(item.style_no ?? item.i_id ?? item.item_id, skuId, productName),
+      product_name: productName,
+      qty: Number(item.qty ?? item.sale_qty ?? item.total_qty ?? 0),
+      synced_at: syncedAt,
+    };
+  });
+
+  if (!itemRows.length) return { packageId: pkg.id as string, itemsUpserted: 0 };
+
+  const { error: itemError } = await admin
+    .from("warehouse_shipping_package_items")
+    .upsert(itemRows, { onConflict: "item_unique_key" });
+  if (itemError) throw itemError;
+
+  return { packageId: pkg.id as string, itemsUpserted: itemRows.length };
+}
+
 async function callOutbound(initialMode: ParamMode, pageIndex: number, pageSize: number, from: Date, to: Date) {
-  const order: ParamMode[] = initialMode === "minimal" ? ["minimal"] : ["with_status", "minimal"];
-  let lastErr: any = null;
-  for (const mode of order) {
+  const modes: ParamMode[] = initialMode === "minimal" ? ["minimal"] : ["with_status", "minimal"];
+  let lastErr: JstError | null = null;
+  for (const mode of modes) {
     const reqBody = buildReqBody(mode, pageIndex, pageSize, from, to);
-    const t0 = Date.now();
+    const started = Date.now();
     try {
       const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
-      return { data, mode, reqBody, durationMs: Date.now() - t0, responseCode: "0", responseMsg: "success" };
-    } catch (e: any) {
-      lastErr = e;
-      // 仅当确认是参数错误且当前是 with_status 时，才尝试 fallback 去掉 status
-      const code = String(e?.code ?? "");
-      const isParamErr = code === "130" || /参数无法转换|参数错误/.test(String(e?.apiMsg ?? e?.message ?? ""));
-      if (!(isParamErr && mode === "with_status")) {
-        // 附带请求上下文给上层写日志（包括 transient 超时）
-        e.requestBody = reqBody;
-        e.apiPath = METHOD_PATH;
-        e.responseCode = e.responseCode ?? (code || null);
-        e.responseMsg = e.responseMsg ?? (e?.apiMsg ?? null);
-        e.durationMs = e.durationMs ?? (Date.now() - t0);
-        throw e;
+      return { data, mode, reqBody, durationMs: Date.now() - started };
+    } catch (error) {
+      const err = error as JstError;
+      lastErr = err;
+      const code = String(err?.code ?? "");
+      const isParamError = code === "130" || /参数无法转换|参数错误/.test(String(err?.apiMsg ?? err?.message ?? ""));
+      if (!(isParamError && mode === "with_status")) {
+        err.requestBody = reqBody;
+        err.apiPath = METHOD_PATH;
+        err.responseCode = err.responseCode ?? (code || null);
+        err.responseMsg = err.responseMsg ?? (err?.apiMsg ?? null);
+        err.durationMs = err.durationMs ?? (Date.now() - started);
+        throw err;
       }
     }
   }
@@ -125,46 +197,68 @@ async function callOutbound(initialMode: ParamMode, pageIndex: number, pageSize:
 async function processOutboundPage(args: ProcessPageArgs): Promise<PageResult> {
   const { job, windowFrom, windowTo, pageIndex, pageSize } = args;
   await sleep(RATE_DELAY_MS);
-  if (pageIndex > MAX_PAGE_NO) throw new Error(`分页超过上限 ${MAX_PAGE_NO}`);
+  if (pageIndex > MAX_PAGE_NO) throw new Error(`page index exceeded ${MAX_PAGE_NO}`);
+
   const meta = (job?.metadata ?? {}) as Record<string, unknown>;
   const initialMode: ParamMode = meta.param_mode === "minimal" ? "minimal" : "with_status";
-
   const { data, mode, reqBody, durationMs } = await callOutbound(initialMode, pageIndex, pageSize, windowFrom, windowTo);
 
-  // 持久化采用的 mode（仅在变化时写）
   if (mode !== initialMode) {
     try {
       await admin.from("jst_sync_jobs").update({
         metadata: { ...meta, param_mode: mode, param_mode_locked_at: new Date().toISOString() },
       }).eq("id", job.id);
-    } catch (_e) { /* ignore */ }
+    } catch (_error) {
+      // Best-effort metadata only.
+    }
   }
 
   const list = pickList(data);
   const hasNext = computeHasNext(data, list.length, Number(reqBody.page_size), pageIndex);
-  let mainUpserted = 0, itemUpserted = 0, failed = 0;
-  let skippedDisabled = 0, skippedSyncOff = 0;
   const skippedShopIds = new Set<string>();
-  const sk = await loadSkippedShops();
+  const skippedShops = await loadSkippedShops();
+  let mainUpserted = 0;
+  let itemUpserted = 0;
+  let failed = 0;
+  let skippedDisabled = 0;
+  let skippedSyncOff = 0;
   let lastErr = "";
-  for (const r of list) {
-    const sid = shopIdOf(r);
-    const skip = shouldSkipShop(sid, sk);
-    if (skip === "disabled") { skippedDisabled++; skippedShopIds.add(sid); continue; }
-    if (skip === "sync_off") { skippedSyncOff++; skippedShopIds.add(sid); continue; }
+
+  for (const row of list) {
+    const shopId = shopIdOf(row);
+    const skip = shouldSkipShop(shopId, skippedShops);
+    if (skip === "disabled") {
+      skippedDisabled++;
+      skippedShopIds.add(shopId);
+      continue;
+    }
+    if (skip === "sync_off") {
+      skippedSyncOff++;
+      skippedShopIds.add(shopId);
+      continue;
+    }
+
     try {
-      const res = await upsertOutboundOrder(r);
-      mainUpserted++; itemUpserted += res.itemsUpserted;
-    } catch (we) {
-      failed++; lastErr = String((we as Error).message ?? we);
+      const result = await upsertShippingPackage(row);
+      mainUpserted++;
+      itemUpserted += result.itemsUpserted;
+    } catch (error) {
+      failed++;
+      lastErr = String((error as Error).message ?? error);
     }
   }
+
   const skipNote = formatSkipNote(skippedDisabled, skippedSyncOff, skippedShopIds.size);
   return {
-    apiCount: list.length, mainUpserted, itemUpserted, failed, hasNext,
+    apiCount: list.length,
+    mainUpserted,
+    itemUpserted,
+    failed,
+    hasNext,
     errorDetail: (lastErr || skipNote) ? `${lastErr}${skipNote}` : undefined,
-    requestBody: { ...reqBody, _param_mode: mode },
-    responseCode: "0", responseMsg: "success",
+    requestBody: { ...reqBody, _param_mode: mode, _target_tables: ["warehouse_shipping_packages", "warehouse_shipping_package_items"] },
+    responseCode: "0",
+    responseMsg: "success",
     durationMs,
   };
 }
@@ -174,26 +268,31 @@ Deno.serve(async (req) => {
   try {
     const caller = await resolveCaller(req);
     const cronSecret = req.headers.get("x-cron-secret") ?? "";
-    const okCron = !!Deno.env.get("JST_SYNC_CRON_SECRET") && cronSecret === Deno.env.get("JST_SYNC_CRON_SECRET");
     const internalTick = req.headers.get("x-internal-tick") ?? "";
+    const okCron = !!Deno.env.get("JST_SYNC_CRON_SECRET") && cronSecret === Deno.env.get("JST_SYNC_CRON_SECRET");
     const okInternal = !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") && internalTick === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!okCron && !okInternal && !caller.isAdmin) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
     const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
     const action: string = body.action ?? "";
-
     const jobResp = await handleJobActions({
-      action, body, syncType: SYNC_TYPE, callerUid: caller.uid,
+      action,
+      body,
+      syncType: SYNC_TYPE,
+      callerUid: caller.uid,
       processPage: processOutboundPage,
       startActionName: "start_outbound_job",
       tickActionName: "tick_outbound_job",
       cancelActionName: "cancel_outbound_job",
       functionName: "jst-sync-outbound-orders",
-      // 1 小时窗口，2 页/35s，每页 50；深分页(>10 页) 自动主动拆分
       config: {
+        // A 1-day request is split into 1-hour windows to protect the Edge
+        // Function runtime and JST API. The UI exposes 2h test and 1d sync only.
         pageSize: PAGE_SIZE,
         maxWindowDays: 1 / 24,
         maxPagesPerRun: 2,
@@ -204,20 +303,27 @@ Deno.serve(async (req) => {
     });
     if (jobResp) {
       const text = await jobResp.text();
-      return new Response(text, { status: jobResp.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(text, {
+        status: jobResp.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     return new Response(JSON.stringify({
-      ok: false, error: "请使用 start_outbound_job / tick_outbound_job / cancel_outbound_job",
+      ok: false,
+      error: "Please use start_outbound_job / tick_outbound_job / cancel_outbound_job",
     }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-  } catch (err: any) {
+  } catch (error) {
+    const err = error as JstError;
     return new Response(JSON.stringify({
-      ok: false, error: (err as Error).message,
+      ok: false,
+      error: err.message,
       response_code: err?.responseCode ?? err?.code ?? null,
       response_msg: err?.responseMsg ?? err?.apiMsg ?? null,
       request_body: err?.requestBody ?? null,
     }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
