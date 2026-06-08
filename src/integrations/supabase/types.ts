@@ -1129,7 +1129,6 @@ export type Database = {
         Row: {
           buyer_message: string | null
           created_at: string
-          order_created_at: string | null
           created_time: string | null
           f_weight: number
           free_amount: number
@@ -1147,6 +1146,7 @@ export type Database = {
           logistics_company: string | null
           merge_so_id: string | null
           modified_time: string | null
+          order_created_at: string | null
           order_type: string | null
           paid_amount: number
           pay_amount: number
@@ -1170,7 +1170,6 @@ export type Database = {
         Insert: {
           buyer_message?: string | null
           created_at?: string
-          order_created_at?: string | null
           created_time?: string | null
           f_weight?: number
           free_amount?: number
@@ -1188,6 +1187,7 @@ export type Database = {
           logistics_company?: string | null
           merge_so_id?: string | null
           modified_time?: string | null
+          order_created_at?: string | null
           order_type?: string | null
           paid_amount?: number
           pay_amount?: number
@@ -1211,7 +1211,6 @@ export type Database = {
         Update: {
           buyer_message?: string | null
           created_at?: string
-          order_created_at?: string | null
           created_time?: string | null
           f_weight?: number
           free_amount?: number
@@ -1229,6 +1228,7 @@ export type Database = {
           logistics_company?: string | null
           merge_so_id?: string | null
           modified_time?: string | null
+          order_created_at?: string | null
           order_type?: string | null
           paid_amount?: number
           pay_amount?: number
@@ -2757,8 +2757,8 @@ export type Database = {
           item_count: number
           jst_modified: string | null
           o_id: string
-          order_status: string | null
           order_created_at: string | null
+          order_status: string | null
           pay_amount: number
           pay_time: string | null
           platform: string | null
@@ -2776,8 +2776,8 @@ export type Database = {
           item_count?: number
           jst_modified?: string | null
           o_id: string
-          order_status?: string | null
           order_created_at?: string | null
+          order_status?: string | null
           pay_amount?: number
           pay_time?: string | null
           platform?: string | null
@@ -2795,8 +2795,8 @@ export type Database = {
           item_count?: number
           jst_modified?: string | null
           o_id?: string
-          order_status?: string | null
           order_created_at?: string | null
+          order_status?: string | null
           pay_amount?: number
           pay_time?: string | null
           platform?: string | null
@@ -3396,7 +3396,6 @@ export type Database = {
         Row: {
           color: string | null
           created_at: string
-          order_created_at: string | null
           created_time: string | null
           estimated_cost_amount: number
           estimated_cost_price: number | null
@@ -3411,6 +3410,7 @@ export type Database = {
           last_jst_modified: string | null
           modified_time: string | null
           o_id: string
+          order_created_at: string | null
           order_status: string | null
           paid_amount: number
           pay_amount: number
@@ -3437,7 +3437,6 @@ export type Database = {
         Insert: {
           color?: string | null
           created_at?: string
-          order_created_at?: string | null
           created_time?: string | null
           estimated_cost_amount?: number
           estimated_cost_price?: number | null
@@ -3452,6 +3451,7 @@ export type Database = {
           last_jst_modified?: string | null
           modified_time?: string | null
           o_id: string
+          order_created_at?: string | null
           order_status?: string | null
           paid_amount?: number
           pay_amount?: number
@@ -3478,7 +3478,6 @@ export type Database = {
         Update: {
           color?: string | null
           created_at?: string
-          order_created_at?: string | null
           created_time?: string | null
           estimated_cost_amount?: number
           estimated_cost_price?: number | null
@@ -3493,6 +3492,7 @@ export type Database = {
           last_jst_modified?: string | null
           modified_time?: string | null
           o_id?: string
+          order_created_at?: string | null
           order_status?: string | null
           paid_amount?: number
           pay_amount?: number
@@ -3685,8 +3685,8 @@ export type Database = {
           last_checked_at: string
           latest_ship_time: string | null
           o_id: string
-          order_status: string | null
           order_created_at: string | null
+          order_status: string | null
           pay_time: string | null
           platform: string | null
           qty: number
@@ -3713,8 +3713,8 @@ export type Database = {
           last_checked_at?: string
           latest_ship_time?: string | null
           o_id: string
-          order_status?: string | null
           order_created_at?: string | null
+          order_status?: string | null
           pay_time?: string | null
           platform?: string | null
           qty?: number
@@ -3741,8 +3741,8 @@ export type Database = {
           last_checked_at?: string
           latest_ship_time?: string | null
           o_id?: string
-          order_status?: string | null
           order_created_at?: string | null
+          order_status?: string | null
           pay_time?: string | null
           platform?: string | null
           qty?: number
