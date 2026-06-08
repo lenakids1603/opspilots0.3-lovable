@@ -220,6 +220,7 @@ export default function ShippingRiskPage() {
                 <TableHead>尺码</TableHead>
                 <TableHead className="text-right">数量</TableHead>
                 <TableHead>下单时间</TableHead>
+                <TableHead>付款时间</TableHead>
                 <TableHead>最晚发货</TableHead>
                 <TableHead className="text-right">剩余</TableHead>
                 <TableHead>超时</TableHead>
