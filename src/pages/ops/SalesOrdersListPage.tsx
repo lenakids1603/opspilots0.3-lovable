@@ -450,7 +450,7 @@ export default function SalesOrdersListPage() {
         <Stat label="退款/退货订单" value={fmtInt(s?.refund)} error={err} accent="danger" />
       </div>
       <div className="mb-2 text-[11px] text-muted-foreground">
-        当前以上统计来自历史明细表（jst_sales_orders）。下方为今日汇总（sales_daily_summary，新轻量来源）：
+        当前以上统计来自历史明细表（jst_sales_orders）。下方为今日汇总（sales_daily_summary，新轻量来源；以 order_created_at / pay_time 为口径，旧明细仅做对照）：
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         {todaySummaryQ.data?.present ? (
