@@ -479,9 +479,9 @@ export default function SalesOrdersListPage() {
               <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="order_created_at">下单时间</SelectItem>
-                <SelectItem value="pay_time">支付时间</SelectItem>
-                <SelectItem value="created_time">创建时间</SelectItem>
-                <SelectItem value="modified_time">修改时间</SelectItem>
+                <SelectItem value="pay_time">付款时间</SelectItem>
+                <SelectItem value="created_time">聚水潭创建时间</SelectItem>
+                <SelectItem value="modified_time">聚水潭修改时间</SelectItem>
               </SelectContent></Select></div>
           <div><label className="text-[11px] text-muted-foreground">店铺</label>
             <Input className="h-9" value={draft.shop} onChange={e => setDraft({ ...draft, shop: e.target.value })} placeholder="店铺名称" /></div>
