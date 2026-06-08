@@ -231,15 +231,15 @@ export default function ShippingRiskPage() {
             </TableHeader>
             <TableBody>
               {query.isLoading && (
-                <TableRow><TableCell colSpan={14} className="text-center py-10 text-muted-foreground">加载中…</TableCell></TableRow>
+                <TableRow><TableCell colSpan={15} className="text-center py-10 text-muted-foreground">加载中…</TableCell></TableRow>
               )}
               {!query.isLoading && tableUnavailable && (
-                <TableRow><TableCell colSpan={14} className="text-center py-10 text-muted-foreground">
+                <TableRow><TableCell colSpan={15} className="text-center py-10 text-muted-foreground">
                   风险订单表暂不可用。请稍后刷新或联系运维确认同步状态。
                 </TableCell></TableRow>
               )}
               {!query.isLoading && !tableUnavailable && (query.data?.rows.length ?? 0) === 0 && (
-                <TableRow><TableCell colSpan={14} className="text-center py-10 text-muted-foreground">
+                <TableRow><TableCell colSpan={15} className="text-center py-10 text-muted-foreground">
                   暂无未发货风险订单
                 </TableCell></TableRow>
               )}
