@@ -120,12 +120,45 @@ export default function ProductDetailPage() {
         }
       }
 
-      // 出库（仅有 sku_id）
-      if (jstId) {
-        const { data } = await supabase.from("jst_outbound_order_items")
-          .select("io_id, oi_id, name, color, size, qty, amount, synced_at")
-          .eq("sku_id", jstId).order("synced_at", { ascending: false }).limit(200);
-        setOutbound(data ?? []);
+      // 出库：使用轻量表 warehouse_shipping_package_items + warehouse_shipping_packages
+      {
+        const ors: string[] = [];
+        if (code) ors.push(`sku_code.eq.${code}`);
+        if (jstId) ors.push(`sku_id.eq.${jstId}`);
+        if (ors.length) {
+          const { data: items } = await (supabase as any)
+            .from("warehouse_shipping_package_items")
+            .select("id, package_id, io_id, sku_id, sku_code, style_no, product_name, qty")
+            .or(ors.join(","))
+            .limit(200);
+          const pkgIds = Array.from(new Set((items ?? []).map((i: any) => i.package_id).filter(Boolean)));
+          let pkgMap = new Map<string, any>();
+          if (pkgIds.length) {
+            const { data: pkgs } = await (supabase as any)
+              .from("warehouse_shipping_packages")
+              .select("id, io_id, o_id, so_id, shop_name, warehouse_name, send_date, logistics_company, tracking_number, status")
+              .in("id", pkgIds);
+            pkgMap = new Map((pkgs ?? []).map((p: any) => [p.id, p]));
+          }
+          const merged = (items ?? []).map((i: any) => {
+            const p = pkgMap.get(i.package_id) ?? {};
+            return {
+              io_id: p.io_id ?? i.io_id,
+              o_id: p.o_id,
+              shop_name: p.shop_name,
+              warehouse_name: p.warehouse_name,
+              product_name: i.product_name,
+              sku_code: i.sku_code,
+              style_no: i.style_no,
+              qty: i.qty,
+              logistics_company: p.logistics_company,
+              tracking_number: p.tracking_number,
+              send_date: p.send_date,
+              status: p.status,
+            };
+          }).sort((a: any, b: any) => String(b.send_date ?? "").localeCompare(String(a.send_date ?? "")));
+          setOutbound(merged);
+        }
       }
 
       // 退款 / 销退（仅有 sku_id）
