@@ -309,8 +309,8 @@ export default function ProductDetailPage() {
         <TabsContent value="outbound">
           <Card className="p-4">
             <DataTable
-              columns={["出库单号", "订单明细", "商品名", "颜色", "尺码", "数量", "金额", "时间"]}
-              rows={outbound.map(o => [o.io_id, o.oi_id, o.name, o.color, o.size, o.qty, o.amount, fmt(o.synced_at)])}
+              columns={["包裹号", "订单号", "店铺", "仓库", "商品名", "SKU", "款号", "数量", "快递公司", "运单号", "发货时间", "状态"]}
+              rows={outbound.map(o => [o.io_id, o.o_id, o.shop_name, o.warehouse_name, o.product_name, o.sku_code, o.style_no, o.qty, o.logistics_company, o.tracking_number, fmt(o.send_date), o.status])}
             />
           </Card>
         </TabsContent>
