@@ -5,6 +5,12 @@
 //   1. Header x-cron-secret = JST_SYNC_CRON_SECRET (供 pg_cron 使用)
 //   2. Authorization: Bearer <user_jwt>,且用户具 ops_role='admin'
 //
+// cron 增量调用(走断点续跑 job 协议,后端自续 tick):
+//   采购单:   {"action": "start_po_job",      "minutes": 180, "trigger_type": "cron"}
+//   采购入库: {"action": "start_inbound_job", "minutes": 180, "trigger_type": "cron"}
+//   trigger_type=cron 时自动开启 auto_continue,由函数自调用驱动 tick 直至完成;
+//   存在活跃任务时复用并续跑,不会堆积。手动(前端)触发行为不变,仍由前端驱动 tick。
+//
 // 安全:绝不输出 app_secret / access_token / refresh_token / 签名结果 / biz 原文
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -1012,11 +1018,17 @@ async function createSyncJob(opts: {
   triggerType: string;
   requestedRange: string;
   createdBy: string | null;
+  autoContinue?: boolean;
 }) {
   await markStaleInboundJobs();
   // 防止重复创建
   const existing = await findActiveJob(opts.syncType);
   if (existing) {
+    // cron 触发时把复用的活跃任务也切到后端自续模式,保证旧任务(含 stalled/partial)能被续跑完
+    if (opts.autoContinue && existing.auto_continue !== true) {
+      await admin.from("jst_sync_jobs").update({ auto_continue: true }).eq("id", existing.id);
+      existing.auto_continue = true;
+    }
     return { ...existing, _reused: true };
   }
   const windows = buildInboundWindows(
@@ -1051,7 +1063,7 @@ async function createSyncJob(opts: {
     next_page_index: 1,
     page_size: INBOUND_JOB_CONFIG.pageSize,
     has_next: true,
-    auto_continue: false,
+    auto_continue: opts.autoContinue ?? false,
     max_window_days: INBOUND_JOB_CONFIG.maxWindowDays,
     max_pages_per_run: INBOUND_JOB_CONFIG.maxPagesPerRun,
     time_budget_seconds: INBOUND_JOB_CONFIG.timeBudgetSeconds,
@@ -1076,8 +1088,66 @@ async function createInboundJob(opts: {
   triggerType: string;
   requestedRange: string;
   createdBy: string | null;
+  autoContinue?: boolean;
 }) {
   return createSyncJob({ ...opts, syncType: "purchase_inbound_orders" });
+}
+
+// 解析 start_*_job 的时间窗口:支持 start_date/end_date、minutes、hours、days(默认 7 天)。
+// minutes/hours 与其它同步函数的 cron 增量调用约定一致(如 start_sales_job 的 minutes)。
+function resolveJobWindow(body: any): { from: Date; to: Date; requestedRange: string } {
+  const to = body.end_date ? new Date(body.end_date) : new Date();
+  let from: Date;
+  if (body.start_date) {
+    from = new Date(body.start_date);
+  } else if (body.minutes != null) {
+    from = new Date(to.getTime() - Math.max(1, Number(body.minutes)) * 60_000);
+  } else if (body.hours != null) {
+    from = new Date(to.getTime() - Math.max(1, Number(body.hours)) * 3600_000);
+  } else {
+    from = new Date(to.getTime() - Number(body.days ?? 7) * 86400_000);
+  }
+  const windowMinutes = Math.max(1, Math.round((to.getTime() - from.getTime()) / 60_000));
+  const days = Math.max(1, Math.round(windowMinutes / 1440));
+  const requestedRange = body.requested_range
+    ?? (windowMinutes < 60 ? `${windowMinutes}m`
+      : windowMinutes < 1440 ? `${Math.round(windowMinutes / 60)}h`
+      : days <= 1 ? "1d" : days <= 7 ? "7d" : days <= 30 ? "30d" : "custom");
+  return { from, to, requestedRange };
+}
+
+// cron 触发的任务没有前端驱动 tick,由函数自调用续跑(参照 _shared/jst-sync-job.ts 的 self-invoke 模式)。
+// 鉴权复用 x-cron-secret 入口;失败时下一次 cron 会复用活跃任务从断点续跑。
+async function scheduleSelfTick(tickAction: string, jobId: string, delayMs: number) {
+  if (!CRON_SECRET || !SUPABASE_URL) return;
+  try {
+    await admin.from("jst_sync_jobs").update({
+      next_tick_at: new Date(Date.now() + delayMs).toISOString(),
+    }).eq("id", jobId);
+  } catch (_e) { /* ignore */ }
+  if (delayMs > 0) await sleep(delayMs);
+  // 触发前复查状态,避免取消/完成后仍然续跑
+  const { data: cur } = await admin.from("jst_sync_jobs")
+    .select("status, auto_continue, cancel_requested")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (!cur) return;
+  if (cur.auto_continue === false || cur.cancel_requested === true) return;
+  if (["success", "cancelled", "failed"].includes(cur.status)) return;
+  try {
+    await fetch(`${SUPABASE_URL}/functions/v1/jst-sync-purchase-orders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-cron-secret": CRON_SECRET },
+      body: JSON.stringify({ action: tickAction, job_id: jobId, _self_tick: true }),
+    });
+  } catch (_e) { /* swallow — 等下一次 cron 复用活跃任务续跑 */ }
+}
+
+function triggerSelfTick(tickAction: string, jobId: string, delayMs: number) {
+  try {
+    // @ts-ignore EdgeRuntime is provided by Supabase edge runtime
+    EdgeRuntime.waitUntil(scheduleSelfTick(tickAction, jobId, delayMs));
+  } catch (_e) { /* not in edge runtime */ }
 }
 
 async function updateJobProgress(jobId: string, patch: Record<string, unknown>) {
@@ -1577,18 +1647,19 @@ Deno.serve(async (req) => {
 
     // ===== 入库单断点续跑相关 action =====
     if (action === "start_inbound_job") {
-      const days = Number(body.days ?? 7);
-      const requestedRange = body.requested_range ?? (days <= 1 ? "1d" : days <= 7 ? "7d" : days <= 30 ? "30d" : "custom");
-      const to = body.end_date ? new Date(body.end_date) : new Date();
-      const from = body.start_date ? new Date(body.start_date) : new Date(to.getTime() - days * 86400_000);
+      const { from, to, requestedRange } = resolveJobWindow(body);
+      // cron 触发(或显式要求)时由后端自续 tick;手动触发仍由前端驱动,行为不变
+      const autoContinue = body.auto_continue === true || String(body.trigger_type ?? "") === "cron";
       const job = await createInboundJob({
         fromIso: from.toISOString(),
         toIso: to.toISOString(),
         triggerType: body.trigger_type ?? "manual",
         requestedRange,
         createdBy: caller.uid,
+        autoContinue,
       });
-      return new Response(JSON.stringify({ ok: true, job_id: job.id, parent_log_id: job.parent_log_id, total_windows: job.total_windows }), {
+      if (autoContinue) triggerSelfTick("tick_inbound_job", job.id, 200);
+      return new Response(JSON.stringify({ ok: true, job_id: job.id, parent_log_id: job.parent_log_id, total_windows: job.total_windows, reused: !!(job as any)._reused, auto_continue: autoContinue }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -1598,6 +1669,9 @@ Deno.serve(async (req) => {
       if (!jobId) throw new Error("缺少 job_id");
       // 同步执行一次 tick；若未完成必须落库为 partial，由前端加锁后触发下一次 tick
       const result = await tickInboundJob(jobId);
+      if (result.status === "partial" && (result.job as any)?.auto_continue === true) {
+        triggerSelfTick("tick_inbound_job", jobId, 500);
+      }
       return new Response(JSON.stringify({ ok: true, status: result.status, job: result.job }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -1618,10 +1692,8 @@ Deno.serve(async (req) => {
 
     // ===== 采购单断点续跑相关 action (复用入库单同一套 job 系统) =====
     if (action === "start_po_job") {
-      const days = Number(body.days ?? 7);
-      const requestedRange = body.requested_range ?? (days <= 1 ? "1d" : days <= 7 ? "7d" : days <= 30 ? "30d" : "custom");
-      const to = body.end_date ? new Date(body.end_date) : new Date();
-      const from = body.start_date ? new Date(body.start_date) : new Date(to.getTime() - days * 86400_000);
+      const { from, to, requestedRange } = resolveJobWindow(body);
+      const autoContinue = body.auto_continue === true || String(body.trigger_type ?? "") === "cron";
       const job = await createSyncJob({
         syncType: "purchase_orders",
         fromIso: from.toISOString(),
@@ -1629,13 +1701,16 @@ Deno.serve(async (req) => {
         triggerType: body.trigger_type ?? "manual",
         requestedRange,
         createdBy: caller.uid,
+        autoContinue,
       });
+      if (autoContinue) triggerSelfTick("tick_po_job", job.id, 200);
       return new Response(JSON.stringify({
         ok: true,
         job_id: job.id,
         parent_log_id: job.parent_log_id,
         total_windows: job.total_windows,
         reused: !!(job as any)._reused,
+        auto_continue: autoContinue,
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -1645,6 +1720,9 @@ Deno.serve(async (req) => {
       const jobId = String(body.job_id ?? "");
       if (!jobId) throw new Error("缺少 job_id");
       const result = await tickInboundJob(jobId);
+      if (result.status === "partial" && (result.job as any)?.auto_continue === true) {
+        triggerSelfTick("tick_po_job", jobId, 500);
+      }
       return new Response(JSON.stringify({ ok: true, status: result.status, job: result.job }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
