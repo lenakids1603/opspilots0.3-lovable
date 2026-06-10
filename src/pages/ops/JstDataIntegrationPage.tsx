@@ -702,34 +702,8 @@ export default function JstDataIntegrationPage() {
         </div>
       )}
 
-      {/* 二、全局同步状态 */}
-      <Card>
-        <CardContent className="p-5 flex flex-wrap items-center justify-between gap-6">
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-            <div className="flex items-center gap-1.5">
-              <StatusDot tone={abnormalModules.length > 0 ? "warn" : "ok"} />
-              <span className="text-muted-foreground">状态：</span>
-              <span className="font-semibold">
-                {abnormalModules.length > 0 ? "部分异常" : "正常"}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <RefreshCw className="w-3.5 h-3.5 text-muted-foreground" />
-              <span className="text-muted-foreground">自动同步：</span>
-              <span className="font-medium">{globalExtra.auto_enabled === false ? "关闭" : "开启"}</span>
-            </div>
-            <div className="text-muted-foreground">最近：<span className="text-foreground font-medium">{fmtTime(globalMetric?.last_sync_at)}</span></div>
-            <div className="text-muted-foreground">下次：<span className="text-foreground font-medium">{globalExtra.next_sync_at ?? "—"}</span></div>
-          </div>
-          <div className="grid grid-cols-5 gap-x-8 text-center border border-border rounded-md px-5 py-2">
-            <div><div className="text-[11px] text-muted-foreground">批次</div><div className="text-lg font-bold tabular-nums">{globalExtra.today_batches ?? 0}</div></div>
-            <div><div className="text-[11px] text-muted-foreground">记录</div><div className="text-lg font-bold tabular-nums">{fmtNum(globalExtra.today_records)}</div></div>
-            <div><div className="text-[11px] text-muted-foreground">成功</div><div className="text-lg font-bold tabular-nums text-emerald-600">{fmtNum(globalExtra.success_records)}</div></div>
-            <div><div className="text-[11px] text-muted-foreground">失败</div><div className="text-lg font-bold tabular-nums text-rose-600">{globalExtra.failed_records ?? 0}</div></div>
-            <div><div className="text-[11px] text-muted-foreground">运行中</div><div className="text-lg font-bold tabular-nums">{globalExtra.running ?? 0}</div></div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* 二、自动同步总览 + 同步记录（取代旧的全局状态条与旧同步日志） */}
+      <AutoSyncOverview />
 
       {/* 三、核心数据概览 */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
