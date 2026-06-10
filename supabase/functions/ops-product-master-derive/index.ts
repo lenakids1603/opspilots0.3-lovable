@@ -9,6 +9,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
+import { resolveCaller } from "../_shared/jst-client.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -485,6 +486,18 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const startedAt = new Date().toISOString();
   try {
+    // 鉴权：cron secret / internal tick / admin JWT 三选一（与 jst-sync-* 一致）
+    const caller = await resolveCaller(req);
+    const cronSecret = req.headers.get("x-cron-secret") ?? "";
+    const okCron = !!Deno.env.get("JST_SYNC_CRON_SECRET") && cronSecret === Deno.env.get("JST_SYNC_CRON_SECRET");
+    const internalTick = req.headers.get("x-internal-tick") ?? "";
+    const okInternal = !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") && internalTick === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!okCron && !okInternal && !caller.isAdmin) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
     const source = String(body.source ?? "all");
     const days = Number(body.days ?? 30);

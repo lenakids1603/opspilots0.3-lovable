@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 
 .mcp.json
+
+# Codex CLI 本地配置(可能包含访问令牌,不要提交)
+.codex/
