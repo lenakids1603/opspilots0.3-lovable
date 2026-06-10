@@ -249,7 +249,7 @@ export default function JstSyncPage() {
         <div>
           <h1 className="text-2xl font-semibold">聚水潭数据同步</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            自动同步任务状态与全部同步记录见下方面板；手动同步入口保留在页面下半部分各 API 区块。
+            手动触发与查看采购单、采购入库、商品资料、SKU、商品图片等同步任务。
           </p>
         </div>
         <Button variant="outline" onClick={load} disabled={loading}>
