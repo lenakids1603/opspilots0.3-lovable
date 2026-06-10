@@ -23,7 +23,7 @@ import {
   ImageIcon,
   Search,
 } from "lucide-react";
-import AutoSyncOverview from "@/components/ops/AutoSyncOverview";
+
 
 type SyncLog = {
   id: string;
