@@ -112,7 +112,7 @@ export default function MyExpenses() {
   const fetchExpenses = () => {
     if (!user) return;
     setLoading(true);
-    let query = supabase.from('expenses').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+    let query: any = supabase.from("expenses").select('*').eq('user_id', user.id).order('created_at', { ascending: false });
     if (statusFilter !== 'all') query = (query as any).eq("status", statusFilter);
     query.then(({ data }) => {
       setExpenses((data as unknown as Expense[]) || []);
