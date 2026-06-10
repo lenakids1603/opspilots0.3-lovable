@@ -147,10 +147,15 @@ function useShopMappingCounts() {
       const total = rows.length;
       const mapped = rows.filter((r) => r.mapping_status === "mapped").length;
       const unmapped = rows.filter((r) => r.mapping_status === "unmapped").length;
+      const ignored = rows.filter((r) => r.mapping_status === "ignored").length;
       const noEntity = rows.filter((r) => !r.matched_business_entity_id).length;
       const noPlatform = rows.filter((r) => !r.matched_platform_id).length;
       const lastSync = rows.reduce<string | null>((m, r) => (!m || (r.last_sync_at && r.last_sync_at > m)) ? r.last_sync_at : m, null);
-      return { total, mapped, unmapped, noEntity, noPlatform, lastSync, rate: total ? (mapped / total) * 100 : 0 };
+      const nonIgnored = total - ignored;
+      const entityBound = rows.filter((r) => r.mapping_status !== "ignored" && !!r.matched_business_entity_id).length;
+      const matchRate = total ? (mapped / total) * 100 : 0;
+      const entityBindingRate = nonIgnored ? (entityBound / nonIgnored) * 100 : 0;
+      return { total, mapped, unmapped, ignored, noEntity, noPlatform, lastSync, matchRate, entityBindingRate };
     },
   });
 }
@@ -615,7 +620,7 @@ export default function JstDataIntegrationPage() {
     },
     {
       stage: 2, name: "店铺映射检查", mode: "校验",
-      progress: Math.round(mapping?.rate ?? 0),
+      progress: Math.round(mapping?.matchRate ?? 0),
       status: (mapping && mapping.unmapped > 0 ? "warn" : "ok") as ModuleStatus,
       last: mapping?.lastSync,
       onLog: () => setShopMappingsOpen(true), opLabel: "管理映射",
@@ -812,7 +817,8 @@ export default function JstDataIntegrationPage() {
                     { label: "未绑定", value: fmtNum(mapping?.unmapped), valueTone: mapping && mapping.unmapped > 0 ? "destructive" : "default" },
                     { label: "无主体绑定", value: fmtNum(mapping?.noEntity) },
                     { label: "无平台绑定", value: fmtNum(mapping?.noPlatform) },
-                    { label: "绑定完整率", value: `${(mapping?.rate ?? 0).toFixed(1)}%`, valueTone: mapping && mapping.rate < 100 ? "destructive" : "default" },
+                    { label: "店铺匹配率", value: `${(mapping?.matchRate ?? 0).toFixed(1)}%`, valueTone: mapping && mapping.matchRate < 100 ? "destructive" : "default" },
+                    { label: "主体绑定率", value: `${(mapping?.entityBindingRate ?? 0).toFixed(1)}%`, valueTone: mapping && mapping.entityBindingRate < 100 ? "destructive" : "default" },
                   ]}
                   actions={
                     <>
