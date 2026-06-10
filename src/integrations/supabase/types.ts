@@ -4004,6 +4004,21 @@ export type Database = {
           name: string
         }[]
       }
+      get_auto_sync_overview: {
+        Args: never
+        Returns: {
+          active: boolean
+          failed_count_24h: number
+          jobname: string
+          last_run_ended_at: string
+          last_run_message: string
+          last_run_started_at: string
+          last_run_status: string
+          schedule: string
+          success_count_24h: number
+          sync_type: string
+        }[]
+      }
       get_email_by_identifier: {
         Args: { _identifier: string }
         Returns: string
@@ -4021,6 +4036,10 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      invoke_jst_sync: {
+        Args: { fn_name: string; payload: Json }
+        Returns: number
       }
       is_manager_of: {
         Args: { _employee_id: string; _manager_id: string }
@@ -4065,6 +4084,10 @@ export type Database = {
       }
       refresh_sales_summaries_for_order_items: {
         Args: { _item_keys: string[] }
+        Returns: Json
+      }
+      set_auto_sync_active: {
+        Args: { p_active: boolean; p_jobname: string }
         Returns: Json
       }
       supplier_id_of: { Args: { _uid: string }; Returns: string }
