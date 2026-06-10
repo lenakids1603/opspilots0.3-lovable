@@ -147,10 +147,15 @@ function useShopMappingCounts() {
       const total = rows.length;
       const mapped = rows.filter((r) => r.mapping_status === "mapped").length;
       const unmapped = rows.filter((r) => r.mapping_status === "unmapped").length;
+      const ignored = rows.filter((r) => r.mapping_status === "ignored").length;
       const noEntity = rows.filter((r) => !r.matched_business_entity_id).length;
       const noPlatform = rows.filter((r) => !r.matched_platform_id).length;
       const lastSync = rows.reduce<string | null>((m, r) => (!m || (r.last_sync_at && r.last_sync_at > m)) ? r.last_sync_at : m, null);
-      return { total, mapped, unmapped, noEntity, noPlatform, lastSync, rate: total ? (mapped / total) * 100 : 0 };
+      const nonIgnored = total - ignored;
+      const entityBound = rows.filter((r) => r.mapping_status !== "ignored" && !!r.matched_business_entity_id).length;
+      const matchRate = total ? (mapped / total) * 100 : 0;
+      const entityBindingRate = nonIgnored ? (entityBound / nonIgnored) * 100 : 0;
+      return { total, mapped, unmapped, ignored, noEntity, noPlatform, lastSync, matchRate, entityBindingRate };
     },
   });
 }
