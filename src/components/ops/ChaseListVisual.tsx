@@ -237,15 +237,36 @@ export default function ChaseListVisual({ timeline, suppliers }: Props) {
   const days = useMemo(() => buildDays(timeline, today), [timeline, today]);
   const groups = useMemo(() => buildSuppliers(suppliers), [suppliers]);
 
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [tailOpen, setTailOpen] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const filterSet = useMemo(() => {
-    if (!selected) return null;
-    return days.find((d) => d.key === selected)?.styleNos ?? null;
+    if (selected.size === 0) return null;
+    const s = new Set<string>();
+    days.filter((d) => selected.has(d.key)).forEach((d) => d.styleNos.forEach((n) => s.add(n)));
+    return s;
   }, [selected, days]);
+
+  const selectedDays = useMemo(() => days.filter((d) => selected.has(d.key)), [selected, days]);
+  const selectedQty = selectedDays.reduce((s, d) => s + d.qty, 0);
+
+  const styleDayQty = useMemo(() => {
+    if (selected.size === 0) return null;
+    const m = new Map<string, number>();
+    for (const r of timeline) {
+      const inSel =
+        (selected.has("overdue") && r.deadline_date < today) ||
+        selected.has(r.deadline_date) ||
+        (selected.has("later") && r.deadline_date > addDays(today, 4));
+      if (inSel) {
+        const k = shortName(r.product_name, r.style_no);
+        m.set(k, (m.get(k) ?? 0) + Number(r.qty));
+      }
+    }
+    return m;
+  }, [selected, timeline, today]);
 
   const copy = async (g: SupplierGroup) => {
     await navigator.clipboard.writeText(chaseMessage(g, today));
@@ -263,23 +284,28 @@ export default function ChaseListVisual({ timeline, suppliers }: Props) {
       {/* ======== 发货截止时间轴 ======== */}
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14 }}>
         <span style={{ fontSize: 14, fontWeight: 600 }}>发货截止时间轴</span>
-        {selected ? (
-          <button style={{ ...textBtn, color: RED }} onClick={() => setSelected(null)}>
-            已按「{days.find((d) => d.key === selected)?.label}」筛选 · 点击取消
+        {selected.size > 0 ? (
+          <button style={{ ...textBtn, color: RED, fontWeight: 500 }} onClick={() => setSelected(new Set())}>
+            已选 {selectedDays.map((d) => d.label).join(" + ")} · 合计 {selectedQty} 件 · 点击清除
           </button>
         ) : (
-          <span style={{ fontSize: 11, color: FAINT }}>点一天可筛选下方款式</span>
+          <span style={{ fontSize: 11, color: FAINT }}>点选一天或多天，叠加筛选下方款式</span>
         )}
       </div>
 
       <div style={{ overflowX: "auto" }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0,1fr))", gap: 4, minWidth: 880 }}>
           {days.map((d) => {
-            const dim = selected !== null && selected !== d.key;
+            const dim = selected.size > 0 && !selected.has(d.key);
             const tone = TONES[d.tone];
             return (
               <div key={d.key} style={{ display: "flex", flexDirection: "column", cursor: d.qty ? "pointer" : "default" }}
-                onClick={() => d.qty && setSelected(selected === d.key ? null : d.key)}>
+                onClick={() => {
+                  if (!d.qty) return;
+                  const next = new Set(selected);
+                  if (next.has(d.key)) next.delete(d.key); else next.add(d.key);
+                  setSelected(next);
+                }}>
                 <div style={{ height: 52, display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 6, marginBottom: 8 }}>
                   {d.styles.map((s) => <Thumb key={s.key} img={s.img} qty={s.qty} dim={dim} />)}
                   {d.restCount > 0 && (
@@ -350,6 +376,9 @@ export default function ChaseListVisual({ timeline, suppliers }: Props) {
                         <span style={{ fontFamily: MONO, fontSize: 12, color: FAINT, letterSpacing: "0.02em" }}>{st.code}</span>
                         <span style={{ fontSize: 14, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{st.name}</span>
                         <span style={{ flex: 1 }} />
+                        {styleDayQty && (styleDayQty.get(st.key) ?? 0) > 0 && (
+                          <span style={{ fontSize: 12, color: SUB, whiteSpace: "nowrap" }}>选中日 {styleDayQty.get(st.key)} 件</span>
+                        )}
                         {st.overdue > 0 && <span style={{ fontSize: 12, color: RED, whiteSpace: "nowrap" }}>已超时 {st.overdue} 件 · 最长 {st.maxOverdue} 天</span>}
                         {st.overdue === 0 && st.due24 > 0 && <span style={{ fontSize: 12, color: AMBER, whiteSpace: "nowrap" }}>24h内 {st.due24} 件</span>}
                       </div>
