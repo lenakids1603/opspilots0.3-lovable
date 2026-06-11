@@ -357,7 +357,7 @@ export default function ChaseListPage() {
                                       </td>
                                     </tr>
                                   )}
-                                </>
+                                </React.Fragment>
                               );
                             })}
                           </tbody>
