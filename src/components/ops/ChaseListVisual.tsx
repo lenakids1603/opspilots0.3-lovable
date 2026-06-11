@@ -42,6 +42,8 @@ export interface SupplierRow {
 interface Props {
   timeline: TimelineRow[];
   suppliers: SupplierRow[];
+  /** 接入服务端导出（xlsx带图）；未提供时回退为本地CSV。返回 Promise 时按钮显示「生成中…」 */
+  onExport?: (supplier: SupplierGroup) => void | Promise<void>;
 }
 
 const INK = "#1F2329";
@@ -138,7 +140,7 @@ interface StyleGroup {
   total: number; overdue: number; due24: number; maxOverdue: number;
   skus: SkuItem[]; styleNos: string[];
 }
-interface SupplierGroup {
+export interface SupplierGroup {
   id: string; name: string; total: number; overdue: number; due24: number;
   styles: StyleGroup[];
 }
@@ -197,7 +199,7 @@ function chaseMessage(g: SupplierGroup, today: string): string {
   return `${g.name} ${md(today)} 催货：\n${lines.join("\n")}\n合计 ${g.total} 件，麻烦尽快安排，谢谢！`;
 }
 
-function exportCsv(g: SupplierGroup, today: string) {
+export function exportCsv(g: SupplierGroup, today: string) {
   const rows: string[][] = [["供应商", "款号", "款名", "SKU", "急需件数", "其中已超时", "最长超期天数"]];
   g.styles.forEach((st) =>
     st.skus.forEach((k) =>
@@ -232,7 +234,7 @@ function Thumb({ img, qty, dim }: { img: string | null; qty: number; dim: boolea
 
 /* ---------- 主组件 ---------- */
 
-export default function ChaseListVisual({ timeline, suppliers }: Props) {
+export default function ChaseListVisual({ timeline, suppliers, onExport }: Props) {
   const today = useMemo(todayCN, []);
   const days = useMemo(() => buildDays(timeline, today), [timeline, today]);
   const groups = useMemo(() => buildSuppliers(suppliers), [suppliers]);
@@ -241,6 +243,8 @@ export default function ChaseListVisual({ timeline, suppliers }: Props) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [tailOpen, setTailOpen] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
 
   const filterSet = useMemo(() => {
     if (selected.size === 0) return null;
@@ -272,6 +276,13 @@ export default function ChaseListVisual({ timeline, suppliers }: Props) {
     await navigator.clipboard.writeText(chaseMessage(g, today));
     setCopiedId(g.id);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const doExport = async (g: SupplierGroup) => {
+    if (!onExport) { exportCsv(g, today); return; }
+    if (exportingId) return;
+    setExportingId(g.id);
+    try { await onExport(g); } finally { setExportingId(null); }
   };
 
   const textBtn: React.CSSProperties = {
@@ -355,8 +366,9 @@ export default function ChaseListVisual({ timeline, suppliers }: Props) {
                 {copiedId === g.id ? <Check size={14} /> : <Copy size={14} />}
                 {copiedId === g.id ? "已复制" : "复制催货消息"}
               </button>
-              <button style={textBtn} onClick={() => exportCsv(g, today)}>
-                <Download size={14} />导出催货单
+              <button style={{ ...textBtn, cursor: exportingId ? "default" : "pointer", opacity: exportingId && exportingId !== g.id ? 0.5 : 1 }}
+                disabled={!!exportingId} onClick={() => doExport(g)}>
+                <Download size={14} />{exportingId === g.id ? "生成中…" : "导出催货单"}
               </button>
             </header>
 
@@ -364,7 +376,8 @@ export default function ChaseListVisual({ timeline, suppliers }: Props) {
               <div>
                 {list.map((st, si) => (
                   <div key={st.key} style={{ display: "flex", gap: 14, alignItems: "center", padding: "13px 0 13px 26px", borderTop: si > 0 ? `1px solid ${HAIRLINE}` : "none" }}>
-                    <div style={{ width: 56, height: 56, borderRadius: 8, background: "#F3F4F6", border: `1px solid ${HAIRLINE}`, overflow: "hidden", flexShrink: 0 }}>
+                    <div onClick={() => st.img && setPreview(st.img)}
+                      style={{ width: 56, height: 56, borderRadius: 8, background: "#F3F4F6", border: `1px solid ${HAIRLINE}`, overflow: "hidden", flexShrink: 0, cursor: st.img ? "zoom-in" : "default" }}>
                       {st.img && (
                         <img src={st.img} referrerPolicy="no-referrer" loading="lazy" alt=""
                           style={{ width: "100%", height: "100%", objectFit: "cover" }}
@@ -410,6 +423,14 @@ export default function ChaseListVisual({ timeline, suppliers }: Props) {
           </section>
         );
       })}
+
+      {preview && (
+        <div onClick={() => setPreview(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(15,18,22,0.72)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, cursor: "zoom-out" }}>
+          <img src={preview} referrerPolicy="no-referrer" alt=""
+            style={{ maxWidth: "86vw", maxHeight: "86vh", borderRadius: 12, background: "#FFF" }} />
+        </div>
+      )}
     </div>
   );
 }

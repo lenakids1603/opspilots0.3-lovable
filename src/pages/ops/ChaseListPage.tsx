@@ -5,9 +5,10 @@ import {
   AlertTriangle, RefreshCw, Download, ChevronDown, ChevronRight,
   PartyPopper, ImageIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/ops/PageHeader";
-import ChaseListVisual from "@/components/ops/ChaseListVisual";
+import ChaseListVisual, { exportCsv as exportSupplierCsv, type SupplierGroup } from "@/components/ops/ChaseListVisual";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -92,6 +93,29 @@ function downloadCSV(filename: string, headers: string[], rows: (string | number
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click();
   document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+// 调 chase-export 函数取带图 xlsx；非 2xx 时尽量取出函数返回的中文错误
+async function invokeChaseExport(body: { mode: "supplier"; supplier_id: string } | { mode: "closed" }): Promise<Blob> {
+  const { data, error } = await supabase.functions.invoke("chase-export", { body });
+  if (error) {
+    let msg = (error as Error).message ?? "未知错误";
+    const ctx = (error as { context?: Response }).context;
+    if (ctx && typeof ctx.json === "function") {
+      try { msg = ((await ctx.json()) as { error?: string }).error ?? msg; } catch { /* 保留原消息 */ }
+    }
+    throw new Error(msg);
+  }
+  if (!(data instanceof Blob)) throw new Error("响应格式异常");
+  return data;
 }
 
 function useSkuImages(skus: string[], enabled = true) {
@@ -225,7 +249,18 @@ export default function ChaseListPage() {
   const purchaseImgQ = useSkuImages(purchaseTabSkus, tab === "purchase");
   const closedImgQ = useSkuImages(closedTabSkus, tab === "closed");
 
-  const exportClosed = () => {
+  // 按供应商催货：服务端带图 xlsx，失败回退本地 CSV
+  const exportSupplier = async (g: SupplierGroup) => {
+    try {
+      const blob = await invokeChaseExport({ mode: "supplier", supplier_id: g.id });
+      downloadBlob(blob, `催货单_${g.name}_${todayCN()}.xlsx`);
+    } catch (e) {
+      toast.error(`带图催货单生成失败：${(e as Error).message}，已回退本地 CSV`);
+      exportSupplierCsv(g, todayCN());
+    }
+  };
+
+  const exportClosedCsv = () => {
     const headers = ["SKU", "款号", "供应商", "少交件数", "影响订单数", "影响采购单数", "最早付款"];
     const rows = closedRows.map(r => [
       r.sku, r.style_no || "", r.supplier_name || "",
@@ -233,6 +268,21 @@ export default function ChaseListPage() {
       fmtMMDDHM(r.oldest_pay_time),
     ]);
     downloadCSV(`厂家已结单缺口_${todayCN()}.csv`, headers, rows);
+  };
+
+  // 厂家已结单：与按供应商催货共用 chase-export，失败回退本地 CSV
+  const [closedExporting, setClosedExporting] = useState(false);
+  const exportClosed = async () => {
+    setClosedExporting(true);
+    try {
+      const blob = await invokeChaseExport({ mode: "closed" });
+      downloadBlob(blob, `厂家已结单缺口_${todayCN()}.xlsx`);
+    } catch (e) {
+      toast.error(`带图导出生成失败：${(e as Error).message}，已回退本地 CSV`);
+      exportClosedCsv();
+    } finally {
+      setClosedExporting(false);
+    }
   };
 
   const refresh = () => queries.forEach(q => q.refetch());
@@ -297,7 +347,7 @@ export default function ChaseListPage() {
               {[0, 1, 2].map(i => <Skeleton key={i} className="h-32 w-full" />)}
             </div>
           ) : (
-            <ChaseListVisual timeline={timelineRowsRaw} suppliers={supplierRows} />
+            <ChaseListVisual timeline={timelineRowsRaw} suppliers={supplierRows} onExport={exportSupplier} />
           )}
         </TabsContent>
 
@@ -362,8 +412,8 @@ export default function ChaseListPage() {
             <div className="text-xs text-muted-foreground">
               供应商已结单交付完毕，此处缺口不会再到货，需决策补单或退款
             </div>
-            <Button variant="outline" size="sm" onClick={exportClosed} disabled={loading || closedRows.length === 0}>
-              <Download className="mr-1" /> 导出 CSV
+            <Button variant="outline" size="sm" onClick={exportClosed} disabled={loading || closedRows.length === 0 || closedExporting}>
+              <Download className="mr-1" /> {closedExporting ? "生成中…" : "导出 Excel"}
             </Button>
           </div>
           {loading ? <Skeleton className="h-64 w-full" /> : closedRows.length === 0 ? (

@@ -49,3 +49,6 @@ verify_jwt = false
 
 [functions.supplier-purchase-order-detail]
 verify_jwt = false
+
+[functions.chase-export]
+verify_jwt = false
