@@ -111,6 +111,19 @@ function skuTail(sku: string) {
   return sku.length > 4 ? sku.slice(-4) : sku;
 }
 
+/** 从 product_name 中抽取【】内的短名；若末尾重复款号则去掉。 */
+function shortProductName(name: string | null | undefined, styleNo?: string) {
+  const raw = (name ?? "").trim();
+  if (!raw) return "";
+  const m = raw.match(/【([^】]+)】/);
+  let s = m ? m[1].trim() : raw;
+  if (styleNo) {
+    const re = new RegExp(`[\\s·-]*${styleNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`);
+    s = s.replace(re, "").trim();
+  }
+  return s;
+}
+
 const URGENCY_RANK: Record<Urgency, number> = { overdue: 5, due24: 4, due48: 3, due72: 2, later: 1 };
 const URGENCY_RING: Record<Urgency, string> = {
   overdue: "ring-red-500",
