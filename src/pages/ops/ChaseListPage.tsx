@@ -1,22 +1,20 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle, RefreshCw, Download, ChevronDown, ChevronRight,
-  PartyPopper, ImageIcon, Copy, X,
+  PartyPopper, ImageIcon,
 } from "lucide-react";
-import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/ops/PageHeader";
+import ChaseListVisual from "@/components/ops/ChaseListVisual";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatDateTimeCN, todayCN } from "@/lib/datetime";
 
@@ -82,57 +80,6 @@ const fmtMMDDHM = (input: string | null) => {
   return s.replace(/\//g, "-");
 };
 
-/** YYYY-MM-DD in Asia/Shanghai */
-function bjDateStr(d: Date) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(d);
-  const y = parts.find(p => p.type === "year")?.value;
-  const m = parts.find(p => p.type === "month")?.value;
-  const day = parts.find(p => p.type === "day")?.value;
-  return `${y}-${m}-${day}`;
-}
-function addDays(yyyyMMdd: string, n: number) {
-  const [y, m, d] = yyyyMMdd.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + n);
-  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
-}
-function mdLabel(yyyyMMdd: string) {
-  const [, m, d] = yyyyMMdd.split("-");
-  return `${Number(m)}/${Number(d)}`;
-}
-
-/** SKU 尾段：取最后一段 "-" 之后，否则尾 4 位 */
-function skuTail(sku: string) {
-  if (!sku) return "";
-  const i = sku.lastIndexOf("-");
-  if (i >= 0 && i < sku.length - 1) return sku.slice(i + 1);
-  return sku.length > 4 ? sku.slice(-4) : sku;
-}
-
-/** 从 product_name 中抽取【】内的短名；若末尾重复款号则去掉。 */
-function shortProductName(name: string | null | undefined, styleNo?: string) {
-  const raw = (name ?? "").trim();
-  if (!raw) return "";
-  const m = raw.match(/【([^】]+)】/);
-  let s = m ? m[1].trim() : raw;
-  if (styleNo) {
-    const re = new RegExp(`[\\s·-]*${styleNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`);
-    s = s.replace(re, "").trim();
-  }
-  return s;
-}
-
-const URGENCY_RANK: Record<Urgency, number> = { overdue: 5, due24: 4, due48: 3, due72: 2, later: 1 };
-const URGENCY_RING: Record<Urgency, string> = {
-  overdue: "ring-red-500",
-  due24: "ring-purple-500",
-  due48: "ring-orange-500",
-  due72: "ring-orange-400",
-  later: "ring-emerald-500",
-};
-
 function downloadCSV(filename: string, headers: string[], rows: (string | number)[][]) {
   const esc = (v: string | number) => {
     const s = String(v ?? "");
@@ -190,46 +137,13 @@ function SkuThumb({ sku, imageUrl, onPreview, size = 40 }: {
   );
 }
 
-function ProductThumb({ src, alt, size = 48, ringClass, onClick, radiusClass = "rounded-lg" }: {
-  src: string | null; alt: string; size?: number; ringClass?: string;
-  onClick?: () => void; radiusClass?: string;
-}) {
-  const [errored, setErrored] = useState(false);
-  const showImg = !!src && !errored;
-  return (
-    <div
-      className={cn(
-        radiusClass,
-        "bg-muted overflow-hidden flex items-center justify-center shrink-0 ring-2 ring-offset-1 ring-offset-background",
-        ringClass ?? "ring-muted-foreground/30",
-        onClick && "cursor-pointer hover:opacity-90",
-      )}
-      style={{ width: size, height: size }}
-      onClick={onClick}
-      title={alt}
-    >
-      {showImg ? (
-        <img src={src!} alt={alt} referrerPolicy="no-referrer" loading="lazy"
-          className="w-full h-full object-cover" onError={() => setErrored(true)} />
-      ) : (
-        <ImageIcon className="size-4 text-muted-foreground/60" />
-      )}
-    </div>
-  );
-}
-
 export default function ChaseListPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState("supplier");
   const [showSC, setShowSC] = useState(false);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [showTail, setShowTail] = useState<Record<string, boolean>>({});
-  const [expandedDay, setExpandedDay] = useState<Record<string, boolean>>({});
-  const [selectedDay, setSelectedDay] = useState<string | null>(null); // 'overdue' | yyyy-MM-dd
   const [openClosed, setOpenClosed] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<{ url: string; sku: string } | null>(null);
   const onPreview = (url: string, sku: string) => setPreview({ url, sku });
-  const styleCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const queries = useQueries({
     queries: [
@@ -300,183 +214,16 @@ export default function ChaseListPage() {
     return { totalQty, supplierCount: supplierIds.size, skuCount: skus.size };
   }, [supplierRows]);
 
-  // ===== 时间轴预处理：同 deadline_date + product_name 合并 =====
-  const today = bjDateStr(new Date());
-  const futureDays = [0, 1, 2, 3, 4, 5].map(i => addDays(today, i));
-
-  type TimelineItem = { key: string; product_name: string; style_no: string; image_url: string | null; qty: number; urgency: Urgency };
-  type DayBucket = { id: string; label: string; isOverdue: boolean; isToday: boolean; items: TimelineItem[]; totalQty: number };
-
-  const timelineBuckets = useMemo<DayBucket[]>(() => {
-    // group by date -> by product_name
-    type Acc = { product_name: string; style_no: string; image_url: string | null; qty: number; urgency: Urgency };
-    const byDate = new Map<string, Map<string, Acc>>();
-    for (const r of timelineRowsRaw) {
-      const date = r.deadline_date;
-      const name = (r.product_name ?? "").trim() || r.style_no || "未命名";
-      let inner = byDate.get(date);
-      if (!inner) { inner = new Map(); byDate.set(date, inner); }
-      const cur = inner.get(name);
-      if (!cur) {
-        inner.set(name, { product_name: name, style_no: r.style_no, image_url: r.image_url, qty: Number(r.qty || 0), urgency: r.urgency });
-      } else {
-        cur.qty += Number(r.qty || 0);
-        if (URGENCY_RANK[r.urgency] > URGENCY_RANK[cur.urgency]) cur.urgency = r.urgency;
-        if (!cur.image_url && r.image_url) cur.image_url = r.image_url;
-      }
-    }
-    const buckets: DayBucket[] = [];
-    // overdue = all dates < today
-    const overdueInner = new Map<string, Acc>();
-    for (const [date, inner] of byDate) {
-      if (date < today) {
-        for (const [name, v] of inner) {
-          const cur = overdueInner.get(name);
-          if (!cur) overdueInner.set(name, { ...v });
-          else {
-            cur.qty += v.qty;
-            if (URGENCY_RANK[v.urgency] > URGENCY_RANK[cur.urgency]) cur.urgency = v.urgency;
-            if (!cur.image_url && v.image_url) cur.image_url = v.image_url;
-          }
-        }
-      }
-    }
-    if (overdueInner.size > 0) {
-      const items = Array.from(overdueInner.values())
-        .map<TimelineItem>(v => ({ key: v.product_name, ...v }))
-        .sort((a, b) => b.qty - a.qty);
-      buckets.push({
-        id: "overdue", label: "逾期", isOverdue: true, isToday: false,
-        items, totalQty: items.reduce((s, x) => s + x.qty, 0),
-      });
-    }
-    for (const date of futureDays) {
-      const inner = byDate.get(date);
-      const items = inner
-        ? Array.from(inner.values()).map<TimelineItem>(v => ({ key: v.product_name, ...v })).sort((a, b) => b.qty - a.qty)
-        : [];
-      buckets.push({
-        id: date, label: date === today ? `今天 ${mdLabel(date)}` : mdLabel(date),
-        isOverdue: false, isToday: date === today,
-        items, totalQty: items.reduce((s, x) => s + x.qty, 0),
-      });
-    }
-    return buckets;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timelineRowsRaw, today]);
-
-  // 选中天对应的 product_name 集合，供款卡过滤
-  const selectedProductNames = useMemo(() => {
-    if (!selectedDay) return null;
-    const b = timelineBuckets.find(x => x.id === selectedDay);
-    if (!b) return null;
-    return new Set(b.items.map(it => it.product_name));
-  }, [selectedDay, timelineBuckets]);
-
-  // ===== 款式卡分组 =====
-  type StyleCard = {
-    style_no: string; product_name: string; image_url: string | null;
-    skus: { sku: string; total_qty: number; overdue_qty: number }[];
-    totalQty: number; overdueQty: number; due24Qty: number;
-    maxDays: number;
-  };
-  type SupplierGroup = {
-    supplier_id: string; supplier_name: string;
-    rows: SupplierRow[];
-    styles: StyleCard[];
-    totalQty: number; overdueQty: number; due24Qty: number;
-    styleCount: number; maxDays: number;
-  };
-
-  const grouped = useMemo<SupplierGroup[]>(() => {
-    const map = new Map<string, SupplierGroup>();
-    for (const r of supplierRows) {
-      const g = map.get(r.supplier_id) ?? {
-        supplier_id: r.supplier_id, supplier_name: r.supplier_name, rows: [],
-        styles: [], totalQty: 0, overdueQty: 0, due24Qty: 0, styleCount: 0, maxDays: 0,
-      };
-      g.rows.push(r);
-      g.totalQty += Number(r.total_qty || 0);
-      g.overdueQty += Number(r.overdue_qty || 0);
-      g.due24Qty += Number(r.due24_qty || 0);
-      g.maxDays = Math.max(g.maxDays, Number(r.max_overdue_days || 0));
-      map.set(r.supplier_id, g);
-    }
-    for (const g of map.values()) {
-      const sm = new Map<string, StyleCard>();
-      for (const r of g.rows) {
-        const sk = r.style_no || r.sku;
-        const s = sm.get(sk) ?? {
-          style_no: r.style_no || "-", product_name: "", image_url: null,
-          skus: [], totalQty: 0, overdueQty: 0, due24Qty: 0, maxDays: 0,
-        };
-        if (!s.product_name && r.product_name) s.product_name = r.product_name;
-        if (!s.image_url && r.image_url) s.image_url = r.image_url;
-        s.skus.push({ sku: r.sku, total_qty: Number(r.total_qty || 0), overdue_qty: Number(r.overdue_qty || 0) });
-        s.totalQty += Number(r.total_qty || 0);
-        s.overdueQty += Number(r.overdue_qty || 0);
-        s.due24Qty += Number(r.due24_qty || 0);
-        s.maxDays = Math.max(s.maxDays, Number(r.max_overdue_days || 0));
-        sm.set(sk, s);
-      }
-      // sort skus by qty desc
-      for (const s of sm.values()) s.skus.sort((a, b) => b.total_qty - a.total_qty);
-      g.styles = Array.from(sm.values()).sort((a, b) =>
-        (b.overdueQty - a.overdueQty) || (b.totalQty - a.totalQty),
-      );
-      g.styleCount = g.styles.length;
-    }
-    return Array.from(map.values()).sort((a, b) => b.totalQty - a.totalQty);
-  }, [supplierRows]);
-
-  const firstSupplierId = grouped[0]?.supplier_id;
-  const isExpanded = (id: string) => expanded[id] ?? id === firstSupplierId;
-  const toggle = (id: string) => setExpanded(s => ({ ...s, [id]: !isExpanded(id) }));
-
   const visiblePurchase = useMemo(
     () => showSC ? purchaseRows : purchaseRows.filter(r => (r.sku || "").toUpperCase() !== "SC"),
     [purchaseRows, showSC],
   );
 
-  // SKU 缩略图：仍按已展开供应商批量取（用于大图预览 onClick 等场景）
-  const supplierTabSkus = useMemo(() => {
-    const set = new Set<string>();
-    for (const g of grouped) if (isExpanded(g.supplier_id))
-      for (const r of g.rows) set.add(r.sku);
-    return Array.from(set);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grouped, expanded, firstSupplierId]);
   const purchaseTabSkus = useMemo(() => visiblePurchase.map(r => r.sku), [visiblePurchase]);
   const closedTabSkus = useMemo(() => closedRows.map(r => r.sku), [closedRows]);
 
-  const supplierImgQ = useSkuImages(supplierTabSkus, tab === "supplier");
   const purchaseImgQ = useSkuImages(purchaseTabSkus, tab === "purchase");
   const closedImgQ = useSkuImages(closedTabSkus, tab === "closed");
-
-  const exportSupplier = (g: SupplierGroup) => {
-    const headers = ["款号", "SKU", "总件数", "其中已超时", "24小时内到期", "最长超期天数", "涉及采购单号"];
-    const rows = g.rows.map(r => [
-      r.style_no, r.sku,
-      Number(r.total_qty || 0), Number(r.overdue_qty || 0), Number(r.due24_qty || 0),
-      Number(r.max_overdue_days || 0),
-      (r.po_details ?? []).map(p => p.po_id).join(" / "),
-    ]);
-    downloadCSV(`催货单_${g.supplier_name}_${todayCN()}.csv`, headers, rows);
-  };
-
-  const exportAll = () => {
-    const headers = ["供应商", "款号", "SKU", "总件数", "其中已超时", "24小时内到期", "最长超期天数", "涉及采购单号"];
-    const rows: (string | number)[][] = [];
-    for (const g of grouped) for (const r of g.rows) {
-      rows.push([
-        g.supplier_name, r.style_no, r.sku,
-        Number(r.total_qty || 0), Number(r.overdue_qty || 0), Number(r.due24_qty || 0),
-        Number(r.max_overdue_days || 0),
-        (r.po_details ?? []).map(p => p.po_id).join(" / "),
-      ]);
-    }
-    downloadCSV(`催货单_全部_${todayCN()}.csv`, headers, rows);
-  };
 
   const exportClosed = () => {
     const headers = ["SKU", "款号", "供应商", "少交件数", "影响订单数", "影响采购单数", "最早付款"];
@@ -490,45 +237,6 @@ export default function ChaseListPage() {
 
   const refresh = () => queries.forEach(q => q.refetch());
 
-  const copyChaseMsg = async (g: SupplierGroup, visibleStyles: StyleCard[]) => {
-    const dStr = (() => {
-      const [, m, d] = today.split("-");
-      return `${Number(m)}/${Number(d)}`;
-    })();
-    const lines: string[] = [];
-    lines.push(`${g.supplier_name || "供应商"} ${dStr} 催货：`);
-    let total = 0;
-    for (const s of visibleStyles) {
-      const skuPart = s.skus.map(sk => `${skuTail(sk.sku)}×${sk.total_qty}`).join("、");
-      const overdueMark = s.overdueQty > 0 ? `（超时${s.maxDays}天）` : "";
-      lines.push(`【${s.style_no} ${s.product_name || ""}】${skuPart}${overdueMark}`);
-      total += s.totalQty;
-    }
-    lines.push(`合计 ${total} 件，麻烦尽快安排,谢谢！`);
-    try {
-      await navigator.clipboard.writeText(lines.join("\n"));
-      toast.success("催货消息已复制");
-    } catch {
-      toast.error("复制失败，请手动复制");
-    }
-  };
-
-  const scrollToStyle = (styleNo: string) => {
-    const el = styleCardRefs.current[styleNo];
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("ring-2", "ring-primary");
-      setTimeout(() => el.classList.remove("ring-2", "ring-primary"), 1800);
-    }
-  };
-
-  // 时间轴段颜色：浅底深字
-  const bucketBg = (b: DayBucket) =>
-    b.isOverdue ? "bg-[#FCEBEB] text-[#791F1F]"
-      : b.isToday ? "bg-[#EEEDFE] text-[#26215C]"
-      : b.id === addDays(today, 1) ? "bg-[#FAEEDA] text-[#633806]"
-      : "bg-[#E1F5EE] text-[#04342C]";
-
   return (
     <div className="p-6">
       <PageHeader
@@ -536,14 +244,9 @@ export default function ChaseListPage() {
         title="催货清单"
         description="按供应商汇总当前所有超期未发货 SKU，便于采购集中跟进。"
         actions={
-          <>
-            <Button variant="outline" size="sm" onClick={exportAll} disabled={loading || grouped.length === 0}>
-              <Download className="mr-1" /> 导出全部
-            </Button>
-            <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-              <RefreshCw className={cn(loading && "animate-spin")} /> 刷新
-            </Button>
-          </>
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
+            <RefreshCw className={cn(loading && "animate-spin")} /> 刷新
+          </Button>
         }
       />
 
@@ -587,213 +290,14 @@ export default function ChaseListPage() {
           <TabsTrigger value="closed">厂家已结单</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="supplier" className="mt-4 space-y-4">
-          {/* === 区块一：时间轴 === */}
+        <TabsContent value="supplier" className="mt-4">
           {loading ? (
-            <Skeleton className="h-40 w-full" />
-          ) : timelineBuckets.length > 0 && (
-            <Card>
-              <CardContent className="p-5">
-                <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <div className="text-sm font-medium">发货截止时间轴</div>
-                    <div className="text-[11px] text-muted-foreground flex items-center gap-2">
-                      <span>描边</span>
-                      <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm ring-2 ring-red-500" />已超时</span>
-                      <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm ring-2 ring-purple-500" />今天</span>
-                      <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm ring-2 ring-orange-500" />24h内</span>
-                      <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm ring-2 ring-emerald-500" />更晚</span>
-                    </div>
-                  </div>
-                  {selectedDay && (
-                    <Button variant="ghost" size="sm" onClick={() => setSelectedDay(null)}>
-                      <X className="size-3 mr-1" /> 清除筛选
-                    </Button>
-                  )}
-                </div>
-                <TooltipProvider delayDuration={150}>
-                  <div className="overflow-x-auto">
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
-                        gap: 4,
-                        minWidth: 920,
-                      }}
-                    >
-                      {timelineBuckets.map((b) => {
-                        const isSel = selectedDay === b.id;
-                        const visibleItems = b.items.slice(0, 3);
-                        const hiddenCount = b.items.length - visibleItems.length;
-                        return (
-                          <div key={b.id} className="flex flex-col">
-                            {/* 上半：衣架区 固定 56px */}
-                            <div
-                              style={{ height: 56 }}
-                              className="flex justify-center items-end gap-1.5 px-1"
-                            >
-                              {visibleItems.map((it) => (
-                                <Tooltip key={it.key}>
-                                  <TooltipTrigger asChild>
-                                    <div className="relative" style={{ width: 40, height: 40 }}>
-                                      <ProductThumb
-                                        src={it.image_url}
-                                        alt={it.product_name}
-                                        size={40}
-                                        radiusClass="rounded-md"
-                                        ringClass={URGENCY_RING[it.urgency]}
-                                        onClick={() => scrollToStyle(it.style_no)}
-                                      />
-                                      <span className="absolute -bottom-1 -right-1 bg-foreground text-background text-[10px] leading-none rounded-full px-1 py-0.5 min-w-[16px] text-center">
-                                        {it.qty}
-                                      </span>
-                                    </div>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <div className="text-xs">
-                                      <div className="font-mono">{it.style_no}</div>
-                                      <div>{it.product_name}</div>
-                                    </div>
-                                  </TooltipContent>
-                                </Tooltip>
-                              ))}
-                              {hiddenCount > 0 && (
-                                <div
-                                  style={{ width: 40, height: 40 }}
-                                  className="rounded-md bg-muted text-muted-foreground text-xs font-medium flex items-center justify-center"
-                                  title={`另有 ${hiddenCount} 款`}
-                                >
-                                  +{hiddenCount}
-                                </div>
-                              )}
-                              {b.items.length === 0 && <div style={{ width: 1, height: 56 }} />}
-                            </div>
-                            {/* 下半：彩带段 */}
-                            <button
-                              type="button"
-                              onClick={() => setSelectedDay(s => s === b.id ? null : b.id)}
-                              className={cn(
-                                "w-full flex flex-col items-center justify-center transition-opacity",
-                                bucketBg(b),
-                                !isSel && selectedDay && "opacity-40",
-                              )}
-                              style={{
-                                height: 44,
-                                clipPath: "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%, 10px 50%)",
-                              }}
-                            >
-                              <div className="text-[13px] font-medium leading-tight">{b.label}</div>
-                              <div className="text-[11px] font-normal opacity-90">{fmtNum(b.totalQty)} 件</div>
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </TooltipProvider>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* === 区块二：按供应商分组的款式卡 === */}
-          {loading ? (
-            <div className="space-y-3">
+            <div className="space-y-4">
+              <Skeleton className="h-40 w-full" />
               {[0, 1, 2].map(i => <Skeleton key={i} className="h-32 w-full" />)}
             </div>
-          ) : grouped.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 flex flex-col items-center text-center gap-2 text-emerald-700">
-                <PartyPopper className="size-8" />
-                <div className="font-medium">当前没有需要催货的供应商 🎉</div>
-              </CardContent>
-            </Card>
           ) : (
-            <div className="space-y-6">
-              {grouped.map(g => {
-                const open = isExpanded(g.supplier_id);
-                // 当选中某天时只显示对应 product_name 的款
-                const filteredStyles = selectedProductNames
-                  ? g.styles.filter(s => selectedProductNames.has(s.product_name))
-                  : g.styles;
-                // 长尾折叠：totalQty<=2
-                const main = filteredStyles.filter(s => s.totalQty > 2);
-                const tail = filteredStyles.filter(s => s.totalQty <= 2);
-                const tailKey = `tail|${g.supplier_id}`;
-                const tailOpen = !!showTail[tailKey];
-                const visibleForCopy = main.concat(tailOpen ? tail : []);
-                if (filteredStyles.length === 0) return null;
-                return (
-                  <Card key={g.supplier_id}>
-                    <div
-                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/40 cursor-pointer flex-wrap"
-                      onClick={() => toggle(g.supplier_id)}
-                    >
-                      {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                      <div className="font-medium truncate">{g.supplier_name || "未知供应商"}</div>
-                      <div className="text-sm text-muted-foreground hidden sm:block">
-                        催货 <span className="text-foreground font-semibold">{fmtNum(g.totalQty)}</span> 件 · {fmtNum(g.styleCount)} 款
-                      </div>
-                      {g.overdueQty > 0 && (
-                        <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FCEBEB] text-[#791F1F] font-medium" style={{ padding: "2px 8px" }}>
-                          已超时 {fmtNum(g.overdueQty)} 件
-                        </span>
-                      )}
-                      {g.due24Qty > 0 && (
-                        <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FAEEDA] text-[#633806] font-medium" style={{ padding: "2px 8px" }}>
-                          24h内 {fmtNum(g.due24Qty)} 件
-                        </span>
-                      )}
-                      <div className="ml-auto flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => copyChaseMsg(g, visibleForCopy)}>
-                          <Copy className="size-3 mr-1" /> 复制催货消息
-                        </Button>
-                        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => exportSupplier(g)}>
-                          <Download className="size-3 mr-1" /> 导出催货单
-                        </Button>
-                      </div>
-                    </div>
-                    {open && (
-                      <div className="border-t p-3 space-y-3">
-                        {main.length === 0 && tail.length === 0 && (
-                          <div className="text-sm text-muted-foreground py-2 text-center">无匹配款式</div>
-                        )}
-                        {main.map(s => (
-                          <StyleCardRow
-                            key={s.style_no}
-                            innerRef={el => { styleCardRefs.current[s.style_no] = el; }}
-                            style={s}
-                            onPreview={onPreview}
-                          />
-                        ))}
-                        {tail.length > 0 && (
-                          <div className="pt-1">
-                            <button
-                              type="button"
-                              className="text-xs text-muted-foreground border-t border-dashed w-full text-left pt-2 hover:text-foreground"
-                              onClick={() => setShowTail(s => ({ ...s, [tailKey]: !s[tailKey] }))}
-                            >
-                              {tailOpen ? "▾ 收起零头" : `▸ 另有零头 ${tail.length} 款 · 共 ${tail.reduce((x, s) => x + s.totalQty, 0)} 件`}
-                            </button>
-                            {tailOpen && (
-                              <div className="mt-2 space-y-3">
-                                {tail.map(s => (
-                                  <StyleCardRow
-                                    key={s.style_no}
-                                    innerRef={el => { styleCardRefs.current[s.style_no] = el; }}
-                                    style={s}
-                                    onPreview={onPreview}
-                                  />
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </Card>
-                );
-              })}
-            </div>
+            <ChaseListVisual timeline={timelineRowsRaw} suppliers={supplierRows} />
           )}
         </TabsContent>
 
@@ -960,84 +464,6 @@ export default function ChaseListPage() {
           )}
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-function StyleCardRow({ style: s, innerRef, onPreview }: {
-  style: {
-    style_no: string; product_name: string; image_url: string | null;
-    skus: { sku: string; total_qty: number; overdue_qty: number }[];
-    totalQty: number; overdueQty: number; due24Qty: number; maxDays: number;
-  };
-  innerRef: (el: HTMLDivElement | null) => void;
-  onPreview: (url: string, sku: string) => void;
-}) {
-  const [showAllSkus, setShowAllSkus] = useState(false);
-  const visibleSkus = showAllSkus ? s.skus : s.skus.slice(0, 6);
-  const hiddenCount = s.skus.length - visibleSkus.length;
-  const shortName = shortProductName(s.product_name, s.style_no);
-  return (
-    <div
-      ref={innerRef}
-      className="flex items-center gap-3 p-3 border rounded-md bg-card transition-shadow"
-    >
-      <ProductThumb
-        src={s.image_url}
-        alt={shortName || s.style_no}
-        size={64}
-        radiusClass="rounded-lg"
-        ringClass={s.overdueQty > 0 ? "ring-red-500" : s.due24Qty > 0 ? "ring-orange-500" : "ring-muted-foreground/30"}
-        onClick={() => s.image_url && onPreview(s.image_url, s.style_no)}
-      />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1.5 min-w-0">
-          <span className="font-mono text-xs text-muted-foreground shrink-0">{s.style_no}</span>
-          {shortName && (
-            <span className="text-sm font-medium truncate min-w-0" title={shortName}>
-              {shortName}
-            </span>
-          )}
-          <div className="ml-auto flex items-center gap-1.5 shrink-0">
-            {s.overdueQty > 0 && (
-              <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FCEBEB] text-[#791F1F] font-medium" style={{ padding: "2px 8px" }}>
-                已超时 {s.overdueQty} 件 · 最长 {s.maxDays} 天
-              </span>
-            )}
-            {s.overdueQty === 0 && s.due24Qty > 0 && (
-              <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FAEEDA] text-[#633806] font-medium" style={{ padding: "2px 8px" }}>
-                24h内 {s.due24Qty} 件
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {visibleSkus.map(sk => (
-            <span
-              key={sk.sku}
-              className={cn(
-                "inline-flex items-center text-xs font-mono rounded-md px-2 py-0.5",
-                sk.overdue_qty > 0
-                  ? "bg-[#FCEBEB] text-[#791F1F]"
-                  : "bg-muted text-muted-foreground",
-              )}
-              title={sk.sku}
-            >
-              {skuTail(sk.sku)} × {sk.total_qty}
-            </span>
-          ))}
-          {hiddenCount > 0 && (
-            <button type="button" className="text-xs text-muted-foreground underline"
-              onClick={() => setShowAllSkus(true)}>
-              +{hiddenCount}
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="flex flex-col items-end justify-center shrink-0 self-stretch pl-2">
-        <div className="text-2xl font-bold leading-none tabular-nums">{s.totalQty.toLocaleString("zh-CN")}</div>
-        <div className="text-[11px] text-muted-foreground mt-1">件待催</div>
-      </div>
     </div>
   );
 }
