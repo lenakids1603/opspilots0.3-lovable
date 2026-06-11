@@ -593,7 +593,7 @@ export default function ChaseListPage() {
             <Skeleton className="h-40 w-full" />
           ) : timelineBuckets.length > 0 && (
             <Card>
-              <CardContent className="py-4">
+              <CardContent className="p-5">
                 <div className="flex items-center justify-between mb-3">
                   <div className="text-sm font-medium">发货截止时间轴</div>
                   {selectedDay && (
@@ -603,16 +603,16 @@ export default function ChaseListPage() {
                   )}
                 </div>
                 <TooltipProvider delayDuration={150}>
-                  <div className="overflow-x-auto pb-2">
-                    <div className="flex items-stretch gap-1 min-w-max">
+                  <div className="overflow-x-auto">
+                    <div className="flex items-stretch gap-1 min-w-max w-full">
                       {timelineBuckets.map((b) => {
                         const isSel = selectedDay === b.id;
                         const visibleItems = expandedDay[b.id] ? b.items : b.items.slice(0, 3);
                         const hiddenCount = b.items.length - visibleItems.length;
                         return (
-                          <div key={b.id} className="flex flex-col items-center" style={{ minWidth: 168 }}>
-                            {/* 缩略图 */}
-                            <div className="flex items-end justify-center gap-1 h-14 mb-1 px-1 flex-wrap">
+                          <div key={b.id} className="flex-1 min-w-[140px] flex flex-col items-center">
+                            {/* 缩略图行 */}
+                            <div className="flex items-end justify-center gap-2 min-h-[56px] mb-[10px] px-1 flex-wrap">
                               {visibleItems.map((it) => (
                                 <Tooltip key={it.key}>
                                   <TooltipTrigger asChild>
@@ -620,6 +620,8 @@ export default function ChaseListPage() {
                                       <ProductThumb
                                         src={it.image_url}
                                         alt={it.product_name}
+                                        size={48}
+                                        radiusClass="rounded-lg"
                                         ringClass={URGENCY_RING[it.urgency]}
                                         onClick={() => scrollToStyle(it.style_no)}
                                       />
@@ -639,26 +641,30 @@ export default function ChaseListPage() {
                               {hiddenCount > 0 && (
                                 <button
                                   type="button"
-                                  className="text-[10px] text-muted-foreground underline self-end"
                                   onClick={() => setExpandedDay(s => ({ ...s, [b.id]: true }))}
+                                  className="w-12 h-12 rounded-lg bg-muted text-muted-foreground text-xs font-medium flex items-center justify-center hover:bg-muted/80"
+                                  aria-label="展开更多"
                                 >
-                                  +{hiddenCount}款
+                                  +{hiddenCount}
                                 </button>
                               )}
                             </div>
-                            {/* 箭头段 */}
+                            {/* 彩带段 */}
                             <button
                               type="button"
                               onClick={() => setSelectedDay(s => s === b.id ? null : b.id)}
                               className={cn(
-                                "relative w-full py-2 px-3 text-xs font-medium transition-opacity",
+                                "relative w-full flex flex-col items-center justify-center transition-opacity",
                                 bucketBg(b),
                                 !isSel && selectedDay && "opacity-40",
                               )}
-                              style={{ clipPath: "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%, 10px 50%)" }}
+                              style={{
+                                height: 44,
+                                clipPath: "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%, 10px 50%)",
+                              }}
                             >
-                              <div className="leading-tight">{b.label}</div>
-                              <div className="text-[10px] opacity-90">合计 {fmtNum(b.totalQty)} 件</div>
+                              <div className="text-[13px] font-medium leading-tight">{b.label}</div>
+                              <div className="text-[11px] opacity-90">{fmtNum(b.totalQty)} 件</div>
                             </button>
                           </div>
                         );
