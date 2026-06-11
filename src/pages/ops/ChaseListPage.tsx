@@ -54,6 +54,12 @@ type PurchaseRow = {
   final_gap: number;
   earliest_pay_time: string | null;
 };
+type UrgencyRow = {
+  urgency: "overdue" | "due24" | "due48" | "due72" | "later";
+  qty: number;
+  order_count: number;
+  supplier_count: number;
+};
 
 const fmtNum = (n: number | null | undefined) =>
   n == null ? "-" : Number(n).toLocaleString("zh-CN");
@@ -122,9 +128,18 @@ export default function ChaseListPage() {
         },
         staleTime: 60_000,
       },
+      {
+        queryKey: ["chase", "urgency_summary"],
+        queryFn: async () => {
+          const { data, error } = await supabase.rpc("ops_chase_urgency_summary" as never);
+          if (error) throw error;
+          return (data ?? []) as UrgencyRow[];
+        },
+        staleTime: 60_000,
+      },
     ],
   });
-  const [supplierQ, questionQ, purchaseQ] = queries;
+  const [supplierQ, questionQ, purchaseQ, urgencyQ] = queries;
   const loading = queries.some(q => q.isLoading);
   const anyError = queries.find(q => q.error)?.error as { code?: string; message?: string } | undefined;
   const isForbidden = anyError?.code === "42501" || /42501|权限|permission/i.test(anyError?.message ?? "");
@@ -132,28 +147,41 @@ export default function ChaseListPage() {
   const supplierRows = (supplierQ.data ?? []) as SupplierRow[];
   const questionCount = (questionQ.data ?? { pending_review_orders: 0, pending_review_items: 0, pending_review_qty: 0 }) as PendingReviewCount;
   const purchaseRows = (purchaseQ.data ?? []) as PurchaseRow[];
+  const urgencyRows = (urgencyQ.data ?? []) as UrgencyRow[];
+  const urgencyByKey = useMemo(() => {
+    const m: Record<string, UrgencyRow> = {};
+    for (const r of urgencyRows) m[r.urgency] = r;
+    return m;
+  }, [urgencyRows]);
+  const overdueU = urgencyByKey.overdue;
+  const due24U = urgencyByKey.due24;
 
   // 汇总
   const summary = useMemo(() => {
     const totalQty = supplierRows.reduce((s, r) => s + Number(r.total_qty || 0), 0);
     const supplierIds = new Set(supplierRows.map(r => r.supplier_id));
     const skus = new Set(supplierRows.map(r => r.sku));
-    const maxOverdue = supplierRows.reduce((m, r) => Math.max(m, Number(r.max_overdue_days || 0)), 0);
     return {
-      totalQty, supplierCount: supplierIds.size, skuCount: skus.size, maxOverdue,
+      totalQty, supplierCount: supplierIds.size, skuCount: skus.size,
     };
   }, [supplierRows]);
 
   // 按供应商分组
   const grouped = useMemo(() => {
-    const map = new Map<string, { supplier_id: string; supplier_name: string; rows: SupplierRow[]; totalQty: number; styleCount: number; maxDays: number }>();
+    const map = new Map<string, {
+      supplier_id: string; supplier_name: string; rows: SupplierRow[];
+      totalQty: number; overdueQty: number; due24Qty: number;
+      styleCount: number; maxDays: number;
+    }>();
     for (const r of supplierRows) {
       const g = map.get(r.supplier_id) ?? {
         supplier_id: r.supplier_id, supplier_name: r.supplier_name, rows: [],
-        totalQty: 0, styleCount: 0, maxDays: 0,
+        totalQty: 0, overdueQty: 0, due24Qty: 0, styleCount: 0, maxDays: 0,
       };
       g.rows.push(r);
       g.totalQty += Number(r.total_qty || 0);
+      g.overdueQty += Number(r.overdue_qty || 0);
+      g.due24Qty += Number(r.due24_qty || 0);
       g.maxDays = Math.max(g.maxDays, Number(r.max_overdue_days || 0));
       map.set(r.supplier_id, g);
     }
@@ -175,9 +203,10 @@ export default function ChaseListPage() {
   );
 
   const exportSupplier = (g: typeof grouped[number]) => {
-    const headers = ["款号", "SKU", "急需件数", "其中已超时", "已超期天数", "涉及采购单"];
+    const headers = ["款号", "SKU", "总件数", "其中已超时", "24小时内到期", "最长超期天数", "涉及采购单号"];
     const rows = g.rows.map(r => [
-      r.style_no, r.sku, Number(r.total_qty || 0), Number(r.overdue_qty || 0),
+      r.style_no, r.sku,
+      Number(r.total_qty || 0), Number(r.overdue_qty || 0), Number(r.due24_qty || 0),
       Number(r.max_overdue_days || 0),
       (r.po_details ?? []).map(p => p.po_id).join(" / "),
     ]);
@@ -185,12 +214,13 @@ export default function ChaseListPage() {
   };
 
   const exportAll = () => {
-    const headers = ["供应商", "款号", "SKU", "急需件数", "其中已超时", "已超期天数", "涉及采购单"];
+    const headers = ["供应商", "款号", "SKU", "总件数", "其中已超时", "24小时内到期", "最长超期天数", "涉及采购单号"];
     const rows: (string | number)[][] = [];
     for (const g of grouped) {
       for (const r of g.rows) {
         rows.push([
-          g.supplier_name, r.style_no, r.sku, Number(r.total_qty || 0), Number(r.overdue_qty || 0),
+          g.supplier_name, r.style_no, r.sku,
+          Number(r.total_qty || 0), Number(r.overdue_qty || 0), Number(r.due24_qty || 0),
           Number(r.max_overdue_days || 0),
           (r.po_details ?? []).map(p => p.po_id).join(" / "),
         ]);
@@ -198,6 +228,7 @@ export default function ChaseListPage() {
     }
     downloadCSV(`催货单_全部_${todayCN()}.csv`, headers, rows);
   };
+
 
   const refresh = () => queries.forEach(q => q.refetch());
 
@@ -239,17 +270,18 @@ export default function ChaseListPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <SummaryCard
           label="需催货件数" loading={loading}
-          value={fmtNum(summary.totalQty)} accent="danger" suffix="件"
+          value={fmtNum(summary.totalQty)} suffix="件"
+          extra={`涉及 ${fmtNum(summary.supplierCount)} 家供应商 · ${fmtNum(summary.skuCount)} 个 SKU`}
         />
         <SummaryCard
-          label="涉及供应商" loading={loading}
-          value={fmtNum(summary.supplierCount)} suffix="家"
-          extra={`涉及 ${fmtNum(summary.skuCount)} 个 SKU`}
+          label="已对客超时" loading={loading}
+          value={fmtNum(overdueU?.qty ?? 0)} suffix="件" accent="danger"
+          extra={`${fmtNum(overdueU?.order_count ?? 0)} 单`}
         />
         <SummaryCard
-          label="最长超期" loading={loading}
-          value={fmtNum(summary.maxOverdue)} suffix="天"
-          accent={summary.maxOverdue >= 15 ? "danger" : undefined}
+          label="24小时内到期" loading={loading}
+          value={fmtNum(due24U?.qty ?? 0)} suffix="件" accent="warning"
+          extra={`${fmtNum(due24U?.order_count ?? 0)} 单 · 今晚必催`}
         />
         <SummaryCard
           label="待审核单" loading={loading}
@@ -291,10 +323,18 @@ export default function ChaseListPage() {
                       {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                       <div className="font-medium flex-1 truncate">{g.supplier_name || "未知供应商"}</div>
                       <div className="text-sm text-muted-foreground hidden sm:block">
-                        超期 <span className="text-foreground font-semibold">{fmtNum(g.totalQty)}</span> 件
+                        催货 <span className="text-foreground font-semibold">{fmtNum(g.totalQty)}</span> 件
                         · 涉及 {fmtNum(g.styleCount)} 款
                       </div>
-                      <Badge variant="destructive">最长超期 {g.maxDays} 天</Badge>
+                      {g.overdueQty > 0 && (
+                        <Badge variant="destructive">已超时 {fmtNum(g.overdueQty)} 件</Badge>
+                      )}
+                      {g.due24Qty > 0 && (
+                        <Badge className="bg-orange-500 hover:bg-orange-500/90 text-white border-transparent">
+                          24h内 {fmtNum(g.due24Qty)} 件
+                        </Badge>
+                      )}
+                      <Badge variant="secondary">最长超期 {g.maxDays} 天</Badge>
                       <Button
                         variant="outline" size="sm"
                         onClick={(e) => { e.stopPropagation(); exportSupplier(g); }}
@@ -304,13 +344,16 @@ export default function ChaseListPage() {
                     </button>
                     {open && (
                       <div className="border-t overflow-x-auto">
-                        <table className="w-full text-sm min-w-[720px]">
+                        <table className="w-full text-sm min-w-[860px]">
                           <thead className="bg-muted/40 text-muted-foreground">
                             <tr>
                               <th className="text-left px-4 py-2 font-medium w-8"></th>
                               <th className="text-left px-4 py-2 font-medium">SKU</th>
                               <th className="text-left px-4 py-2 font-medium">款号</th>
-                              <th className="text-right px-4 py-2 font-medium">急需件数</th>
+                              <th className="text-right px-4 py-2 font-medium">总件数</th>
+                              <th className="text-right px-4 py-2 font-medium">已超时</th>
+                              <th className="text-right px-4 py-2 font-medium">24h内</th>
+                              <th className="text-right px-4 py-2 font-medium">48h内</th>
                               <th className="text-right px-4 py-2 font-medium">涉及采购单</th>
                               <th className="text-right px-4 py-2 font-medium">最长超期</th>
                             </tr>
@@ -335,6 +378,13 @@ export default function ChaseListPage() {
                                     <td className="px-4 py-2 font-mono">{r.sku}</td>
                                     <td className="px-4 py-2">{r.style_no || "-"}</td>
                                     <td className="px-4 py-2 text-right font-semibold">{fmtNum(r.total_qty)}</td>
+                                    <td className={cn("px-4 py-2 text-right", Number(r.overdue_qty) > 0 && "text-destructive font-medium")}>
+                                      {fmtNum(r.overdue_qty)}
+                                    </td>
+                                    <td className={cn("px-4 py-2 text-right", Number(r.due24_qty) > 0 && "text-orange-500 font-medium")}>
+                                      {fmtNum(r.due24_qty)}
+                                    </td>
+                                    <td className="px-4 py-2 text-right">{fmtNum(r.due48_qty)}</td>
                                     <td className="px-4 py-2 text-right">{r.po_count}</td>
                                     <td className="px-4 py-2 text-right">
                                       <Badge variant={r.max_overdue_days >= 15 ? "destructive" : "secondary"}>
@@ -345,7 +395,7 @@ export default function ChaseListPage() {
                                   {poOpen && (r.po_details?.length ?? 0) > 0 && (
                                     <tr key={key + "-d"} className="bg-muted/10 border-t">
                                       <td></td>
-                                      <td colSpan={5} className="px-4 py-2">
+                                      <td colSpan={8} className="px-4 py-2">
                                         <table className="text-xs w-full">
                                           <thead className="text-muted-foreground">
                                             <tr>
@@ -446,7 +496,7 @@ function SummaryCard({
   value: string;
   suffix?: string;
   extra?: string;
-  accent?: "danger";
+  accent?: "danger" | "warning";
   loading?: boolean;
   onClick?: () => void;
 }) {
@@ -461,7 +511,9 @@ function SummaryCard({
           <Skeleton className="h-7 w-20" />
         ) : (
           <div className="flex items-baseline gap-1">
-            <span className={cn("text-2xl font-bold", accent === "danger" && "text-destructive")}>
+            <span className={cn("text-2xl font-bold",
+              accent === "danger" && "text-destructive",
+              accent === "warning" && "text-orange-500")}>
               {value}
             </span>
             {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
