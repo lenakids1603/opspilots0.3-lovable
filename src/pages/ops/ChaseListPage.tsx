@@ -522,12 +522,12 @@ export default function ChaseListPage() {
     }
   };
 
-  // 时间轴段颜色
+  // 时间轴段颜色：浅底深字
   const bucketBg = (b: DayBucket) =>
-    b.isOverdue ? "bg-red-700 text-white"
-      : b.isToday ? "bg-purple-600 text-white"
-      : b.id === addDays(today, 1) ? "bg-orange-500 text-white"
-      : "bg-emerald-600 text-white";
+    b.isOverdue ? "bg-[#FCEBEB] text-[#791F1F]"
+      : b.isToday ? "bg-[#EEEDFE] text-[#26215C]"
+      : b.id === addDays(today, 1) ? "bg-[#FAEEDA] text-[#633806]"
+      : "bg-[#E1F5EE] text-[#04342C]";
 
   return (
     <div className="p-6">
