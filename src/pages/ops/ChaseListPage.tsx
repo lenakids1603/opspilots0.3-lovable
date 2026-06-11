@@ -147,15 +147,22 @@ export default function ChaseListPage() {
   const supplierRows = (supplierQ.data ?? []) as SupplierRow[];
   const questionCount = (questionQ.data ?? { pending_review_orders: 0, pending_review_items: 0, pending_review_qty: 0 }) as PendingReviewCount;
   const purchaseRows = (purchaseQ.data ?? []) as PurchaseRow[];
+  const urgencyRows = (urgencyQ.data ?? []) as UrgencyRow[];
+  const urgencyByKey = useMemo(() => {
+    const m: Record<string, UrgencyRow> = {};
+    for (const r of urgencyRows) m[r.urgency] = r;
+    return m;
+  }, [urgencyRows]);
+  const overdueU = urgencyByKey.overdue;
+  const due24U = urgencyByKey.due24;
 
   // 汇总
   const summary = useMemo(() => {
     const totalQty = supplierRows.reduce((s, r) => s + Number(r.total_qty || 0), 0);
     const supplierIds = new Set(supplierRows.map(r => r.supplier_id));
     const skus = new Set(supplierRows.map(r => r.sku));
-    const maxOverdue = supplierRows.reduce((m, r) => Math.max(m, Number(r.max_overdue_days || 0)), 0);
     return {
-      totalQty, supplierCount: supplierIds.size, skuCount: skus.size, maxOverdue,
+      totalQty, supplierCount: supplierIds.size, skuCount: skus.size,
     };
   }, [supplierRows]);
 
