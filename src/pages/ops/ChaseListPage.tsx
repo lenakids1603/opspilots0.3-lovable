@@ -477,7 +477,7 @@ function SummaryCard({
   value: string;
   suffix?: string;
   extra?: string;
-  accent?: "danger";
+  accent?: "danger" | "warning";
   loading?: boolean;
   onClick?: () => void;
 }) {
@@ -492,7 +492,9 @@ function SummaryCard({
           <Skeleton className="h-7 w-20" />
         ) : (
           <div className="flex items-baseline gap-1">
-            <span className={cn("text-2xl font-bold", accent === "danger" && "text-destructive")}>
+            <span className={cn("text-2xl font-bold",
+              accent === "danger" && "text-destructive",
+              accent === "warning" && "text-orange-500")}>
               {value}
             </span>
             {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
