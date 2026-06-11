@@ -34,6 +34,7 @@ import DeliveryDashboardPage from "./pages/ops/DeliveryDashboardPage";
 import SalesOrdersListPage from "./pages/ops/SalesOrdersListPage";
 import ShippingRiskPage from "./pages/ops/ShippingRiskPage";
 import SalesBoardPage from "./pages/ops/SalesBoardPage";
+import ChaseListPage from "./pages/ops/ChaseListPage";
 import SupplierDashboard from "./pages/supplier/SupplierDashboard";
 import SupplierPurchaseOrdersPage from "./pages/supplier/PurchaseOrdersPage";
 import SupplierPlaceholder from "./pages/supplier/SupplierPlaceholder";
