@@ -308,8 +308,8 @@ export default function ChaseListPage() {
                               const key = `${g.supplier_id}|${r.sku}`;
                               const poOpen = !!openPo[key];
                               return (
-                                <>
-                                  <tr key={key} className="border-t hover:bg-muted/20">
+                                <React.Fragment key={key}>
+                                  <tr className="border-t hover:bg-muted/20">
                                     <td className="px-4 py-2">
                                       <button
                                         type="button"
