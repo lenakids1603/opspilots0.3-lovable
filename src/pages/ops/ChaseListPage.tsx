@@ -111,6 +111,19 @@ function skuTail(sku: string) {
   return sku.length > 4 ? sku.slice(-4) : sku;
 }
 
+/** 从 product_name 中抽取【】内的短名；若末尾重复款号则去掉。 */
+function shortProductName(name: string | null | undefined, styleNo?: string) {
+  const raw = (name ?? "").trim();
+  if (!raw) return "";
+  const m = raw.match(/【([^】]+)】/);
+  let s = m ? m[1].trim() : raw;
+  if (styleNo) {
+    const re = new RegExp(`[\\s·-]*${styleNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`);
+    s = s.replace(re, "").trim();
+  }
+  return s;
+}
+
 const URGENCY_RANK: Record<Urgency, number> = { overdue: 5, due24: 4, due48: 3, due72: 2, later: 1 };
 const URGENCY_RING: Record<Urgency, string> = {
   overdue: "ring-red-500",
@@ -177,15 +190,17 @@ function SkuThumb({ sku, imageUrl, onPreview, size = 40 }: {
   );
 }
 
-function ProductThumb({ src, alt, size = 44, ringClass, onClick }: {
-  src: string | null; alt: string; size?: number; ringClass?: string; onClick?: () => void;
+function ProductThumb({ src, alt, size = 48, ringClass, onClick, radiusClass = "rounded-lg" }: {
+  src: string | null; alt: string; size?: number; ringClass?: string;
+  onClick?: () => void; radiusClass?: string;
 }) {
   const [errored, setErrored] = useState(false);
   const showImg = !!src && !errored;
   return (
     <div
       className={cn(
-        "rounded-md bg-muted overflow-hidden flex items-center justify-center shrink-0 ring-2 ring-offset-1 ring-offset-background",
+        radiusClass,
+        "bg-muted overflow-hidden flex items-center justify-center shrink-0 ring-2 ring-offset-1 ring-offset-background",
         ringClass ?? "ring-muted-foreground/30",
         onClick && "cursor-pointer hover:opacity-90",
       )}
@@ -507,12 +522,12 @@ export default function ChaseListPage() {
     }
   };
 
-  // 时间轴段颜色
+  // 时间轴段颜色：浅底深字
   const bucketBg = (b: DayBucket) =>
-    b.isOverdue ? "bg-red-700 text-white"
-      : b.isToday ? "bg-purple-600 text-white"
-      : b.id === addDays(today, 1) ? "bg-orange-500 text-white"
-      : "bg-emerald-600 text-white";
+    b.isOverdue ? "bg-[#FCEBEB] text-[#791F1F]"
+      : b.isToday ? "bg-[#EEEDFE] text-[#26215C]"
+      : b.id === addDays(today, 1) ? "bg-[#FAEEDA] text-[#633806]"
+      : "bg-[#E1F5EE] text-[#04342C]";
 
   return (
     <div className="p-6">
@@ -578,7 +593,7 @@ export default function ChaseListPage() {
             <Skeleton className="h-40 w-full" />
           ) : timelineBuckets.length > 0 && (
             <Card>
-              <CardContent className="py-4">
+              <CardContent className="p-5">
                 <div className="flex items-center justify-between mb-3">
                   <div className="text-sm font-medium">发货截止时间轴</div>
                   {selectedDay && (
@@ -588,16 +603,16 @@ export default function ChaseListPage() {
                   )}
                 </div>
                 <TooltipProvider delayDuration={150}>
-                  <div className="overflow-x-auto pb-2">
-                    <div className="flex items-stretch gap-1 min-w-max">
+                  <div className="overflow-x-auto">
+                    <div className="flex items-stretch gap-1 min-w-max w-full">
                       {timelineBuckets.map((b) => {
                         const isSel = selectedDay === b.id;
                         const visibleItems = expandedDay[b.id] ? b.items : b.items.slice(0, 3);
                         const hiddenCount = b.items.length - visibleItems.length;
                         return (
-                          <div key={b.id} className="flex flex-col items-center" style={{ minWidth: 168 }}>
-                            {/* 缩略图 */}
-                            <div className="flex items-end justify-center gap-1 h-14 mb-1 px-1 flex-wrap">
+                          <div key={b.id} className="flex-1 min-w-[140px] flex flex-col items-center">
+                            {/* 缩略图行 */}
+                            <div className="flex items-end justify-center gap-2 min-h-[56px] mb-[10px] px-1 flex-wrap">
                               {visibleItems.map((it) => (
                                 <Tooltip key={it.key}>
                                   <TooltipTrigger asChild>
@@ -605,6 +620,8 @@ export default function ChaseListPage() {
                                       <ProductThumb
                                         src={it.image_url}
                                         alt={it.product_name}
+                                        size={48}
+                                        radiusClass="rounded-lg"
                                         ringClass={URGENCY_RING[it.urgency]}
                                         onClick={() => scrollToStyle(it.style_no)}
                                       />
@@ -624,26 +641,30 @@ export default function ChaseListPage() {
                               {hiddenCount > 0 && (
                                 <button
                                   type="button"
-                                  className="text-[10px] text-muted-foreground underline self-end"
                                   onClick={() => setExpandedDay(s => ({ ...s, [b.id]: true }))}
+                                  className="w-12 h-12 rounded-lg bg-muted text-muted-foreground text-xs font-medium flex items-center justify-center hover:bg-muted/80"
+                                  aria-label="展开更多"
                                 >
-                                  +{hiddenCount}款
+                                  +{hiddenCount}
                                 </button>
                               )}
                             </div>
-                            {/* 箭头段 */}
+                            {/* 彩带段 */}
                             <button
                               type="button"
                               onClick={() => setSelectedDay(s => s === b.id ? null : b.id)}
                               className={cn(
-                                "relative w-full py-2 px-3 text-xs font-medium transition-opacity",
+                                "relative w-full flex flex-col items-center justify-center transition-opacity",
                                 bucketBg(b),
                                 !isSel && selectedDay && "opacity-40",
                               )}
-                              style={{ clipPath: "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%, 10px 50%)" }}
+                              style={{
+                                height: 44,
+                                clipPath: "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%, 10px 50%)",
+                              }}
                             >
-                              <div className="leading-tight">{b.label}</div>
-                              <div className="text-[10px] opacity-90">合计 {fmtNum(b.totalQty)} 件</div>
+                              <div className="text-[13px] font-medium leading-tight">{b.label}</div>
+                              <div className="text-[11px] opacity-90">{fmtNum(b.totalQty)} 件</div>
                             </button>
                           </div>
                         );
@@ -668,7 +689,7 @@ export default function ChaseListPage() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-6">
               {grouped.map(g => {
                 const open = isExpanded(g.supplier_id);
                 // 当选中某天时只显示对应 product_name 的款
@@ -693,23 +714,27 @@ export default function ChaseListPage() {
                       <div className="text-sm text-muted-foreground hidden sm:block">
                         催货 <span className="text-foreground font-semibold">{fmtNum(g.totalQty)}</span> 件 · {fmtNum(g.styleCount)} 款
                       </div>
-                      {g.overdueQty > 0 && <Badge variant="destructive">已超时 {fmtNum(g.overdueQty)} 件</Badge>}
+                      {g.overdueQty > 0 && (
+                        <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FCEBEB] text-[#791F1F] font-medium" style={{ padding: "2px 8px" }}>
+                          已超时 {fmtNum(g.overdueQty)} 件
+                        </span>
+                      )}
                       {g.due24Qty > 0 && (
-                        <Badge className="bg-orange-500 hover:bg-orange-500/90 text-white border-transparent">
+                        <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FAEEDA] text-[#633806] font-medium" style={{ padding: "2px 8px" }}>
                           24h内 {fmtNum(g.due24Qty)} 件
-                        </Badge>
+                        </span>
                       )}
                       <div className="ml-auto flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                        <Button variant="outline" size="sm" onClick={() => copyChaseMsg(g, visibleForCopy)}>
-                          <Copy className="mr-1" /> 复制催货消息
+                        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => copyChaseMsg(g, visibleForCopy)}>
+                          <Copy className="size-3 mr-1" /> 复制催货消息
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => exportSupplier(g)}>
-                          <Download className="mr-1" /> 导出催货单
+                        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => exportSupplier(g)}>
+                          <Download className="size-3 mr-1" /> 导出催货单
                         </Button>
                       </div>
                     </div>
                     {open && (
-                      <div className="border-t p-3 space-y-2">
+                      <div className="border-t p-3 space-y-3">
                         {main.length === 0 && tail.length === 0 && (
                           <div className="text-sm text-muted-foreground py-2 text-center">无匹配款式</div>
                         )}
@@ -731,7 +756,7 @@ export default function ChaseListPage() {
                               {tailOpen ? "▾ 收起零头" : `▸ 另有零头 ${tail.length} 款 · 共 ${tail.reduce((x, s) => x + s.totalQty, 0)} 件`}
                             </button>
                             {tailOpen && (
-                              <div className="mt-2 space-y-2">
+                              <div className="mt-2 space-y-3">
                                 {tail.map(s => (
                                   <StyleCardRow
                                     key={s.style_no}
@@ -932,6 +957,7 @@ function StyleCardRow({ style: s, innerRef, onPreview }: {
   const [showAllSkus, setShowAllSkus] = useState(false);
   const visibleSkus = showAllSkus ? s.skus : s.skus.slice(0, 6);
   const hiddenCount = s.skus.length - visibleSkus.length;
+  const shortName = shortProductName(s.product_name, s.style_no);
   return (
     <div
       ref={innerRef}
@@ -939,22 +965,29 @@ function StyleCardRow({ style: s, innerRef, onPreview }: {
     >
       <ProductThumb
         src={s.image_url}
-        alt={s.product_name || s.style_no}
+        alt={shortName || s.style_no}
         size={64}
+        radiusClass="rounded-lg"
         ringClass={s.overdueQty > 0 ? "ring-red-500" : s.due24Qty > 0 ? "ring-orange-500" : "ring-muted-foreground/30"}
         onClick={() => s.image_url && onPreview(s.image_url, s.style_no)}
       />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap mb-1">
-          <span className="font-mono text-sm font-medium">{s.style_no}</span>
-          {s.product_name && <span className="text-sm text-muted-foreground truncate">{s.product_name}</span>}
+        <div className="flex items-center gap-2 mb-1.5 min-w-0">
+          <span className="font-mono text-xs text-muted-foreground shrink-0">{s.style_no}</span>
+          {shortName && (
+            <span className="text-sm font-medium truncate flex-1 min-w-0" title={shortName}>
+              {shortName}
+            </span>
+          )}
           {s.overdueQty > 0 && (
-            <Badge variant="destructive">已超时 {s.overdueQty} 件 · 最长 {s.maxDays} 天</Badge>
+            <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FCEBEB] text-[#791F1F] font-medium shrink-0" style={{ padding: "2px 8px" }}>
+              已超时 {s.overdueQty} 件 · 最长 {s.maxDays} 天
+            </span>
           )}
           {s.overdueQty === 0 && s.due24Qty > 0 && (
-            <Badge className="bg-orange-500 hover:bg-orange-500/90 text-white border-transparent">
+            <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FAEEDA] text-[#633806] font-medium shrink-0" style={{ padding: "2px 8px" }}>
               24h内 {s.due24Qty} 件
-            </Badge>
+            </span>
           )}
         </div>
         <div className="flex flex-wrap gap-1">
@@ -962,8 +995,10 @@ function StyleCardRow({ style: s, innerRef, onPreview }: {
             <span
               key={sk.sku}
               className={cn(
-                "inline-flex items-center text-xs font-mono rounded-full px-2 py-0.5 bg-muted",
-                sk.overdue_qty > 0 && "border border-red-500 text-red-700 bg-red-50",
+                "inline-flex items-center text-xs font-mono rounded-md px-2 py-0.5",
+                sk.overdue_qty > 0
+                  ? "bg-[#FCEBEB] text-[#791F1F]"
+                  : "bg-muted text-muted-foreground",
               )}
               title={sk.sku}
             >
@@ -978,9 +1013,9 @@ function StyleCardRow({ style: s, innerRef, onPreview }: {
           )}
         </div>
       </div>
-      <div className="text-right shrink-0">
-        <div className="text-2xl font-bold leading-none">{s.totalQty.toLocaleString("zh-CN")}</div>
-        <div className="text-[10px] text-muted-foreground mt-1">件</div>
+      <div className="flex flex-col items-end justify-center shrink-0 self-stretch pl-2">
+        <div className="text-2xl font-bold leading-none tabular-nums">{s.totalQty.toLocaleString("zh-CN")}</div>
+        <div className="text-[11px] text-muted-foreground mt-1">件待催</div>
       </div>
     </div>
   );

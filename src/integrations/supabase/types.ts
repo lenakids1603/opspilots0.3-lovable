@@ -548,6 +548,7 @@ export type Database = {
           created_at: string
           id: string
           item_unique_key: string
+          modified_at_jst: string | null
           name: string | null
           pic: string | null
           properties_value: string | null
@@ -568,6 +569,7 @@ export type Database = {
           created_at?: string
           id?: string
           item_unique_key: string
+          modified_at_jst?: string | null
           name?: string | null
           pic?: string | null
           properties_value?: string | null
@@ -588,6 +590,7 @@ export type Database = {
           created_at?: string
           id?: string
           item_unique_key?: string
+          modified_at_jst?: string | null
           name?: string | null
           pic?: string | null
           properties_value?: string | null
@@ -868,6 +871,7 @@ export type Database = {
           created_at: string
           id: string
           item_unique_key: string
+          modified_at_jst: string | null
           name: string | null
           outer_oi_id: string | null
           pic: string | null
@@ -893,6 +897,7 @@ export type Database = {
           created_at?: string
           id?: string
           item_unique_key: string
+          modified_at_jst?: string | null
           name?: string | null
           outer_oi_id?: string | null
           pic?: string | null
@@ -918,6 +923,7 @@ export type Database = {
           created_at?: string
           id?: string
           item_unique_key?: string
+          modified_at_jst?: string | null
           name?: string | null
           outer_oi_id?: string | null
           pic?: string | null
@@ -1048,6 +1054,7 @@ export type Database = {
           item_unique_key: string
           jst_item_id: string | null
           jst_o_id: string
+          modified_at_jst: string | null
           paid_amount: number
           pic: string | null
           product_name: string | null
@@ -1076,6 +1083,7 @@ export type Database = {
           item_unique_key: string
           jst_item_id?: string | null
           jst_o_id: string
+          modified_at_jst?: string | null
           paid_amount?: number
           pic?: string | null
           product_name?: string | null
@@ -1104,6 +1112,7 @@ export type Database = {
           item_unique_key?: string
           jst_item_id?: string | null
           jst_o_id?: string
+          modified_at_jst?: string | null
           paid_amount?: number
           pic?: string | null
           product_name?: string | null
@@ -3968,6 +3977,7 @@ export type Database = {
           id: string
           io_id: string
           item_unique_key: string
+          modified_at_jst: string | null
           o_id: string | null
           package_id: string
           package_unique_key: string
@@ -3983,6 +3993,7 @@ export type Database = {
           id?: string
           io_id: string
           item_unique_key: string
+          modified_at_jst?: string | null
           o_id?: string | null
           package_id: string
           package_unique_key: string
@@ -3998,6 +4009,7 @@ export type Database = {
           id?: string
           io_id?: string
           item_unique_key?: string
+          modified_at_jst?: string | null
           o_id?: string | null
           package_id?: string
           package_unique_key?: string
