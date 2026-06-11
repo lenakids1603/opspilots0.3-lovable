@@ -20,12 +20,24 @@ type SupplierRow = {
   supplier_name: string;
   sku: string;
   style_no: string;
+  /** 该 SKU 行催货总件数（urge_supplier 全部紧急度档之和） */
+  total_qty: number;
+  /** 顾客承诺最晚发货时间已超时的件数 */
   overdue_qty: number;
+  due24_qty: number;
+  due48_qty: number;
+  due72_qty: number;
+  later_qty: number;
   po_count: number;
   max_overdue_days: number;
   po_details: PoDetail[];
 };
-type QuestionCount = { question_orders: number; question_items: number; question_qty: number };
+/** Question = 拍单初始状态（待仓库审核），非客服异常单 */
+type PendingReviewCount = {
+  pending_review_orders: number;
+  pending_review_items: number;
+  pending_review_qty: number;
+};
 type PurchaseRow = {
   sku: string;
   style_no: string;
@@ -95,9 +107,9 @@ export default function ChaseListPage() {
         queryFn: async () => {
           const { data, error } = await supabase.rpc("ops_chase_question_count" as never);
           if (error) throw error;
-          const arr = (data ?? []) as unknown as QuestionCount[];
-          const row = Array.isArray(arr) ? arr[0] : (arr as unknown as QuestionCount);
-          return (row ?? { question_orders: 0, question_items: 0, question_qty: 0 }) as QuestionCount;
+          const arr = (data ?? []) as unknown as PendingReviewCount[];
+          const row = Array.isArray(arr) ? arr[0] : (arr as unknown as PendingReviewCount);
+          return (row ?? { pending_review_orders: 0, pending_review_items: 0, pending_review_qty: 0 }) as PendingReviewCount;
         },
         staleTime: 60_000,
       },
@@ -118,12 +130,12 @@ export default function ChaseListPage() {
   const isForbidden = anyError?.code === "42501" || /42501|权限|permission/i.test(anyError?.message ?? "");
 
   const supplierRows = (supplierQ.data ?? []) as SupplierRow[];
-  const questionCount = (questionQ.data ?? { question_orders: 0, question_items: 0, question_qty: 0 }) as QuestionCount;
+  const questionCount = (questionQ.data ?? { pending_review_orders: 0, pending_review_items: 0, pending_review_qty: 0 }) as PendingReviewCount;
   const purchaseRows = (purchaseQ.data ?? []) as PurchaseRow[];
 
   // 汇总
   const summary = useMemo(() => {
-    const totalQty = supplierRows.reduce((s, r) => s + Number(r.overdue_qty || 0), 0);
+    const totalQty = supplierRows.reduce((s, r) => s + Number(r.total_qty || 0), 0);
     const supplierIds = new Set(supplierRows.map(r => r.supplier_id));
     const skus = new Set(supplierRows.map(r => r.sku));
     const maxOverdue = supplierRows.reduce((m, r) => Math.max(m, Number(r.max_overdue_days || 0)), 0);
@@ -141,7 +153,7 @@ export default function ChaseListPage() {
         totalQty: 0, styleCount: 0, maxDays: 0,
       };
       g.rows.push(r);
-      g.totalQty += Number(r.overdue_qty || 0);
+      g.totalQty += Number(r.total_qty || 0);
       g.maxDays = Math.max(g.maxDays, Number(r.max_overdue_days || 0));
       map.set(r.supplier_id, g);
     }
@@ -163,9 +175,9 @@ export default function ChaseListPage() {
   );
 
   const exportSupplier = (g: typeof grouped[number]) => {
-    const headers = ["款号", "SKU", "急需件数", "已超期天数", "涉及采购单"];
+    const headers = ["款号", "SKU", "急需件数", "其中已超时", "已超期天数", "涉及采购单"];
     const rows = g.rows.map(r => [
-      r.style_no, r.sku, Number(r.overdue_qty || 0),
+      r.style_no, r.sku, Number(r.total_qty || 0), Number(r.overdue_qty || 0),
       Number(r.max_overdue_days || 0),
       (r.po_details ?? []).map(p => p.po_id).join(" / "),
     ]);
@@ -173,12 +185,12 @@ export default function ChaseListPage() {
   };
 
   const exportAll = () => {
-    const headers = ["供应商", "款号", "SKU", "急需件数", "已超期天数", "涉及采购单"];
+    const headers = ["供应商", "款号", "SKU", "急需件数", "其中已超时", "已超期天数", "涉及采购单"];
     const rows: (string | number)[][] = [];
     for (const g of grouped) {
       for (const r of g.rows) {
         rows.push([
-          g.supplier_name, r.style_no, r.sku, Number(r.overdue_qty || 0),
+          g.supplier_name, r.style_no, r.sku, Number(r.total_qty || 0), Number(r.overdue_qty || 0),
           Number(r.max_overdue_days || 0),
           (r.po_details ?? []).map(p => p.po_id).join(" / "),
         ]);
@@ -240,8 +252,8 @@ export default function ChaseListPage() {
           accent={summary.maxOverdue >= 15 ? "danger" : undefined}
         />
         <SummaryCard
-          label="问题单" loading={loading}
-          value={fmtNum(questionCount.question_orders)} suffix="单"
+          label="待审核单" loading={loading}
+          value={fmtNum(questionCount.pending_review_orders)} suffix="单"
           onClick={() => navigate("/operations/sales-orders?order_status=Question")}
           extra="点击查看"
         />
@@ -322,7 +334,7 @@ export default function ChaseListPage() {
                                     </td>
                                     <td className="px-4 py-2 font-mono">{r.sku}</td>
                                     <td className="px-4 py-2">{r.style_no || "-"}</td>
-                                    <td className="px-4 py-2 text-right font-semibold">{fmtNum(r.overdue_qty)}</td>
+                                    <td className="px-4 py-2 text-right font-semibold">{fmtNum(r.total_qty)}</td>
                                     <td className="px-4 py-2 text-right">{r.po_count}</td>
                                     <td className="px-4 py-2 text-right">
                                       <Badge variant={r.max_overdue_days >= 15 ? "destructive" : "secondary"}>
