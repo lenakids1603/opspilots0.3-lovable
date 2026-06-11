@@ -54,6 +54,12 @@ type PurchaseRow = {
   final_gap: number;
   earliest_pay_time: string | null;
 };
+type UrgencyRow = {
+  urgency: "overdue" | "due24" | "due48" | "due72" | "later";
+  qty: number;
+  order_count: number;
+  supplier_count: number;
+};
 
 const fmtNum = (n: number | null | undefined) =>
   n == null ? "-" : Number(n).toLocaleString("zh-CN");
