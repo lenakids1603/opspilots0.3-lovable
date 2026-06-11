@@ -63,6 +63,7 @@ const App = () => (
           <Route path="/operations/sales-orders" element={wrap(<SalesOrdersListPage />)} />
           <Route path="/operations/shipping-risk" element={wrap(<ShippingRiskPage />)} />
           <Route path="/operations/sales-board" element={wrap(<SalesBoardPage />)} />
+          <Route path="/chase-list" element={wrap(<ChaseListPage />)} />
           <Route path="/ops/shipping-risk" element={wrap(<ShippingRiskPage />)} />
           <Route path="/suppliers" element={wrap(<SuppliersPage />)} />
           <Route path="/products" element={wrap(<ProductsPage />)} />
