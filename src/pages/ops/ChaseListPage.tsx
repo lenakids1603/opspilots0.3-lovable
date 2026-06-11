@@ -168,14 +168,20 @@ export default function ChaseListPage() {
 
   // 按供应商分组
   const grouped = useMemo(() => {
-    const map = new Map<string, { supplier_id: string; supplier_name: string; rows: SupplierRow[]; totalQty: number; styleCount: number; maxDays: number }>();
+    const map = new Map<string, {
+      supplier_id: string; supplier_name: string; rows: SupplierRow[];
+      totalQty: number; overdueQty: number; due24Qty: number;
+      styleCount: number; maxDays: number;
+    }>();
     for (const r of supplierRows) {
       const g = map.get(r.supplier_id) ?? {
         supplier_id: r.supplier_id, supplier_name: r.supplier_name, rows: [],
-        totalQty: 0, styleCount: 0, maxDays: 0,
+        totalQty: 0, overdueQty: 0, due24Qty: 0, styleCount: 0, maxDays: 0,
       };
       g.rows.push(r);
       g.totalQty += Number(r.total_qty || 0);
+      g.overdueQty += Number(r.overdue_qty || 0);
+      g.due24Qty += Number(r.due24_qty || 0);
       g.maxDays = Math.max(g.maxDays, Number(r.max_overdue_days || 0));
       map.set(r.supplier_id, g);
     }
@@ -197,9 +203,10 @@ export default function ChaseListPage() {
   );
 
   const exportSupplier = (g: typeof grouped[number]) => {
-    const headers = ["款号", "SKU", "急需件数", "其中已超时", "已超期天数", "涉及采购单"];
+    const headers = ["款号", "SKU", "总件数", "其中已超时", "24小时内到期", "最长超期天数", "涉及采购单号"];
     const rows = g.rows.map(r => [
-      r.style_no, r.sku, Number(r.total_qty || 0), Number(r.overdue_qty || 0),
+      r.style_no, r.sku,
+      Number(r.total_qty || 0), Number(r.overdue_qty || 0), Number(r.due24_qty || 0),
       Number(r.max_overdue_days || 0),
       (r.po_details ?? []).map(p => p.po_id).join(" / "),
     ]);
@@ -207,12 +214,13 @@ export default function ChaseListPage() {
   };
 
   const exportAll = () => {
-    const headers = ["供应商", "款号", "SKU", "急需件数", "其中已超时", "已超期天数", "涉及采购单"];
+    const headers = ["供应商", "款号", "SKU", "总件数", "其中已超时", "24小时内到期", "最长超期天数", "涉及采购单号"];
     const rows: (string | number)[][] = [];
     for (const g of grouped) {
       for (const r of g.rows) {
         rows.push([
-          g.supplier_name, r.style_no, r.sku, Number(r.total_qty || 0), Number(r.overdue_qty || 0),
+          g.supplier_name, r.style_no, r.sku,
+          Number(r.total_qty || 0), Number(r.overdue_qty || 0), Number(r.due24_qty || 0),
           Number(r.max_overdue_days || 0),
           (r.po_details ?? []).map(p => p.po_id).join(" / "),
         ]);
@@ -220,6 +228,7 @@ export default function ChaseListPage() {
     }
     downloadCSV(`催货单_全部_${todayCN()}.csv`, headers, rows);
   };
+
 
   const refresh = () => queries.forEach(q => q.refetch());
 
