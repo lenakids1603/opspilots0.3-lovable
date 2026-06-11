@@ -957,6 +957,7 @@ function StyleCardRow({ style: s, innerRef, onPreview }: {
   const [showAllSkus, setShowAllSkus] = useState(false);
   const visibleSkus = showAllSkus ? s.skus : s.skus.slice(0, 6);
   const hiddenCount = s.skus.length - visibleSkus.length;
+  const shortName = shortProductName(s.product_name, s.style_no);
   return (
     <div
       ref={innerRef}
@@ -964,22 +965,29 @@ function StyleCardRow({ style: s, innerRef, onPreview }: {
     >
       <ProductThumb
         src={s.image_url}
-        alt={s.product_name || s.style_no}
+        alt={shortName || s.style_no}
         size={64}
+        radiusClass="rounded-lg"
         ringClass={s.overdueQty > 0 ? "ring-red-500" : s.due24Qty > 0 ? "ring-orange-500" : "ring-muted-foreground/30"}
         onClick={() => s.image_url && onPreview(s.image_url, s.style_no)}
       />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap mb-1">
-          <span className="font-mono text-sm font-medium">{s.style_no}</span>
-          {s.product_name && <span className="text-sm text-muted-foreground truncate">{s.product_name}</span>}
+        <div className="flex items-center gap-2 mb-1.5 min-w-0">
+          <span className="font-mono text-xs text-muted-foreground shrink-0">{s.style_no}</span>
+          {shortName && (
+            <span className="text-sm font-medium truncate flex-1 min-w-0" title={shortName}>
+              {shortName}
+            </span>
+          )}
           {s.overdueQty > 0 && (
-            <Badge variant="destructive">已超时 {s.overdueQty} 件 · 最长 {s.maxDays} 天</Badge>
+            <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FCEBEB] text-[#791F1F] font-medium shrink-0" style={{ padding: "2px 8px" }}>
+              已超时 {s.overdueQty} 件 · 最长 {s.maxDays} 天
+            </span>
           )}
           {s.overdueQty === 0 && s.due24Qty > 0 && (
-            <Badge className="bg-orange-500 hover:bg-orange-500/90 text-white border-transparent">
+            <span className="inline-flex items-center text-[11px] leading-none rounded-md bg-[#FAEEDA] text-[#633806] font-medium shrink-0" style={{ padding: "2px 8px" }}>
               24h内 {s.due24Qty} 件
-            </Badge>
+            </span>
           )}
         </div>
         <div className="flex flex-wrap gap-1">
@@ -987,8 +995,10 @@ function StyleCardRow({ style: s, innerRef, onPreview }: {
             <span
               key={sk.sku}
               className={cn(
-                "inline-flex items-center text-xs font-mono rounded-full px-2 py-0.5 bg-muted",
-                sk.overdue_qty > 0 && "border border-red-500 text-red-700 bg-red-50",
+                "inline-flex items-center text-xs font-mono rounded-md px-2 py-0.5",
+                sk.overdue_qty > 0
+                  ? "bg-[#FCEBEB] text-[#791F1F]"
+                  : "bg-muted text-muted-foreground",
               )}
               title={sk.sku}
             >
@@ -1003,9 +1013,9 @@ function StyleCardRow({ style: s, innerRef, onPreview }: {
           )}
         </div>
       </div>
-      <div className="text-right shrink-0">
-        <div className="text-2xl font-bold leading-none">{s.totalQty.toLocaleString("zh-CN")}</div>
-        <div className="text-[10px] text-muted-foreground mt-1">件</div>
+      <div className="flex flex-col items-end justify-center shrink-0 self-stretch pl-2">
+        <div className="text-2xl font-bold leading-none tabular-nums">{s.totalQty.toLocaleString("zh-CN")}</div>
+        <div className="text-[11px] text-muted-foreground mt-1">件待催</div>
       </div>
     </div>
   );
