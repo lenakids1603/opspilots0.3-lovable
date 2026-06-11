@@ -41,8 +41,16 @@ async function upsertRefund(r: any): Promise<number> {
     synced_at: new Date().toISOString(),
   };
   const { data: up, error } = await admin.from("jst_refund_orders")
-    .upsert(row, { onConflict: "as_id" }).select("id").single();
+    .upsert(row, { onConflict: "as_id" }).select("id").maybeSingle();
   if (error) throw error;
+  // 条件更新(modified 未变则跳过写入)时 RETURNING 为空:回查已有行 id
+  let refundOrderId = up?.id as string | undefined;
+  if (!refundOrderId) {
+    const { data: existing, error: exErr } = await admin
+      .from("jst_refund_orders").select("id").eq("as_id", asId).single();
+    if (exErr) throw exErr;
+    refundOrderId = existing.id as string;
+  }
   let items = 0;
   for (const it of pickItemsArray(r, ["refund_items"])) {
     const asiId = it.asi_id != null ? String(it.asi_id) : null;
@@ -53,14 +61,15 @@ async function upsertRefund(r: any): Promise<number> {
     const itemType = it.type ?? null;
     const itemUniqueKey = [asId, asiId ?? "", skuId ?? "", outerOiId ?? "", itemType ?? ""].join("|");
     const itemRow = {
-      refund_order_id: up.id, as_id: asId, asi_id: asiId, sku_id: skuId,
+      refund_order_id: refundOrderId, as_id: asId, asi_id: asiId, sku_id: skuId,
       name: it.name ?? null, properties_value: it.properties_value ?? null,
       pic: it.pic ?? null, qty, r_qty: Number(it.r_qty ?? 0), price,
       amount: Number(it.amount ?? qty * price),
       type: itemType, outer_oi_id: outerOiId, sku_type: it.sku_type ?? null,
       supplier_id: it.supplier_id != null ? String(it.supplier_id) : null,
       supplier_name: it.supplier_name ?? null, batch_no: it.batch_no ?? null,
-      item_unique_key: itemUniqueKey, synced_at: new Date().toISOString(),
+      item_unique_key: itemUniqueKey, modified_at_jst: row.modified_at_jst,
+      synced_at: new Date().toISOString(),
     };
     const { error: itErr } = await admin.from("jst_refund_order_items")
       .upsert(itemRow, { onConflict: "item_unique_key" });

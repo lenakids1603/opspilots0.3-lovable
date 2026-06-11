@@ -153,13 +153,21 @@ async function upsertSalesOrder(o: any): Promise<{ orderId: string; itemsUpserte
   orderRow.internal_order_type_updated_at = new Date().toISOString();
 
   const { data: up, error } = await admin
-    .from("jst_sales_orders").upsert(orderRow, { onConflict: "jst_o_id" }).select("id").single();
+    .from("jst_sales_orders").upsert(orderRow, { onConflict: "jst_o_id" }).select("id").maybeSingle();
   if (error) throw error;
+  // 条件更新(modified 未变则跳过写入)时 RETURNING 为空:回查已有行 id
+  let orderId = up?.id as string | undefined;
+  if (!orderId) {
+    const { data: existing, error: exErr } = await admin
+      .from("jst_sales_orders").select("id").eq("jst_o_id", jstOId).single();
+    if (exErr) throw exErr;
+    orderId = existing.id as string;
+  }
 
   const sourceByOId = new Map<string, any>([[jstOId, o]]);
-  const idByOId = new Map<string, string>([[jstOId, up.id as string]]);
+  const idByOId = new Map<string, string>([[jstOId, orderId]]);
   const derived = await persistDerivedSalesState([orderRow], sourceByOId, idByOId);
-  return { orderId: up.id as string, itemsUpserted: derived.itemUpserted };
+  return { orderId, itemsUpserted: derived.itemUpserted };
 }
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
@@ -256,6 +264,7 @@ function buildSalesItemRowsForBatch(o: any, salesOrderId: string) {
       supplier_id: str(it.supplier_id),
       supplier_name: str(it.supplier_name),
       item_unique_key: `${jstOId}|${jstItemId ?? ""}|${skuId ?? ""}|${i}`,
+      modified_at_jst: parseJstBeijingDateTime(o.modified ?? o.modified_time),
       synced_at: new Date().toISOString(),
     });
   }
@@ -592,6 +601,15 @@ async function upsertSalesOrdersBatch(orders: any[]) {
 
   const idByOId = new Map<string, string>();
   for (const row of upsertedOrders ?? []) idByOId.set(String(row.jst_o_id), String(row.id));
+
+  // 条件更新(modified 未变则跳过写入)的行不在 RETURNING 里:批量回查它们的 id
+  const skippedOIds = orderRows.filter((row) => !idByOId.get(row.jst_o_id)).map((row) => row.jst_o_id);
+  for (const ids of chunk(skippedOIds, 200)) {
+    const { data: existingRows, error: exErr } = await admin
+      .from("jst_sales_orders").select("id,jst_o_id").in("jst_o_id", ids);
+    if (exErr) break; // 回查失败按 missing 计入下方 failed,不阻断本页
+    for (const row of existingRows ?? []) idByOId.set(String(row.jst_o_id), String(row.id));
+  }
 
   const missingIds = orderRows.filter((row) => !idByOId.get(row.jst_o_id)).map((row) => row.jst_o_id);
   if (missingIds.length > 0) {

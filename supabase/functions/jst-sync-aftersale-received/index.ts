@@ -55,8 +55,17 @@ async function upsertReceived(r: any): Promise<number> {
     .from("jst_aftersale_received_orders")
     .upsert(row, { onConflict: "received_unique_key" })
     .select("id")
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  // 条件更新(modified 未变则跳过写入)时 RETURNING 为空:回查已有行 id
+  let receivedOrderId = up?.id as string | undefined;
+  if (!receivedOrderId) {
+    const { data: existing, error: exErr } = await admin
+      .from("jst_aftersale_received_orders")
+      .select("id").eq("received_unique_key", uniqueKey).single();
+    if (exErr) throw exErr;
+    receivedOrderId = existing.id as string;
+  }
 
   // Items: try子数组；若无且行本身像一条 item，则把 r 自己当成 item
   const subItems = pickItemsArray(r, ["received_items"]);
@@ -70,7 +79,7 @@ async function upsertReceived(r: any): Promise<number> {
     const skuId = it.sku_id != null ? String(it.sku_id) : null;
     const itemKey = buildItemUniqueKey(uniqueKey, it, r.modified);
     const itemRow = {
-      received_order_id: up.id,
+      received_order_id: receivedOrderId,
       as_id: asId != null ? String(asId) : null,
       sku_id: skuId,
       name: it.name ?? null,
@@ -83,6 +92,7 @@ async function upsertReceived(r: any): Promise<number> {
       supplier_id: it.supplier_id != null ? String(it.supplier_id) : null,
       supplier_name: it.supplier_name ?? null,
       item_unique_key: itemKey,
+      modified_at_jst: row.modified_at_jst,
       synced_at: new Date().toISOString(),
     };
     const { error: itErr } = await admin

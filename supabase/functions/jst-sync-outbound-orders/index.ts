@@ -131,15 +131,24 @@ async function upsertShippingPackage(rowFromJst: JstRecord): Promise<{ packageId
     .from("warehouse_shipping_packages")
     .upsert(packageRow, { onConflict: "package_unique_key" })
     .select("id")
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  // 条件更新(modified 未变则跳过写入)时 RETURNING 为空:回查已有行 id
+  let packageId = pkg?.id as string | undefined;
+  if (!packageId) {
+    const { data: existing, error: exErr } = await admin
+      .from("warehouse_shipping_packages")
+      .select("id").eq("package_unique_key", packageUniqueKey).single();
+    if (exErr) throw exErr;
+    packageId = existing.id as string;
+  }
 
   const itemRows = itemList.map((item, index) => {
     const skuId = firstText(item.sku_id, item.shop_sku_id, item.sku_code);
     const productName = firstText(item.product_name, item.name, item.sku_name);
     return {
       item_unique_key: buildItemUniqueKey(ioId, item, index),
-      package_id: pkg.id,
+      package_id: packageId,
       package_unique_key: packageUniqueKey,
       io_id: ioId,
       so_id: packageRow.so_id,
@@ -149,18 +158,19 @@ async function upsertShippingPackage(rowFromJst: JstRecord): Promise<{ packageId
       style_no: styleFallback(item.style_no ?? item.i_id ?? item.item_id, skuId, productName),
       product_name: productName,
       qty: Number(item.qty ?? item.sale_qty ?? item.total_qty ?? 0),
+      modified_at_jst: packageRow.modified_at_jst,
       synced_at: syncedAt,
     };
   });
 
-  if (!itemRows.length) return { packageId: pkg.id as string, itemsUpserted: 0 };
+  if (!itemRows.length) return { packageId, itemsUpserted: 0 };
 
   const { error: itemError } = await admin
     .from("warehouse_shipping_package_items")
     .upsert(itemRows, { onConflict: "item_unique_key" });
   if (itemError) throw itemError;
 
-  return { packageId: pkg.id as string, itemsUpserted: itemRows.length };
+  return { packageId, itemsUpserted: itemRows.length };
 }
 
 async function callOutbound(initialMode: ParamMode, pageIndex: number, pageSize: number, from: Date, to: Date) {
