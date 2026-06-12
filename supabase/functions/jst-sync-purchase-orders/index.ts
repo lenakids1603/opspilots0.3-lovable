@@ -1443,6 +1443,39 @@ async function processPurchasePage(args: {
 
 
 
+// ===== 页级瞬时错误重试(对照 _shared/jst-sync-job.ts 的 transient 处理) =====
+// 背景:callOpenweb 的 30s AbortController 超时等瞬时错误若直接判 failed,
+// 会中断 auto_continue 自续链,需要人工重发 tick 才能从断点恢复
+// (2026-06-12 生产入库回补任务 cc424787 实际发生过)。
+const PAGE_RETRY_PER_TICK = 3;            // 单次 tick 内同一页最多重试次数(不含首次)
+const PAGE_RETRY_BACKOFF_BASE_MS = 2_000; // 指数退避 2s -> 4s -> 8s
+const PAGE_RETRY_TOTAL_MAX = 8;           // 同一页跨 tick 累计瞬时失败上限,达到后判 failed
+
+function isTransientError(err: unknown): boolean {
+  const msg = String((err as Error)?.message ?? err ?? "");
+  return /请求超时|timeout|timed out|AbortError|aborted|network|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|HTTP 5\d\d|HTTP 429|限流|频率|频次|超过限制|connection reset|connection refused|connection closed|broken pipe|error sending request|client error \(Connect\)|os error \d+|canceling statement|deadlock detected/i
+    .test(msg);
+}
+
+function classifyErrorType(err: unknown): string {
+  const msg = String((err as Error)?.message ?? err ?? "");
+  if (/canceling statement|deadlock detected/i.test(msg)) return "db_timeout";
+  if (/HTTP 429|限流|频率|频次|超过限制/i.test(msg)) return "rate_limited";
+  if (/HTTP 5\d\d/.test(msg)) return "http_5xx";
+  if (/超时|timeout|timed out|AbortError|aborted/i.test(msg)) return "timeout";
+  if (/network|fetch failed|ECONN|ETIMEDOUT|EAI_AGAIN|socket|connection|broken pipe|error sending request|client error \(Connect\)|os error \d+/i.test(msg)) return "network";
+  return "unknown";
+}
+
+// 瞬时暂停(partial)后自续 tick 的延迟,按同一页累计失败次数走退避阶梯
+// (同 _shared/jst-sync-job.ts 的 backoffMs: 15s -> 30s -> 60s -> 120s)
+function transientTickDelayMs(count: number): number {
+  if (count <= 1) return 15_000;
+  if (count === 2) return 30_000;
+  if (count === 3) return 60_000;
+  return 120_000;
+}
+
 async function tickInboundJob(jobId: string) {
   const tickStart = Date.now();
   await markStaleInboundJobs();
@@ -1492,6 +1525,12 @@ async function tickInboundJob(jobId: string) {
   let totalFailed = job.total_failed ?? 0;
   let pagesThisRun = 0;
   let lastError = "";
+  // 跨 tick 持久化的重试状态(metadata.retry = { window_index, page_index, count })
+  let metadata: Record<string, any> = (job.metadata && typeof job.metadata === "object") ? { ...job.metadata } : {};
+  // 瞬时错误且本次预算不足以继续重试时:以 partial 落库等下一次 tick,而不是 failed
+  let transientPause = false;
+  let transientNote = "";
+  let transientDetail = "";
 
   while (windowIndex < windows.length) {
     if (Date.now() - tickStart > budgetMs) break;
@@ -1500,56 +1539,107 @@ async function tickInboundJob(jobId: string) {
     const win = windows[windowIndex];
     const winFrom = new Date(win.from);
     const winTo = new Date(win.to);
+    const pageProcessor = job.sync_type === "purchase_orders" ? processPurchasePage : processInboundPage;
 
-    try {
-      const pageProcessor = job.sync_type === "purchase_orders" ? processPurchasePage : processInboundPage;
-      const result = await pageProcessor({
-        job, windowIndex, windowFrom: winFrom, windowTo: winTo, pageIndex,
-      });
-      pagesThisRun++;
-      totalApi += result.apiCount;
-      totalMain += result.mainUpserted;
-      totalItem += result.itemUpserted;
-      totalFailed += result.failed;
+    // —— 页级瞬时错误重试:指数退避,重试耗时计入 time_budget ——
+    let result: Awaited<ReturnType<typeof processInboundPage>> | null = null;
+    let pageErr: unknown = null;
+    for (let attempt = 0; attempt <= PAGE_RETRY_PER_TICK; attempt++) {
+      if (attempt > 0) {
+        const backoff = PAGE_RETRY_BACKOFF_BASE_MS * 2 ** (attempt - 1);
+        if (Date.now() - tickStart + backoff > budgetMs) {
+          transientPause = true;
+          break;
+        }
+        await updateJobProgress(jobId, {
+          metadata,
+          error_detail: sanitizeMsg((pageErr as Error)?.message ?? "").slice(0, 500),
+          message: `窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页瞬时错误(${classifyErrorType(pageErr)}),${Math.round(backoff / 1000)}s 后重试 ${attempt}/${PAGE_RETRY_PER_TICK}`,
+        });
+        await sleep(backoff);
+      }
+      try {
+        result = await pageProcessor({
+          job, windowIndex, windowFrom: winFrom, windowTo: winTo, pageIndex,
+        });
+        pageErr = null;
+        break;
+      } catch (err) {
+        pageErr = err;
+        if (!isTransientError(err)) break;
+        // 同一页的瞬时失败次数跨 tick 累计,防止 partial 自续链对坏页无限重试
+        metadata.retry = (metadata.retry?.window_index === windowIndex && metadata.retry?.page_index === pageIndex)
+          ? { ...metadata.retry, count: Number(metadata.retry.count ?? 0) + 1 }
+          : { window_index: windowIndex, page_index: pageIndex, count: 1 };
+        metadata.last_error_type = classifyErrorType(err);
+        if (Number(metadata.retry.count) >= PAGE_RETRY_TOTAL_MAX) break;
+      }
+    }
 
-      const movedNext = !result.hasNext || result.apiCount === 0;
-      const newWindowIndex = movedNext ? windowIndex + 1 : windowIndex;
-      const newPageIndex = movedNext ? 1 : pageIndex + 1;
-      const moreAfterThisPage = !(movedNext && newWindowIndex >= windows.length);
-      const shouldPauseAfterThisPage = moreAfterThisPage && (
-        pagesThisRun >= maxPages || Date.now() - tickStart > Math.max(0, budgetMs - 5000)
-      );
+    // 单 tick 重试用尽但跨 tick 累计未达上限:同样转 partial,退避后由下一次 tick 续试
+    // (只有累计达 PAGE_RETRY_TOTAL_MAX 才判 failed,避免快速失败型瞬时错误十几秒内打死任务)
+    if (!result && !transientPause && pageErr && isTransientError(pageErr)
+        && Number(metadata.retry?.count ?? 0) < PAGE_RETRY_TOTAL_MAX) {
+      transientPause = true;
+    }
 
-      await updateJobProgress(jobId, {
-        status: moreAfterThisPage ? (shouldPauseAfterThisPage ? "partial" : "running") : "success",
-        ended_at: moreAfterThisPage ? null : new Date().toISOString(),
-        current_window_index: newWindowIndex,
-        current_window_from: windows[newWindowIndex]?.from ?? win.from,
-        current_window_to: windows[newWindowIndex]?.to ?? win.to,
-        current_page_index: pageIndex,
-        next_page_index: newPageIndex,
-        has_next: moreAfterThisPage,
-        total_api_count: totalApi,
-        total_order_upserted: totalMain,
-        total_item_upserted: totalItem,
-        total_failed: totalFailed,
-        last_success_at: new Date().toISOString(),
-        message: `窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页完成 (本页 ${result.apiCount} 条,主表+${result.mainUpserted},明细+${result.itemUpserted}${result.hasNext ? ",还有下一页" : ",本窗口结束"})`,
-      });
+    if (transientPause) {
+      transientNote = `窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页瞬时错误(${classifyErrorType(pageErr)}),等待下一次 tick 重试(该页累计失败 ${metadata.retry?.count ?? 1}/${PAGE_RETRY_TOTAL_MAX} 次)`;
+      transientDetail = sanitizeMsg((pageErr as Error)?.message ?? "").slice(0, 500);
+      break;
+    }
 
-      windowIndex = newWindowIndex;
-      pageIndex = newPageIndex;
-      if (shouldPauseAfterThisPage) break;
-    } catch (err) {
-      lastError = sanitizeMsg((err as Error).message ?? "").slice(0, 500);
+    if (!result) {
+      // 非瞬时错误,或瞬时错误跨 tick 累计达上限(${PAGE_RETRY_TOTAL_MAX} 次)→ 判 failed
+      const retryCount = Number(metadata.retry?.count ?? 0);
+      lastError = sanitizeMsg((pageErr as Error)?.message ?? "").slice(0, 500);
       totalFailed++;
       await updateJobProgress(jobId, {
         total_failed: totalFailed,
+        metadata,
         error_detail: lastError,
-        message: `窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页失败: ${lastError}`,
+        message: `窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页失败(${classifyErrorType(pageErr)}${retryCount ? `,瞬时重试 ${retryCount} 次后仍失败` : ""}): ${lastError}`,
       });
       break;
     }
+
+    if (metadata.retry) delete metadata.retry;
+
+    pagesThisRun++;
+    totalApi += result.apiCount;
+    totalMain += result.mainUpserted;
+    totalItem += result.itemUpserted;
+    totalFailed += result.failed;
+
+    const movedNext = !result.hasNext || result.apiCount === 0;
+    const newWindowIndex = movedNext ? windowIndex + 1 : windowIndex;
+    const newPageIndex = movedNext ? 1 : pageIndex + 1;
+    const moreAfterThisPage = !(movedNext && newWindowIndex >= windows.length);
+    const shouldPauseAfterThisPage = moreAfterThisPage && (
+      pagesThisRun >= maxPages || Date.now() - tickStart > Math.max(0, budgetMs - 5000)
+    );
+
+    await updateJobProgress(jobId, {
+      status: moreAfterThisPage ? (shouldPauseAfterThisPage ? "partial" : "running") : "success",
+      ended_at: moreAfterThisPage ? null : new Date().toISOString(),
+      current_window_index: newWindowIndex,
+      current_window_from: windows[newWindowIndex]?.from ?? win.from,
+      current_window_to: windows[newWindowIndex]?.to ?? win.to,
+      current_page_index: pageIndex,
+      next_page_index: newPageIndex,
+      has_next: moreAfterThisPage,
+      total_api_count: totalApi,
+      total_order_upserted: totalMain,
+      total_item_upserted: totalItem,
+      total_failed: totalFailed,
+      metadata,
+      last_success_at: new Date().toISOString(),
+      message: `窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页完成 (本页 ${result.apiCount} 条,主表+${result.mainUpserted},明细+${result.itemUpserted}${result.hasNext ? ",还有下一页" : ",本窗口结束"})`,
+    });
+
+    windowIndex = newWindowIndex;
+    pageIndex = newPageIndex;
+    if (shouldPauseAfterThisPage) break;
   }
 
   // 收尾状态
@@ -1566,13 +1656,15 @@ async function tickInboundJob(jobId: string) {
     current_window_from: windows[Math.min(windowIndex, windows.length - 1)]?.from ?? null,
     current_window_to: windows[Math.min(windowIndex, windows.length - 1)]?.to ?? null,
     next_page_index: pageIndex,
+    metadata,
     message: (() => {
       const unit = job.sync_type === "purchase_orders" ? "采购单" : "入库单";
       if (allDone) return `全部完成 · 窗口 ${windows.length} 个 · ${unit} ${totalMain} · 明细 ${totalItem}${lastError ? ` · 末次错误: ${lastError}` : ""}`;
       if (lastError) return `任务失败 · 窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页 · ${lastError}`;
+      if (transientPause) return `已同步${unit} ${totalMain} / 明细 ${totalItem} · ${transientNote}`;
       return `本次 tick 已处理 ${pagesThisRun} 页,等待继续 · 当前窗口 ${windowIndex + 1}/${windows.length} 下一页=${pageIndex}`;
     })(),
-    error_detail: lastError || "",
+    error_detail: lastError || transientDetail || "",
   };
   await updateJobProgress(jobId, tail);
 
@@ -1583,7 +1675,7 @@ async function tickInboundJob(jobId: string) {
     fetched_items_count: totalItem,
     heartbeat_at: new Date().toISOString(),
     message: tail.message,
-    error_detail: lastError || "",
+    error_detail: lastError || transientDetail || "",
   };
   if (job.sync_type === "purchase_orders") {
     parentLogPatch.fetched_orders_count = totalMain;
@@ -1592,7 +1684,9 @@ async function tickInboundJob(jobId: string) {
   }
   await admin.from("jst_sync_logs").update(parentLogPatch).eq("id", job.parent_log_id);
 
-  return { status: finalStatus, job: { ...job, ...tail } };
+  // 瞬时暂停时给自续 tick 一个退避延迟(随同一页累计失败次数递增),避免紧密循环打满限频
+  const retryDelayMs = transientPause ? transientTickDelayMs(Number(metadata.retry?.count ?? 1)) : undefined;
+  return { status: finalStatus, job: { ...job, ...tail }, retryDelayMs };
 }
 
 // ===== 采购单状态补偿:按单号拉取本地 Confirmed 单的最新状态 =====
@@ -1821,7 +1915,7 @@ Deno.serve(async (req) => {
       // 同步执行一次 tick；若未完成必须落库为 partial，由前端加锁后触发下一次 tick
       const result = await tickInboundJob(jobId);
       if (result.status === "partial" && (result.job as any)?.auto_continue === true) {
-        triggerSelfTick("tick_inbound_job", jobId, 500);
+        triggerSelfTick("tick_inbound_job", jobId, result.retryDelayMs ?? 500);
       }
       return new Response(JSON.stringify({ ok: true, status: result.status, job: result.job }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1872,7 +1966,7 @@ Deno.serve(async (req) => {
       if (!jobId) throw new Error("缺少 job_id");
       const result = await tickInboundJob(jobId);
       if (result.status === "partial" && (result.job as any)?.auto_continue === true) {
-        triggerSelfTick("tick_po_job", jobId, 500);
+        triggerSelfTick("tick_po_job", jobId, result.retryDelayMs ?? 500);
       }
       return new Response(JSON.stringify({ ok: true, status: result.status, job: result.job }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
