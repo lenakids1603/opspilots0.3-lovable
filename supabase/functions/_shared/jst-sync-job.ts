@@ -225,7 +225,7 @@ function isTransientError(err: any): boolean {
   const code = String(err.code ?? "");
   if (code === "ABORTED" || code === "429" || /^5\d\d$/.test(code)) return true;
   const msg = String(err.message ?? err.apiMsg ?? "");
-  if (/请求超时|timeout|timed out|AbortError|aborted|network|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|HTTP 5\d\d|HTTP 429|限流|频率|connection reset|connection refused|connection closed|broken pipe|error sending request|client error \(Connect\)|os error \d+|canceling statement|deadlock detected/i.test(msg)) {
+  if (/请求超时|timeout|timed out|AbortError|aborted|network|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|HTTP 5\d\d|HTTP 429|限流|频率|频次|超过限制|connection reset|connection refused|connection closed|broken pipe|error sending request|client error \(Connect\)|os error \d+|canceling statement|deadlock detected/i.test(msg)) {
     return true;
   }
   return false;
@@ -240,7 +240,7 @@ function classifyErrorType(err: any): string {
   if (/network|fetch failed|ECONN|ETIMEDOUT|socket|connection reset|connection refused|broken pipe|error sending request|client error \(Connect\)/i.test(msg)) return "network";
   if (/超时|timeout|AbortError|aborted/i.test(msg)) return "timeout";
   if (/HTTP 5\d\d/.test(msg)) return "http_5xx";
-  if (/HTTP 429|限流|rate/i.test(msg)) return "rate_limited";
+  if (/HTTP 429|限流|频次|超过限制|rate/i.test(msg)) return "rate_limited";
   if (/network|fetch failed|ECONN|ETIMEDOUT|socket/i.test(msg)) return "network";
   const code = String(err?.code ?? "");
   if (code === "130") return "param_error";

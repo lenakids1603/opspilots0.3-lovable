@@ -689,6 +689,28 @@ async function callSalesOrders(pageIndex: number, pageSize: number, from: Date, 
   throw lastErr ?? new Error("orders/single/query failed");
 }
 
+// 历史回补:按制单时间(下单)拉取。date_type: 0=修改时间(默认) / 1=制单日期 / 2=出库时间。
+// 生产实测本接口生效参数形态为 modified_begin/modified_end(见 jst_sync_log_details 的
+// request_body),date_type=1 时该时间范围按制单时间解释;起跑前用 backfill_probe 实测核对。
+async function callSalesOrdersBackfill(pageIndex: number, pageSize: number, from: Date, to: Date) {
+  const reqBody = {
+    page_index: Number(pageIndex),
+    page_size: Number(pageSize),
+    modified_begin: fmtBJ(from),
+    modified_end: fmtBJ(to),
+    date_type: 1,
+  };
+  const t0 = Date.now();
+  try {
+    const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 25_000 });
+    return { data, reqBody, durationMs: Date.now() - t0 };
+  } catch (e: any) {
+    e.requestBody = reqBody;
+    e.durationMs = e.durationMs ?? (Date.now() - t0);
+    throw e;
+  }
+}
+
 async function processSalesPage(args: ProcessPageArgs): Promise<PageResult> {
   const { job, windowFrom, windowTo, pageIndex, pageSize } = args;
   await sleep(RATE_DELAY_MS);
@@ -700,6 +722,11 @@ async function processSalesPage(args: ProcessPageArgs): Promise<PageResult> {
   meta.sales_order_request_version = SALES_REQUEST_VERSION;
   const pageStart = Date.now();
   const { data, reqBody } = await callSalesOrders(pageIndex, pageSize, windowFrom, windowTo);
+  return await ingestSalesPage(data, reqBody, pageIndex, pageSize, pageStart);
+}
+
+// 回补与增量共用的单页落库:店铺过滤 → 批量 upsert(头表+轻量明细+汇总+索引+风险)
+async function ingestSalesPage(data: any, reqBody: any, pageIndex: number, pageSize: number, pageStart: number): Promise<PageResult> {
   const list = pickList(data);
   const hasNext = computeHasNext(data, list.length, pageSize, pageIndex);
   const sk = await loadSkippedShops();
@@ -722,6 +749,89 @@ async function processSalesPage(args: ProcessPageArgs): Promise<PageResult> {
     failed: batch.failed,
     hasNext,
     errorDetail: (batch.errorDetail || skipNote) ? `${batch.errorDetail}${skipNote}` : undefined,
+    requestBody: reqBody,
+    responseCode: "0",
+    responseMsg: "success",
+    durationMs: Date.now() - pageStart,
+  };
+}
+
+async function processSalesBackfillPage(args: ProcessPageArgs): Promise<PageResult> {
+  const { windowFrom, windowTo, pageIndex, pageSize } = args;
+  // 回补与 15 分钟增量同步共享同一 JST app 限频配额,页间节流加倍让路增量
+  await sleep(RATE_DELAY_MS * 2);
+  if (pageIndex > MAX_PAGE_NO) throw new Error(`分页超过上限 ${MAX_PAGE_NO}`);
+  const pageStart = Date.now();
+  const { data, reqBody } = await callSalesOrdersBackfill(pageIndex, pageSize, windowFrom, windowTo);
+  return await ingestSalesPage(data, reqBody, pageIndex, pageSize, pageStart);
+}
+
+// ===== 早期汇总回补(aggregate-only,2026-01~02):明细即拉即弃 =====
+// 只落两处:订单粒度瘦工作表 sales_backfill_order_agg(o_id 主键,窗口拆分/
+// 重试/边界重叠下绝对幂等)+ 店铺×日汇总 platform_daily_summary(按日整日重算)。
+function bjDateOf(iso: string | null): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!isFinite(t)) return null;
+  return new Date(t + 8 * 3600_000).toISOString().slice(0, 10);
+}
+
+async function processSalesAggPage(args: ProcessPageArgs): Promise<PageResult> {
+  const { windowFrom, windowTo, pageIndex, pageSize } = args;
+  await sleep(RATE_DELAY_MS * 2);
+  if (pageIndex > MAX_PAGE_NO) throw new Error(`分页超过上限 ${MAX_PAGE_NO}`);
+  const pageStart = Date.now();
+  const { data, reqBody } = await callSalesOrdersBackfill(pageIndex, pageSize, windowFrom, windowTo);
+  const list = pickList(data);
+  const hasNext = computeHasNext(data, list.length, pageSize, pageIndex);
+  const sk = await loadSkippedShops();
+  const rows: any[] = [];
+  let skippedDisabled = 0, skippedSyncOff = 0;
+  const skippedShopIds = new Set<string>();
+  for (const r of list) {
+    const sid = shopIdOf(r);
+    const skip = shouldSkipShop(sid, sk);
+    if (skip === "disabled") { skippedDisabled++; skippedShopIds.add(sid); continue; }
+    if (skip === "sync_off") { skippedSyncOff++; skippedShopIds.add(sid); continue; }
+    const oId = str(r.o_id ?? r.oId);
+    if (!oId) continue;
+    const orderCreatedAt = pickOrderCreatedAt(r);
+    const day = bjDateOf(orderCreatedAt)
+      ?? bjDateOf(parseJstBeijingDateTime(r.pay_date ?? r.pay_time))
+      ?? bjDateOf(windowFrom.toISOString());
+    rows.push({
+      o_id: oId,
+      summary_date: day,
+      shop_id: str(r.shop_id) ?? "",
+      shop_name: str(r.shop_name),
+      status: str(r.status),
+      ordered_amount: num(r.pay_amount),
+      paid_amount: num(r.paid_amount ?? r.pay_amount),
+      is_cancelled: String(r.status ?? "") === "Cancelled",
+      synced_at: new Date().toISOString(),
+    });
+  }
+  let upserted = 0, failed = 0, lastErr = "";
+  for (const ch of chunk(rows, 500)) {
+    const { error } = await admin.from("sales_backfill_order_agg").upsert(ch, { onConflict: "o_id" });
+    if (error) { failed += ch.length; lastErr = String(error.message ?? error); }
+    else upserted += ch.length;
+  }
+  if (rows.length > 0 && failed === 0) {
+    const days = rows.map((row) => row.summary_date).filter(Boolean).sort();
+    const { error: rcErr } = await admin.rpc("sales_backfill_recompute_daily", {
+      _from: days[0], _to: days[days.length - 1],
+    });
+    if (rcErr) lastErr = `recompute: ${String(rcErr.message ?? rcErr)}`;
+  }
+  const skipNote = formatSkipNote(skippedDisabled, skippedSyncOff, skippedShopIds.size);
+  return {
+    apiCount: list.length,
+    mainUpserted: upserted,
+    itemUpserted: 0,
+    failed,
+    hasNext,
+    errorDetail: (lastErr || skipNote) ? `${lastErr}${skipNote}` : undefined,
     requestBody: reqBody,
     responseCode: "0",
     responseMsg: "success",
@@ -796,6 +906,59 @@ Deno.serve(async (req) => {
     if (jobResp) {
       const text = await jobResp.text();
       return new Response(text, { status: jobResp.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // 历史回补 job(按制单时间 date_type=1):独立 sync_type,可与增量并行,断点续跑
+    const backfillResp = await handleJobActions({
+      action, body, syncType: "sales_backfill", callerUid: caller.uid,
+      processPage: processSalesBackfillPage,
+      startActionName: "start_sales_backfill_job",
+      tickActionName: "tick_sales_backfill_job",
+      cancelActionName: "cancel_sales_backfill_job",
+      functionName: "jst-sync-sales-orders",
+      // 任务卡口径:按天分窗、逐窗顺序;高峰日约 200+ 页,引擎在 100 页时
+      // 主动对剩余窗口对半拆分,避开 MAX_PAGE_NO=200 硬上限
+      config: { pageSize: PAGE_SIZE, maxWindowDays: 1, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 100 },
+      resolveWindowFromBody: (b) => resolveWindow(b),
+    });
+    if (backfillResp) {
+      const text = await backfillResp.text();
+      return new Response(text, { status: backfillResp.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // 早期汇总回补 job(aggregate-only,明细即拉即弃):独立 sync_type,断点续跑
+    const aggResp = await handleJobActions({
+      action, body, syncType: "sales_backfill_agg", callerUid: caller.uid,
+      processPage: processSalesAggPage,
+      startActionName: "start_sales_agg_job",
+      tickActionName: "tick_sales_agg_job",
+      cancelActionName: "cancel_sales_agg_job",
+      functionName: "jst-sync-sales-orders",
+      config: { pageSize: PAGE_SIZE, maxWindowDays: 1, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 100 },
+      resolveWindowFromBody: (b) => resolveWindow(b),
+    });
+    if (aggResp) {
+      const text = await aggResp.text();
+      return new Response(text, { status: aggResp.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // 回补参数语义探针:单页拉取、不落库,返回订单时间字段样本供人工核对 date_type=1 语义
+    if (action === "backfill_probe") {
+      const { from, to } = resolveWindow(body);
+      const pi = Number(body.page_index ?? 1);
+      const ps = Number(body.page_size ?? 5);
+      const probe = await callSalesOrdersBackfill(pi, ps, from, to);
+      const list = pickList(probe.data);
+      const sample = list.slice(0, 10).map((o: any) => ({
+        o_id: o.o_id ?? null, status: o.status ?? null, shop_id: o.shop_id ?? null,
+        order_time: o.order_time ?? o.order_date ?? o.created ?? null,
+        pay_date: o.pay_date ?? null, modified: o.modified ?? null,
+      }));
+      return new Response(JSON.stringify({
+        ok: true, request: probe.reqBody, api_count: list.length,
+        has_next: computeHasNext(probe.data, list.length, ps, pi),
+        sample,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // 兼容：一次性后台同步
