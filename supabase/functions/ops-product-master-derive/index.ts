@@ -208,7 +208,8 @@ async function loadRows(source: string, days: number, limit: number): Promise<De
       const po = r.purchase_order ?? {};
       out.push({
         sku_code: r.sku_no ?? null,
-        jst_sku_id: r.sku_id ?? null,
+        // purchase_order_items.sku_id 是内部 ops_skus 的 uuid(relink 回填),不是 JST 编号
+        jst_sku_id: null,
         style_no: r.style_no ?? null,
         product_name: r.product_name ?? null,
         sku_name: null,
@@ -226,17 +227,18 @@ async function loadRows(source: string, days: number, limit: number): Promise<De
   }
 
   if (source === "receipt" || source === "all") {
-    const { data, error } = await admin
+    const data = await fetchPaged("receipt", limit, (from, to) => admin
       .from("purchase_receipt_items")
       .select("sku_no, sku_id, product_name, cost_price, updated_at, receipt:purchase_receipts!inner(supplier_name, io_date)")
       .gte("updated_at", since)
-      .limit(limit);
-    if (error) throw new Error(`receipt: ${error.message}`);
-    for (const r of (data ?? []) as any[]) {
+      .order("id", { ascending: true })
+      .range(from, to));
+    for (const r of data as any[]) {
       const rc = r.receipt ?? {};
       out.push({
         sku_code: r.sku_no ?? null,
-        jst_sku_id: r.sku_id ?? null,
+        // purchase_receipt_items.sku_id 同为内部 uuid,不是 JST 编号
+        jst_sku_id: null,
         style_no: null,
         product_name: r.product_name ?? null,
         sku_name: null,
@@ -356,7 +358,7 @@ function aggregate(rows: DeriveRow[]): { masters: Agg[]; orphanAliases: DeriveRo
 
 
 async function upsertMasters(masters: Agg[]) {
-  let inserted = 0, updated = 0;
+  let inserted = 0, updated = 0, unchanged = 0, failed = 0;
   const skuCodes = Array.from(new Set(masters.map(m => m.sku_code).filter(Boolean))) as string[];
   const jstIds = Array.from(new Set(masters.map(m => m.jst_sku_id).filter(Boolean))) as string[];
 
@@ -364,24 +366,70 @@ async function upsertMasters(masters: Agg[]) {
   const idBySku = new Map<string, string>();
   const idByJst = new Map<string, string>();
 
-  if (skuCodes.length) {
-    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id, product_name, sku_name, style_no, color, size, sku_image_url, external_image_url, supplier_id, cost_price, first_seen_at, source").in("sku_code", skuCodes);
+  // 预加载已有主档:.in() 列表分块(避免 URL 过长 + 单次响应被 max-rows=1000 截断);
+  // 预加载失败必须抛出 —— 漏查会把已有行误判为新行,后续 insert 撞唯一键被当成 0 更新。
+  const EXIST_CHUNK = 500;
+  const SELECT_COLS = "id, sku_code, jst_sku_id, product_name, sku_name, style_no, color, size, sku_image_url, external_image_url, supplier_id, cost_price, first_seen_at, last_seen_at, source";
+  const indexRows = (data: any[] | null) => {
     (data ?? []).forEach((r: any) => {
       existingById.set(r.id, r);
       if (r.sku_code) idBySku.set(r.sku_code, r.id);
       if (r.jst_sku_id) idByJst.set(r.jst_sku_id, r.id);
     });
+  };
+  for (let i = 0; i < skuCodes.length; i += EXIST_CHUNK) {
+    const { data, error } = await admin.from("ops_skus").select(SELECT_COLS).in("sku_code", skuCodes.slice(i, i + EXIST_CHUNK));
+    if (error) throw new Error(`ops_skus preload by sku_code: ${error.message}`);
+    indexRows(data);
   }
-  if (jstIds.length) {
-    const { data } = await admin.from("ops_skus").select("id, sku_code, jst_sku_id, product_name, sku_name, style_no, color, size, sku_image_url, external_image_url, supplier_id, cost_price, first_seen_at, source").in("jst_sku_id", jstIds);
-    (data ?? []).forEach((r: any) => {
-      existingById.set(r.id, r);
-      if (r.sku_code) idBySku.set(r.sku_code, r.id);
-      if (r.jst_sku_id) idByJst.set(r.jst_sku_id, r.id);
-    });
+  for (let i = 0; i < jstIds.length; i += EXIST_CHUNK) {
+    const { data, error } = await admin.from("ops_skus").select(SELECT_COLS).in("jst_sku_id", jstIds.slice(i, i + EXIST_CHUNK));
+    if (error) throw new Error(`ops_skus preload by jst_sku_id: ${error.message}`);
+    indexRows(data);
   }
 
   const masterIdMap = new Map<string, string>(); // agg key -> ops_skus.id
+
+  // sales/refund/aftersale 来源的 supplier_id 是 JST 文本编号,
+  // 而 ops_skus/ops_products.supplier_id 是 uuid —— 仅格式合法时写入
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const supplierUuid = (v: string | null) => (v && UUID_RE.test(v) ? v : null);
+
+  // ops_skus.product_id NOT NULL:insert 新主档前必须 find-or-create ops_products
+  // (按 code = 款号,与 jst-sync-products 的归属约定一致)
+  const productIdByCode = new Map<string, string>();
+  const resolveProductId = async (m: Agg, skuCode: string): Promise<string | null> => {
+    const code = m.style_no || skuCode;
+    const cached = productIdByCode.get(code);
+    if (cached) return cached;
+    const { data: found, error: findErr } = await admin.from("ops_products").select("id").eq("code", code).maybeSingle();
+    if (findErr) {
+      console.error(`[derive] ops_products lookup failed code=${code}: ${findErr.message}`);
+      return null;
+    }
+    let pid = found?.id as string | undefined;
+    if (!pid) {
+      const { data: created, error: insErr } = await admin.from("ops_products").insert({
+        code,
+        name: m.product_name ?? code,
+        product_name: m.product_name,
+        style_no: m.style_no,
+        supplier_id: supplierUuid(m.supplier_id),
+        supplier_name_snapshot: m.supplier_name,
+        external_image_url: m.pic,
+        cost_price: m.cost_price,
+        is_active: true,
+        last_synced_at: new Date().toISOString(),
+      }).select("id").single();
+      if (insErr || !created) {
+        console.error(`[derive] ops_products insert failed code=${code}: ${insErr?.message ?? "no row returned"}`);
+        return null;
+      }
+      pid = created.id as string;
+    }
+    productIdByCode.set(code, pid);
+    return pid;
+  };
 
   for (const m of masters) {
     const keyPrimary = m.sku_code ? `sku:${m.sku_code}` : `jst:${m.jst_sku_id}`;
@@ -398,7 +446,7 @@ async function upsertMasters(masters: Agg[]) {
       size: m.size,
       sku_image_url: m.pic,
       external_image_url: m.pic,
-      supplier_id: m.supplier_id,
+      supplier_id: supplierUuid(m.supplier_id),
       cost_price: m.cost_price,
       last_seen_at: m.last,
       first_seen_at: m.first,
@@ -408,29 +456,52 @@ async function upsertMasters(masters: Agg[]) {
 
     if (id) {
       const ex = existingById.get(id) ?? {};
-      const patch: Record<string, any> = { last_seen_at: payload.last_seen_at, last_synced_at: payload.last_synced_at };
+      const patch: Record<string, any> = {};
       for (const k of ["jst_sku_id","sku_name","product_name","style_no","color","size","sku_image_url","external_image_url","supplier_id","first_seen_at"]) {
         if (!ex[k] && (payload as any)[k]) patch[k] = (payload as any)[k];
       }
       // 若原 sku_code 是 JST-xxx 占位且本次拿到了真实 sku_code，则覆盖
-      if (m.sku_code && (!ex.sku_code || /^JST-/.test(ex.sku_code))) patch.sku_code = m.sku_code;
+      if (m.sku_code && (!ex.sku_code || /^JST-/.test(ex.sku_code)) && ex.sku_code !== m.sku_code) patch.sku_code = m.sku_code;
       // 来源累计合并
       const prevSources = new Set((ex.source ?? "").split(",").map((s: string) => s.trim()).filter(Boolean));
       Array.from(m.sources).forEach(s => prevSources.add(s));
-      patch.source = Array.from(prevSources).join(",");
+      const mergedSource = Array.from(prevSources).join(",");
+      if (mergedSource !== (ex.source ?? "")) patch.source = mergedSource;
       // cost_price：入库来源覆盖；否则仅在原值为空时补
-      if (m.cost_price != null) {
+      if (m.cost_price != null && Number(m.cost_price) !== Number(ex.cost_price)) {
         if (m.sources.has("receipt") || ex.cost_price == null) patch.cost_price = m.cost_price;
       }
+      // last_seen_at 仅在前移时更新
+      const tsNum = (v: unknown) => { const n = Date.parse(String(v ?? "")); return Number.isNaN(n) ? null : n; };
+      const newSeen = tsNum(payload.last_seen_at), oldSeen = tsNum(ex.last_seen_at);
+      if (payload.last_seen_at && (oldSeen == null || (newSeen != null && newSeen > oldSeen))) patch.last_seen_at = payload.last_seen_at;
+
+      // 无实质变化则跳过写库:复跑可断点续推,避免一行不差地全量 UPDATE 撞墙钟
+      if (Object.keys(patch).length === 0) {
+        unchanged++;
+        masterIdMap.set(keyPrimary, id);
+        if (m.sku_code) idBySku.set(m.sku_code, id);
+        if (m.jst_sku_id) idByJst.set(m.jst_sku_id, id);
+        continue;
+      }
+      patch.last_synced_at = payload.last_synced_at;
       const { error } = await admin.from("ops_skus").update(patch).eq("id", id);
-      if (!error) { updated++; masterIdMap.set(keyPrimary, id);
+      if (error) {
+        failed++;
+        console.error(`[derive] ops_skus update failed id=${id} sku_code=${payload.sku_code}: ${error.message}`);
+      } else { updated++; masterIdMap.set(keyPrimary, id);
         // 同步更新内存索引，防止后续重复插入
         if (m.sku_code) idBySku.set(m.sku_code, id);
         if (m.jst_sku_id) idByJst.set(m.jst_sku_id, id);
       }
     } else {
-      const { data, error } = await admin.from("ops_skus").insert(payload).select("id").single();
-      if (!error && data) {
+      const productId = await resolveProductId(m, payload.sku_code);
+      if (!productId) { failed++; continue; }
+      const { data, error } = await admin.from("ops_skus").insert({ ...payload, product_id: productId }).select("id").single();
+      if (error || !data) {
+        failed++;
+        console.error(`[derive] ops_skus insert failed sku_code=${payload.sku_code}: ${error?.message ?? "no row returned"}`);
+      } else {
         inserted++;
         masterIdMap.set(keyPrimary, data.id);
         if (m.sku_code) idBySku.set(m.sku_code, data.id);
@@ -439,11 +510,11 @@ async function upsertMasters(masters: Agg[]) {
     }
   }
 
-  return { inserted, updated, masterIdMap };
+  return { inserted, updated, unchanged, failed, masterIdMap };
 }
 
 async function upsertAliases(masters: Agg[], masterIdMap: Map<string, string>) {
-  let aliasUpserts = 0;
+  let aliasUpserts = 0, failed = 0;
   for (const m of masters) {
     const keyPrimary = m.sku_code ? `sku:${m.sku_code}` : `jst:${m.jst_sku_id}`;
     const skuId = masterIdMap.get(keyPrimary);
@@ -462,20 +533,35 @@ async function upsertAliases(masters: Agg[], masterIdMap: Map<string, string>) {
         alias_type: "shop_sku",
       };
       // upsert by (shop_id, external_sku_code) — manual since unique index may not exist
-      const { data: existing } = await admin.from("ops_sku_aliases")
+      const { data: existing, error: selError } = await admin.from("ops_sku_aliases")
         .select("id")
         .eq("shop_id", a.shop_id)
         .eq("external_sku_code", a.online_sku_code ?? "")
         .maybeSingle();
+      if (selError) {
+        failed++;
+        console.error(`[derive] ops_sku_aliases lookup failed shop=${a.shop_id} sku=${a.online_sku_code}: ${selError.message}`);
+        continue;
+      }
       if (existing?.id) {
-        await admin.from("ops_sku_aliases").update(row).eq("id", existing.id);
+        const { error } = await admin.from("ops_sku_aliases").update(row).eq("id", existing.id);
+        if (error) {
+          failed++;
+          console.error(`[derive] ops_sku_aliases update failed id=${existing.id}: ${error.message}`);
+          continue;
+        }
       } else {
-        await admin.from("ops_sku_aliases").insert(row);
+        const { error } = await admin.from("ops_sku_aliases").insert(row);
+        if (error) {
+          failed++;
+          console.error(`[derive] ops_sku_aliases insert failed shop=${a.shop_id} sku=${a.online_sku_code}: ${error.message}`);
+          continue;
+        }
       }
       aliasUpserts++;
     }
   }
-  return aliasUpserts;
+  return { aliasUpserts, failed };
 }
 
 async function recordExceptions(orphans: DeriveRow[]) {
@@ -534,8 +620,8 @@ Deno.serve(async (req) => {
 
     const rows = await loadRows(source, days, limit);
     const { masters, orphanAliases } = aggregate(rows);
-    const { inserted, updated, masterIdMap } = await upsertMasters(masters);
-    const aliases = await upsertAliases(masters, masterIdMap);
+    const { inserted, updated, unchanged, failed: mastersFailed, masterIdMap } = await upsertMasters(masters);
+    const { aliasUpserts: aliases, failed: aliasesFailed } = await upsertAliases(masters, masterIdMap);
     const exceptions = await recordExceptions(orphanAliases);
 
     // 常态沉淀:商品档案(ops_products)supplier 为空时,取该款最近一张
@@ -552,7 +638,10 @@ Deno.serve(async (req) => {
       scanned_rows: rows.length,
       masters_inserted: inserted,
       masters_updated: updated,
+      masters_unchanged: unchanged,
+      masters_failed: mastersFailed,
       aliases_upserted: aliases,
+      aliases_failed: aliasesFailed,
       exceptions_recorded: exceptions,
       products_supplier_backfilled: supplierBackfilled,
       ...(supplierBackfillError ? { supplier_backfill_error: supplierBackfillError } : {}),
