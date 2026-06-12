@@ -138,6 +138,13 @@ async function refreshAccessToken(currentRefreshToken: string) {
   return accessToken as string;
 }
 
+/** 手动强制刷新 access_token（同步页「刷新 token」按钮用）。 */
+export async function forceRefreshAccessToken(): Promise<void> {
+  const seed = (await loadToken())?.refreshToken || JST_REFRESH_TOKEN_SEED;
+  if (!seed) throw new Error("缺少 refresh_token，请在聚水潭对应用重新授权后更新 JST_REFRESH_TOKEN / JST_ACCESS_TOKEN");
+  await refreshAccessToken(seed);
+}
+
 async function getValidAccessToken(): Promise<string> {
   const tok = await loadToken();
   if (!tok) {
