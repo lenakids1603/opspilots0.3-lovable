@@ -916,9 +916,10 @@ Deno.serve(async (req) => {
       tickActionName: "tick_sales_backfill_job",
       cancelActionName: "cancel_sales_backfill_job",
       functionName: "jst-sync-sales-orders",
-      // 任务卡口径:按天分窗、逐窗顺序;高峰日约 200+ 页,引擎在 100 页时
-      // 主动对剩余窗口对半拆分,避开 MAX_PAGE_NO=200 硬上限
-      config: { pageSize: PAGE_SIZE, maxWindowDays: 1, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 100 },
+      // 窗口 6 小时(生产实测教训,2026-06-12):整天窗高峰日 200+ 页,JST 深分页
+      // (>100 页)响应渐慢直至 25s 超时;且引擎 MAX_TOTAL_WINDOWS=24 对 99 天任务
+      // 全程禁止拆分,主动拆分救不了。6h 窗峰值约 50-76 页,分页浅、无需拆分。
+      config: { pageSize: PAGE_SIZE, maxWindowDays: 0.25, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 0 },
       resolveWindowFromBody: (b) => resolveWindow(b),
     });
     if (backfillResp) {
@@ -934,7 +935,8 @@ Deno.serve(async (req) => {
       tickActionName: "tick_sales_agg_job",
       cancelActionName: "cancel_sales_agg_job",
       functionName: "jst-sync-sales-orders",
-      config: { pageSize: PAGE_SIZE, maxWindowDays: 1, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 100 },
+      // 同回补:6h 窗避开深分页(1-2 月单日量低于 5-6 月,更宽裕)
+      config: { pageSize: PAGE_SIZE, maxWindowDays: 0.25, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 0 },
       resolveWindowFromBody: (b) => resolveWindow(b),
     });
     if (aggResp) {
