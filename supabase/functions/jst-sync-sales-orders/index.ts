@@ -756,6 +756,26 @@ async function ingestSalesPage(data: any, reqBody: any, pageIndex: number, pageS
   };
 }
 
+// 页深护栏阈值:160 页(8,000 单)时上报续翻点,让引擎把窗口余段重定位、页码归 1。
+// 既防 MAX_PAGE_NO=200 硬上限(3/1 晚窗实测 >200 页),也避开 JST 深分页渐慢超时。
+const BACKFILL_REBASE_AFTER_PAGE = 160;
+// 续翻点回退 60 秒:JST 按制单时间过滤,而我们用报文里的下单时间估算游标,
+// 两者有秒级偏差;宁可少量重翻(幂等),不可漏单。
+const BACKFILL_REBASE_SAFETY_MS = 60_000;
+
+function maybeRebase(result: PageResult, data: any, pageIndex: number): PageResult {
+  if (!result.hasNext || pageIndex < BACKFILL_REBASE_AFTER_PAGE) return result;
+  let maxT = 0;
+  for (const r of pickList(data)) {
+    const iso = pickOrderCreatedAt(r);
+    if (!iso) continue;
+    const ms = new Date(iso).getTime();
+    if (isFinite(ms) && ms > maxT) maxT = ms;
+  }
+  if (maxT > 0) result.rebaseWindowFrom = new Date(maxT - BACKFILL_REBASE_SAFETY_MS).toISOString();
+  return result;
+}
+
 async function processSalesBackfillPage(args: ProcessPageArgs): Promise<PageResult> {
   const { windowFrom, windowTo, pageIndex, pageSize } = args;
   // 回补与 15 分钟增量同步共享同一 JST app 限频配额,页间节流加倍让路增量
@@ -763,7 +783,8 @@ async function processSalesBackfillPage(args: ProcessPageArgs): Promise<PageResu
   if (pageIndex > MAX_PAGE_NO) throw new Error(`分页超过上限 ${MAX_PAGE_NO}`);
   const pageStart = Date.now();
   const { data, reqBody } = await callSalesOrdersBackfill(pageIndex, pageSize, windowFrom, windowTo);
-  return await ingestSalesPage(data, reqBody, pageIndex, pageSize, pageStart);
+  const result = await ingestSalesPage(data, reqBody, pageIndex, pageSize, pageStart);
+  return maybeRebase(result, data, pageIndex);
 }
 
 // ===== 早期汇总回补(aggregate-only,2026-01~02):明细即拉即弃 =====
@@ -825,7 +846,7 @@ async function processSalesAggPage(args: ProcessPageArgs): Promise<PageResult> {
     if (rcErr) lastErr = `recompute: ${String(rcErr.message ?? rcErr)}`;
   }
   const skipNote = formatSkipNote(skippedDisabled, skippedSyncOff, skippedShopIds.size);
-  return {
+  return maybeRebase({
     apiCount: list.length,
     mainUpserted: upserted,
     itemUpserted: 0,
@@ -836,7 +857,7 @@ async function processSalesAggPage(args: ProcessPageArgs): Promise<PageResult> {
     responseCode: "0",
     responseMsg: "success",
     durationMs: Date.now() - pageStart,
-  };
+  }, data, pageIndex);
 }
 
 // ===== legacy 一次性同步 (兼容 / cron) =====
@@ -920,7 +941,8 @@ Deno.serve(async (req) => {
       // (>100 页)响应渐慢直至 25s 超时;且引擎 MAX_TOTAL_WINDOWS=24 对 99 天任务
       // 全程禁止拆分,主动拆分救不了。6h 窗峰值约 50-76 页,分页浅、无需拆分。
       // reverseWindows:倒序(新→旧)执行,近期数据业务价值更高,先补。
-      config: { pageSize: PAGE_SIZE, maxWindowDays: 0.25, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 0, reverseWindows: true },
+      // skipFailedWindows:单窗硬失败记录后跳过,不允许中止整个回补。
+      config: { pageSize: PAGE_SIZE, maxWindowDays: 0.25, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 0, reverseWindows: true, skipFailedWindows: true },
       resolveWindowFromBody: (b) => resolveWindow(b),
     });
     if (backfillResp) {
@@ -936,8 +958,8 @@ Deno.serve(async (req) => {
       tickActionName: "tick_sales_agg_job",
       cancelActionName: "cancel_sales_agg_job",
       functionName: "jst-sync-sales-orders",
-      // 同回补:6h 窗避开深分页(1-2 月单日量低于 5-6 月,更宽裕)
-      config: { pageSize: PAGE_SIZE, maxWindowDays: 0.25, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 0 },
+      // 同回补:6h 窗避开深分页(1-2 月单日量低于 5-6 月,更宽裕);页深护栏与单窗跳过同样生效
+      config: { pageSize: PAGE_SIZE, maxWindowDays: 0.25, maxPagesPerRun: 20, timeBudgetSeconds: 50, proactiveSplitAfterPage: 0, skipFailedWindows: true },
       resolveWindowFromBody: (b) => resolveWindow(b),
     });
     if (aggResp) {

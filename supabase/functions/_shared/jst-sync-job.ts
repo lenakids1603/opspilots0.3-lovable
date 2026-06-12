@@ -15,6 +15,8 @@ export interface JobConfig {
   proactiveSplitAfterPage?: number;
   /** 窗口倒序执行(新→旧):历史回补先补业务价值高的近期数据。每个窗口内部 from/to 不变。 */
   reverseWindows?: boolean;
+  /** 单窗非临时失败:记录到 metadata.failed_windows 并跳过该窗继续,不终止整个任务。 */
+  skipFailedWindows?: boolean;
 }
 
 export const DEFAULT_JOB_CONFIG: JobConfig = {
@@ -37,6 +39,10 @@ export interface PageResult {
   responseCode?: string | null;
   responseMsg?: string | null;
   durationMs?: number;
+  /** 页深护栏:processPage 上报"续翻点"(本页最大业务时间)。引擎将当前窗口
+   * from 重定位到此时间并把页码归 1 —— 已翻完的时间段不重翻,页深重新变浅,
+   * 避免触顶 MAX_PAGE_NO/JST 深分页超时。要求接口按该业务时间升序返回。 */
+  rebaseWindowFrom?: string | null;
 }
 
 export interface ProcessPageArgs {
@@ -375,7 +381,19 @@ export async function tickJob(jobId: string, processPage: ProcessPageFn, config:
         // Proactive split: if we are deep into pagination and there's still more, split remaining window.
         let movedNext = !result.hasNext || result.apiCount === 0;
         let proactiveSplitInfo = "";
-        if (!movedNext && proactiveSplitAfterPage > 0 && pageIndex >= proactiveSplitAfterPage) {
+        // 页深护栏(优先于主动拆分):重定位当前窗口余段,已翻完的时间段不重翻
+        let rebased = false;
+        if (!movedNext && result.rebaseWindowFrom) {
+          const rb = new Date(result.rebaseWindowFrom).getTime();
+          if (isFinite(rb) && rb > winFrom.getTime() && rb < winTo.getTime()) {
+            windows = windows.map((w, i) => i === windowIndex ? { from: new Date(rb).toISOString(), to: w.to } : w);
+            metadata.rebase_count = (metadata.rebase_count ?? 0) + 1;
+            metadata.last_rebase_at = new Date().toISOString();
+            rebased = true;
+            proactiveSplitInfo = ` · 页深护栏:第 ${pageIndex} 页后窗口余段重定位至 ${new Date(rb).toISOString()},页码归 1`;
+          }
+        }
+        if (!movedNext && !rebased && proactiveSplitAfterPage > 0 && pageIndex >= proactiveSplitAfterPage) {
           const splitCount = metadata.split_count ?? 0;
           if (splitCount < MAX_SPLIT_TIMES && windows.length < MAX_TOTAL_WINDOWS) {
             // Split the CURRENT window in 2: keep "processed" half as done conceptually,
@@ -394,7 +412,7 @@ export async function tickJob(jobId: string, processPage: ProcessPageFn, config:
         }
 
         const newWindowIndex = movedNext ? windowIndex + 1 : windowIndex;
-        const newPageIndex = movedNext ? 1 : pageIndex + 1;
+        const newPageIndex = movedNext || rebased ? 1 : pageIndex + 1;
         const moreAfter = !(movedNext && newWindowIndex >= windows.length);
         const shouldPause = moreAfter && (pagesThisRun >= maxPages || Date.now() - tickStart > Math.max(0, budgetMs - 5000));
 
@@ -517,9 +535,30 @@ export async function tickJob(jobId: string, processPage: ProcessPageFn, config:
         }
 
         lastError = errMsg;
-        hardFailed = true;
         totalFailed++;
         metadata.last_error_type = errType;
+        if (cfg.skipFailedWindows) {
+          // 单窗失败:记录并跳过该窗,任务继续(历史回补不允许一窗中止全任务)
+          const failedWindows = Array.isArray(metadata.failed_windows) ? metadata.failed_windows : [];
+          failedWindows.push({
+            window_index: windowIndex, from: win.from, to: win.to, page_index: pageIndex,
+            error_type: errType, error: errMsg.slice(0, 300), at: new Date().toISOString(),
+          });
+          metadata.failed_windows = failedWindows;
+          delete metadata.retry;
+          await updateJob(jobId, {
+            total_failed: totalFailed,
+            metadata,
+            error_detail: errMsg,
+            current_window_index: windowIndex + 1,
+            next_page_index: 1,
+            message: `窗口 ${windowIndex + 1}/${windows.length} 第 ${pageIndex} 页失败(${errType}),已记录并跳过该窗继续 · ${errMsg.slice(0, 160)}`,
+          });
+          windowIndex += 1;
+          pageIndex = 1;
+          continue;
+        }
+        hardFailed = true;
         await updateJob(jobId, {
           total_failed: totalFailed,
           metadata,
