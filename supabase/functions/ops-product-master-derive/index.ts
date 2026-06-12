@@ -60,18 +60,39 @@ function deriveStyleNo(skuCode: string | null): string | null {
   return skuCode;
 }
 
+// PostgREST 服务端 max-rows=1000:单次 .limit(N>1000) 只会返回 1000 行,
+// 必须用 .range() 分页循环才能真正扫满 limit。order by id 保证分页窗口稳定。
+const PAGE_SIZE = 1000;
+async function fetchPaged(
+  label: string,
+  limit: number,
+  query: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: { message: string } | null }>,
+): Promise<any[]> {
+  const out: any[] = [];
+  while (out.length < limit) {
+    const from = out.length;
+    const to = Math.min(from + PAGE_SIZE, limit) - 1;
+    const { data, error } = await query(from, to);
+    if (error) throw new Error(`${label}: ${error.message}`);
+    const batch = data ?? [];
+    out.push(...batch);
+    if (batch.length < to - from + 1) break;
+  }
+  return out;
+}
+
 async function loadRows(source: string, days: number, limit: number): Promise<DeriveRow[]> {
   const since = new Date(Date.now() - days * 86400_000).toISOString();
   const out: DeriveRow[] = [];
 
   if (source === "sales" || source === "all") {
-    const { data, error } = await admin
+    const data = await fetchPaged("sales", limit, (from, to) => admin
       .from("jst_sales_order_items")
       .select("sku_code, sku_id, shop_sku_id, product_name, sku_name, pic, supplier_id, supplier_name, shop_id, jst_item_id, synced_at")
       .gte("synced_at", since)
-      .limit(limit);
-    if (error) throw new Error(`sales: ${error.message}`);
-    for (const r of data ?? []) {
+      .order("id", { ascending: true })
+      .range(from, to));
+    for (const r of data) {
       out.push({
         sku_code: r.sku_code ?? null,
         jst_sku_id: r.sku_id ?? null,
@@ -93,13 +114,13 @@ async function loadRows(source: string, days: number, limit: number): Promise<De
   }
 
   if (source === "outbound" || source === "all") {
-    const { data, error } = await admin
+    const data = await fetchPaged("outbound", limit, (from, to) => admin
       .from("jst_outbound_order_items")
       .select("sku_id, i_id, name, properties_value, color, size, pic, synced_at")
       .gte("synced_at", since)
-      .limit(limit);
-    if (error) throw new Error(`outbound: ${error.message}`);
-    for (const r of data ?? []) {
+      .order("id", { ascending: true })
+      .range(from, to));
+    for (const r of data) {
       const spec = pickSpec(r.properties_value);
       out.push({
         sku_code: null,
@@ -122,13 +143,13 @@ async function loadRows(source: string, days: number, limit: number): Promise<De
   }
 
   if (source === "refund" || source === "all") {
-    const { data, error } = await admin
+    const data = await fetchPaged("refund", limit, (from, to) => admin
       .from("jst_refund_order_items")
       .select("sku_id, name, properties_value, pic, supplier_id, supplier_name, synced_at")
       .gte("synced_at", since)
-      .limit(limit);
-    if (error) throw new Error(`refund: ${error.message}`);
-    for (const r of data ?? []) {
+      .order("id", { ascending: true })
+      .range(from, to));
+    for (const r of data) {
       const spec = pickSpec(r.properties_value);
       out.push({
         sku_code: null,
@@ -149,13 +170,13 @@ async function loadRows(source: string, days: number, limit: number): Promise<De
   }
 
   if (source === "aftersale" || source === "all") {
-    const { data, error } = await admin
+    const data = await fetchPaged("aftersale", limit, (from, to) => admin
       .from("jst_aftersale_received_items")
       .select("sku_id, name, properties_value, pic, supplier_id, supplier_name, synced_at")
       .gte("synced_at", since)
-      .limit(limit);
-    if (error) throw new Error(`aftersale: ${error.message}`);
-    for (const r of data ?? []) {
+      .order("id", { ascending: true })
+      .range(from, to));
+    for (const r of data) {
       const spec = pickSpec(r.properties_value);
       out.push({
         sku_code: null,
@@ -176,13 +197,13 @@ async function loadRows(source: string, days: number, limit: number): Promise<De
   }
 
   if (source === "purchase" || source === "all") {
-    const { data, error } = await admin
+    const data = await fetchPaged("purchase", limit, (from, to) => admin
       .from("purchase_order_items")
       .select("sku_no, sku_id, style_no, product_name, color, size, properties_value, product_image_url, unit_price, updated_at, purchase_order:purchase_orders!inner(supplier_id, supplier_name, po_date)")
       .gte("updated_at", since)
-      .limit(limit);
-    if (error) throw new Error(`purchase: ${error.message}`);
-    for (const r of (data ?? []) as any[]) {
+      .order("id", { ascending: true })
+      .range(from, to));
+    for (const r of data as any[]) {
       const spec = pickSpec(r.properties_value);
       const po = r.purchase_order ?? {};
       out.push({
