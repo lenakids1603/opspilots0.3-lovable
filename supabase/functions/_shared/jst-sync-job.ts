@@ -13,6 +13,8 @@ export interface JobConfig {
   staleMs: number;
   /** If a window's pageIndex exceeds this AND there are still more pages, proactively split the rest of the window. */
   proactiveSplitAfterPage?: number;
+  /** 窗口倒序执行(新→旧):历史回补先补业务价值高的近期数据。每个窗口内部 from/to 不变。 */
+  reverseWindows?: boolean;
 }
 
 export const DEFAULT_JOB_CONFIG: JobConfig = {
@@ -113,6 +115,7 @@ export async function createJob(opts: {
   const existing = await findActiveJob(opts.syncType);
   if (existing) return { ...existing, _reused: true };
   const windows = buildJobWindows(new Date(opts.fromIso), new Date(opts.toIso), config.maxWindowDays);
+  if (config.reverseWindows) windows.reverse();
 
   const { data: log, error: logErr } = await admin.from("jst_sync_logs").insert({
     sync_type: opts.syncType,
