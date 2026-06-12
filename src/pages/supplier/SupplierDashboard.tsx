@@ -13,7 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { formatDateCN, formatDateTimeCN, beijingYMD, beijingDayRangeToUTC } from "@/lib/datetime";
 import {
-  buildDeliveryDays, DeliveryTimelineGrid, TimelineSelectionBanner,
+  buildDeliveryTiers, deliveryTierKeyForYmd, DeliveryTimelineGrid, TimelineSelectionBanner,
   type DeliveryTimelineEntry,
 } from "@/components/ops/DeliveryTimelineVisual";
 import { ImagePreviewDialog, type PreviewImage } from "@/components/ops/ImagePreviewDialog";
@@ -51,6 +51,10 @@ function ymdToUTCRange(startYmd: string, endYmd: string) {
 // ============ Queries ============
 const EXCLUDED_STATUSES = ["Delete", "delete", "deleted"];
 const EXCLUDED_IN = `(${EXCLUDED_STATUSES.join(",")})`;
+// 交付视图（货期五档 + 急需交货表）口径：Finished=厂家已结单不会再交付、
+// Cancelled 已取消，都不属于「要交的货」，与催货页口径一致；统计区不受影响。
+const EXCLUDED_DELIVERY_STATUSES = [...EXCLUDED_STATUSES, "Cancelled", "Finished"];
+const EXCLUDED_DELIVERY_IN = `(${EXCLUDED_DELIVERY_STATUSES.join(",")})`;
 
 function usePurchaseStats(startYmd: string, endYmd: string) {
   return useQuery({
@@ -142,22 +146,22 @@ interface TimelineItem {
   product_name: string;
   unreceived_qty: number;
 }
-function useTimeline(dayBefore: number, dayAfter: number) {
+// 货期五档（与催货页同构）：已逾期全量 ～ 未来 7 天；Finished/Cancelled 不算待交付
+function useTimeline() {
   return useQuery({
-    queryKey: ["dash_timeline", dayBefore, dayAfter],
+    queryKey: ["dash_timeline_7d"],
     queryFn: async (): Promise<TimelineItem[]> => {
       const todayYmd = beijingYMD(new Date());
       const today = new Date(todayYmd + "T00:00:00+08:00");
-      const start = new Date(today); start.setDate(start.getDate() - dayBefore);
-      const end = new Date(today); end.setDate(end.getDate() + dayAfter);
-      const gte = beijingDayRangeToUTC(beijingYMD(start))!.gte;
+      const end = new Date(today); end.setDate(end.getDate() + 7);
       const lte = beijingDayRangeToUTC(beijingYMD(end))!.lte;
       const { data, error } = await supabase
         .from("purchase_order_items")
         .select("style_no,product_name,unreceived_qty,delivery_date,purchase_orders!inner(status)")
         .gt("unreceived_qty", 0)
-        .gte("delivery_date", gte).lte("delivery_date", lte)
-        .not("purchase_orders.status", "in", EXCLUDED_IN)
+        .not("delivery_date", "is", null)
+        .lte("delivery_date", lte)
+        .not("purchase_orders.status", "in", EXCLUDED_DELIVERY_IN)
         .limit(5000);
       if (error) throw error;
       return (data ?? []).map((r: any) => ({
@@ -188,16 +192,14 @@ interface PendingItem {
   po_status: string;
   po_date: string | null;
 }
-// 拉取 unreceived>0 且 delivery_date 在 [今天-5, 今天+7] 区间内的明细
+// 拉取 unreceived>0 且交付日在【已逾期 ～ 今天+7】内的明细（与催货页 7 天口径同构）
 function usePendingItemsRaw() {
   return useQuery({
-    queryKey: ["dash_pending_raw_v3"],
+    queryKey: ["dash_pending_raw_v4"],
     queryFn: async (): Promise<PendingItem[]> => {
       const todayYmd = beijingYMD(new Date());
       const today = new Date(todayYmd + "T00:00:00+08:00");
-      const start = new Date(today); start.setDate(start.getDate() - 5);
       const end = new Date(today); end.setDate(end.getDate() + 7);
-      const gte = beijingDayRangeToUTC(beijingYMD(start))!.gte;
       const lte = beijingDayRangeToUTC(beijingYMD(end))!.lte;
       const { data, error } = await supabase.from("purchase_order_items")
         .select(`
@@ -207,9 +209,8 @@ function usePendingItemsRaw() {
         `)
         .gt("unreceived_qty", 0)
         .not("delivery_date", "is", null)
-        .gte("delivery_date", gte)
         .lte("delivery_date", lte)
-        .not("purchase_orders.status", "in", EXCLUDED_IN)
+        .not("purchase_orders.status", "in", EXCLUDED_DELIVERY_IN)
         .limit(10000);
       if (error) throw error;
       return (data ?? []).map((r: any) => ({
@@ -371,12 +372,12 @@ export default function SupplierDashboard() {
   const purchaseQ = usePurchaseStats(startYmd, endYmd);
   const inboundQ = useInboundStats(startYmd, endYmd);
   const overdueQ = useOverdueStats();
-  const timelineQ = useTimeline(5, 14);
+  const timelineQ = useTimeline();
   const pendingQ = usePendingItemsRaw();
 
   const todayYmd = beijingYMD(new Date());
 
-  // 时间轴数据（数据源与过滤条件不变，仅换可视化）
+  // 货期五档（已逾期 ～ 未来 7 天，与催货页同构）
   const timelineEntries = useMemo<DeliveryTimelineEntry[]>(() =>
     (timelineQ.data ?? []).map(t => ({
       ymd: t.delivery_ymd,
@@ -384,7 +385,7 @@ export default function SupplierDashboard() {
       product_name: t.product_name || null,
       qty: t.unreceived_qty,
     })), [timelineQ.data]);
-  const timelineDays = useMemo(() => buildDeliveryDays(timelineEntries, todayYmd), [timelineEntries, todayYmd]);
+  const timelineDays = useMemo(() => buildDeliveryTiers(timelineEntries, todayYmd), [timelineEntries, todayYmd]);
   const thumbStyleNos = useMemo(() => timelineDays.flatMap(d => d.styles.map(s => s.style_no)), [timelineDays]);
   const styleImagesQ = useStyleImages(thumbStyleNos);
   const toggleYmd = (ymd: string) => {
@@ -396,11 +397,15 @@ export default function SupplierDashboard() {
     setPage(1);
   };
 
-  // 按款号聚合 → 排序 → 过滤
+  // 按款号聚合 → 排序 → 过滤（selectedYmds 现为档位 key 集合）
   const styleRows = useMemo<StyleRow[]>(() => {
     const items = pendingQ.data ?? [];
     const filtered = selectedYmds.size > 0
-      ? items.filter(it => it.delivery_date && selectedYmds.has(beijingYMD(it.delivery_date)))
+      ? items.filter(it => {
+          if (!it.delivery_date) return false;
+          const tier = deliveryTierKeyForYmd(beijingYMD(it.delivery_date), todayYmd);
+          return !!tier && selectedYmds.has(tier);
+        })
       : items;
     const groups = new Map<string, PendingItem[]>();
     for (const it of filtered) {
@@ -561,13 +566,14 @@ export default function SupplierDashboard() {
       <Card className="p-5">
         <div className="flex items-baseline gap-2 mb-5 flex-wrap">
           <h3 className="text-sm font-semibold flex items-center gap-2">
-            <span className="w-1 h-4 bg-emerald-500 rounded-sm" /> 货期时间轴
-            <span className="text-[11px] font-normal text-muted-foreground ml-1">前 5 天 ~ 后 14 天 · 按款号</span>
+            <span className="w-1 h-4 bg-emerald-500 rounded-sm" /> 货期紧急度
+            <span className="text-[11px] font-normal text-muted-foreground ml-1">已逾期 ～ 未来 7 天 · 五档 · 按款号</span>
           </h3>
           <TimelineSelectionBanner
             days={timelineDays}
             selected={selectedYmds}
             onClear={() => { setSelectedYmds(new Set()); setPage(1); }}
+            hint="点选一档或多档，叠加筛选下方明细"
           />
         </div>
         {timelineQ.isLoading ? (
@@ -588,10 +594,10 @@ export default function SupplierDashboard() {
       <Card className="p-5">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <h3 className="text-sm font-semibold flex items-center gap-2">
-            <span className="w-1 h-4 bg-emerald-500 rounded" /> 7天内急需交货
+            <span className="w-1 h-4 bg-emerald-500 rounded" /> 急需交货（已逾期 ～ 未来 7 天）
             {selectedYmds.size > 0 && (
               <Badge variant="outline" className="text-[11px]">
-                交付日 = {timelineDays.filter(d => selectedYmds.has(d.ymd)).map(d => d.label).join(" + ")}
+                档位 = {timelineDays.filter(d => selectedYmds.has(d.ymd)).map(d => d.label).join(" + ")}
               </Badge>
             )}
           </h3>
@@ -629,7 +635,7 @@ export default function SupplierDashboard() {
                 <tr><td colSpan={10} className="py-10 text-center text-rose-600">读取失败：{(pendingQ.error as any).message}</td></tr>
               ) : pageRows.length === 0 ? (
                 <tr><td colSpan={10} className="py-12 text-center text-muted-foreground">
-                  <Inbox className="w-6 h-6 inline mr-2 opacity-50" />过去 5 天至未来 7 天暂无待交付款式
+                  <Inbox className="w-6 h-6 inline mr-2 opacity-50" />已逾期至未来 7 天暂无待交付款式
                 </td></tr>
               ) : pageRows.map((r) => {
                 const st = r.status;

@@ -50,7 +50,6 @@ type PurchaseRow = {
   raw_gap: number; return_in_transit: number; resale_rate: number;
   return_offset: number; final_gap: number; earliest_pay_time: string | null;
 };
-type UrgencyRow = { urgency: Urgency; qty: number; order_count: number; supplier_count: number };
 type ClosedShortPoDetail = { po_id: string; delivery_date: string | null; short_qty: number };
 type ClosedShortRow = {
   sku: string; style_no: string; supplier_name: string;
@@ -191,12 +190,6 @@ export default function ChaseListPage() {
           if (error) throw error;
           return (data ?? []) as PurchaseRow[];
         } },
-      { queryKey: ["chase", "urgency_summary"], staleTime: 60_000,
-        queryFn: async () => {
-          const { data, error } = await supabase.rpc("ops_chase_urgency_summary" as never);
-          if (error) throw error;
-          return (data ?? []) as UrgencyRow[];
-        } },
       { queryKey: ["chase", "closed_short_list"], staleTime: 60_000,
         queryFn: async () => {
           const { data, error } = await supabase.rpc("ops_chase_closed_short_list" as never);
@@ -217,7 +210,7 @@ export default function ChaseListPage() {
         } },
     ],
   });
-  const [supplierQ, questionQ, purchaseQ, urgencyQ, closedQ, timelineQ, unmatchedQ] = queries;
+  const [supplierQ, questionQ, purchaseQ, closedQ, timelineQ, unmatchedQ] = queries;
   const loading = queries.some(q => q.isLoading);
   const anyError = queries.find(q => q.error)?.error as { code?: string; message?: string } | undefined;
   const isForbidden = anyError?.code === "42501" || /42501|权限|permission/i.test(anyError?.message ?? "");
@@ -225,24 +218,14 @@ export default function ChaseListPage() {
   const supplierRows = (supplierQ.data ?? []) as SupplierRow[];
   const questionCount = (questionQ.data ?? { pending_review_orders: 0, pending_review_items: 0, pending_review_qty: 0 }) as PendingReviewCount;
   const purchaseRows = (purchaseQ.data ?? []) as PurchaseRow[];
-  const urgencyRows = (urgencyQ.data ?? []) as UrgencyRow[];
   const closedRows = (closedQ.data ?? []) as ClosedShortRow[];
   const timelineRowsRaw = (timelineQ.data ?? []) as TimelineRow[];
   const unmatchedRows = (unmatchedQ.data ?? []) as UnmatchedRow[];
 
-  const urgencyByKey = useMemo(() => {
-    const m: Record<string, UrgencyRow> = {};
-    for (const r of urgencyRows) m[r.urgency] = r;
-    return m;
-  }, [urgencyRows]);
-  const overdueU = urgencyByKey.overdue;
-  const due24U = urgencyByKey.due24;
-
   const summary = useMemo(() => {
     const totalQty = supplierRows.reduce((s, r) => s + Number(r.total_qty || 0), 0);
     const supplierIds = new Set(supplierRows.map(r => r.supplier_id));
-    const skus = new Set(supplierRows.map(r => r.sku));
-    return { totalQty, supplierCount: supplierIds.size, skuCount: skus.size };
+    return { totalQty, supplierCount: supplierIds.size };
   }, [supplierRows]);
 
   const visiblePurchase = useMemo(
@@ -299,7 +282,7 @@ export default function ChaseListPage() {
       <PageHeader
         breadcrumb={["运维系统", "催货清单"]}
         title="催货清单"
-        description="按供应商汇总当前所有超期未发货 SKU，便于采购集中跟进。"
+        description="平台发货截止时间驱动的行动清单：只统计发货截止在【已逾期～未来 7 天】内的待发货需求；7 天以外的订单不进入本页（它们的问题由「采购缺口」页签负责）。"
         actions={
           <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
             <RefreshCw className={cn(loading && "animate-spin")} /> 刷新
@@ -323,23 +306,6 @@ export default function ChaseListPage() {
         </Card>
       )}
 
-      {/* 汇总卡 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <SummaryCard label="需催货件数" loading={loading}
-          value={fmtNum(summary.totalQty)} suffix="件"
-          extra={`涉及 ${fmtNum(summary.supplierCount)} 家供应商 · ${fmtNum(summary.skuCount)} 个 SKU`} />
-        <SummaryCard label="已对客超时" loading={loading}
-          value={fmtNum(overdueU?.qty ?? 0)} suffix="件" accent="danger"
-          extra={`${fmtNum(overdueU?.order_count ?? 0)} 单`} />
-        <SummaryCard label="24小时内到期" loading={loading}
-          value={fmtNum(due24U?.qty ?? 0)} suffix="件" accent="warning"
-          extra={`${fmtNum(due24U?.order_count ?? 0)} 单 · 今晚必催`} />
-        <SummaryCard label="待审核单" loading={loading}
-          value={fmtNum(questionCount.pending_review_orders)} suffix="单"
-          onClick={() => navigate("/operations/sales-orders?order_status=Question")}
-          extra="点击查看" />
-      </div>
-
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="supplier">按供应商催货</TabsTrigger>
@@ -348,10 +314,19 @@ export default function ChaseListPage() {
         </TabsList>
 
         <TabsContent value="supplier" className="mt-4">
-          <div className="text-xs text-muted-foreground mb-2">
-            口径：已匹配到「协议到货日已过的在产采购单」的待发货需求（可向供应商催讨的部分）＋
-            「供应商未匹配」兜底桶（新链接副本/缺商品档案映射）；
-            有供应商映射的缺口、下单过迟见「采购缺口」，厂家已结单少交见「厂家已结单」，正常在途不在此列
+          <div className="text-xs text-muted-foreground mb-2 flex items-center gap-3 flex-wrap">
+            <span>
+              口径：发货截止在【已逾期～未来 7 天】内、已匹配到在产采购单的需求（可催）＋「供应商未匹配」兜底桶（平台副本款）；
+              无采购单的缺货新款、下单过迟与已结单少交分别见「采购缺口」「厂家已结单」
+            </span>
+            <span className="shrink-0">
+              7 天内共 {fmtNum(summary.totalQty)} 件 · {fmtNum(summary.supplierCount)} 家供应商
+              {" · "}
+              <button type="button" className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => navigate("/operations/sales-orders?order_status=Question")}>
+                待审核 {fmtNum(questionCount.pending_review_orders)} 单
+              </button>
+            </span>
           </div>
           {loading ? (
             <div className="space-y-4">
@@ -530,26 +505,3 @@ export default function ChaseListPage() {
   );
 }
 
-function SummaryCard({
-  label, value, suffix, extra, accent, loading, onClick,
-}: {
-  label: string; value: string; suffix?: string; extra?: string;
-  accent?: "danger" | "warning"; loading?: boolean; onClick?: () => void;
-}) {
-  return (
-    <Card className={cn(onClick && "cursor-pointer hover:shadow-md transition-shadow")} onClick={onClick}>
-      <CardContent className="py-4">
-        <div className="text-xs text-muted-foreground mb-1">{label}</div>
-        {loading ? <Skeleton className="h-7 w-20" /> : (
-          <div className="flex items-baseline gap-1">
-            <span className={cn("text-2xl font-bold",
-              accent === "danger" && "text-destructive",
-              accent === "warning" && "text-orange-500")}>{value}</span>
-            {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
-          </div>
-        )}
-        {extra && <div className="text-xs text-muted-foreground mt-1">{extra}</div>}
-      </CardContent>
-    </Card>
-  );
-}

@@ -25,6 +25,7 @@ const RED = "#A82F2F";
 
 const TONES = {
   red: { bg: "#FBEDEC", deep: "#7A2222" },
+  orange: { bg: "#FAE8D9", deep: "#8A4310" },
   purple: { bg: "#EEEDFA", deep: "#2A2566" },
   amber: { bg: "#FAF0DC", deep: "#6A4106" },
   teal: { bg: "#E4F4EE", deep: "#0A4A3A" },
@@ -91,17 +92,77 @@ export function buildDeliveryDays(
   return out;
 }
 
+/* ---------- 紧急度五档（供应商工作台，2026-06-12 与催货页同构） ----------
+ * 协议到货日为日粒度：已逾期(<今天) / 24小时内(今天) / 48小时内(明天) /
+ * 72小时内(后天) / 7天内(3~7天)。红>橙>黄突出前三档，后两档常规色。
+ * 仅含【已逾期～未来7天】的待交付；DeliveryDay.ymd 复用为档位 key。 */
+export type DeliveryTierKey = "overdue" | "due24" | "due48" | "due72" | "due7";
+
+const TIER_DEFS: { key: DeliveryTierKey; label: string; tone: ToneKey }[] = [
+  { key: "overdue", label: "已逾期", tone: "red" },
+  { key: "due24", label: "24小时内", tone: "orange" },
+  { key: "due48", label: "48小时内", tone: "amber" },
+  { key: "due72", label: "72小时内", tone: "teal" },
+  { key: "due7", label: "7天内", tone: "teal" },
+];
+
+/** 把交付日（北京 YYYY-MM-DD）映射到档位；超出 7 天返回 null（不进工作台视图） */
+export function deliveryTierKeyForYmd(ymd: string, todayYmd: string): DeliveryTierKey | null {
+  if (!ymd) return null;
+  if (ymd < todayYmd) return "overdue";
+  if (ymd === todayYmd) return "due24";
+  if (ymd === addDaysYmd(todayYmd, 1)) return "due48";
+  if (ymd === addDaysYmd(todayYmd, 2)) return "due72";
+  if (ymd <= addDaysYmd(todayYmd, 7)) return "due7";
+  return null;
+}
+
+/** 把待交付明细按紧急度分为固定五档（已逾期～未来 7 天） */
+export function buildDeliveryTiers(
+  entries: DeliveryTimelineEntry[],
+  todayYmd: string,
+): DeliveryDay[] {
+  const byTier = new Map<DeliveryTierKey, Map<string, DayStyle>>();
+  for (const e of entries) {
+    if (!e.ymd || !(e.qty > 0)) continue;
+    const tier = deliveryTierKeyForYmd(e.ymd, todayYmd);
+    if (!tier) continue;
+    let m = byTier.get(tier);
+    if (!m) { m = new Map(); byTier.set(tier, m); }
+    const cur = m.get(e.style_no);
+    if (cur) {
+      cur.qty += e.qty;
+      if (!cur.name && e.product_name) cur.name = e.product_name;
+    } else {
+      m.set(e.style_no, { style_no: e.style_no, name: e.product_name, qty: e.qty });
+    }
+  }
+  return TIER_DEFS.map((def) => {
+    const styles = [...(byTier.get(def.key)?.values() ?? [])].sort((a, b) => b.qty - a.qty);
+    return {
+      ymd: def.key,
+      label: def.label,
+      tone: def.tone,
+      qty: styles.reduce((s, x) => s + x.qty, 0),
+      styles: styles.slice(0, 3),
+      restCount: Math.max(0, styles.length - 3),
+      isToday: def.key === "due24",
+    };
+  });
+}
+
 /** 时间轴标题旁的选中横幅 / 操作提示 */
 export function TimelineSelectionBanner({
-  days, selected, onClear,
+  days, selected, onClear, hint,
 }: {
   days: DeliveryDay[];
   selected: Set<string>;
   onClear: () => void;
+  hint?: string;
 }) {
   const sel = days.filter((d) => selected.has(d.ymd));
   if (sel.length === 0) {
-    return <span style={{ fontSize: 11, color: FAINT }}>点选一天或多天，叠加筛选下方明细</span>;
+    return <span style={{ fontSize: 11, color: FAINT }}>{hint ?? "点选一天或多天，叠加筛选下方明细"}</span>;
   }
   const qty = sel.reduce((s, d) => s + d.qty, 0);
   return (

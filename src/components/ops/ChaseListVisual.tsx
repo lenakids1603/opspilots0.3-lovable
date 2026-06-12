@@ -1,16 +1,23 @@
 // ChaseListVisual.tsx
-// 催货清单「按供应商催货」页签的可视化区块：发货截止时间轴 + 按款式分组的供应商清单。
+// 催货清单「按供应商催货」页签的可视化区块：紧急度五档横幅 + 按款式分组的供应商清单。
 // 纯展示组件：把两个 RPC 的原始返回数组通过 props 传入即可，组件内部完成
-// 分桶、按款合并（含平台数字ID与内部款号的同款合并）、筛选、复制催货消息、CSV 导出。
+// 分档、按款合并（含平台数字ID与内部款号的同款合并）、筛选、复制催货消息、CSV 导出。
+//
+// 口径（2026-06-12 老板确认）：本页只含发货截止时间在【已逾期～未来7天】内的需求
+// （过滤在 RPC 层完成），顶部横幅为固定五档：已逾期/24h/48h/72h/7天内，
+// 可多选筛档，默认选中「已逾期+24h」。
 //
 // 设计原则（请勿“美化”改动）：
-//   1) 全页只允许红（已超时）、橙（24h内）两个警示色，且只用于文字，不做色块/描边/胶囊；
+//   1) 警示色仅红（已逾期）>橙（24h）>黄（48h）三档，且只用于文字与彩带浅底；
+//      72h 与 7 天内用常规色；
 //   2) 列表无卡片边框，行与行之间用 1px 发丝线分隔；
 //   3) 商品图是页面里唯一的大面积颜色，缩略图不加彩色描边；
-//   4) 时间轴缩略图与彩带在同一个 grid 内，天然对齐。
+//   4) 横幅缩略图与彩带在同一个 grid 内，天然对齐。
 
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, Check, Download } from "lucide-react";
+
+export type Urgency = "overdue" | "due24" | "due48" | "due72" | "later";
 
 export interface TimelineRow {
   deadline_date: string; // 'YYYY-MM-DD'
@@ -18,7 +25,7 @@ export interface TimelineRow {
   product_name: string | null;
   image_url: string | null;
   qty: number;
-  urgency: "overdue" | "due24" | "due48" | "due72" | "later";
+  urgency: Urgency;
 }
 
 export interface SupplierRow {
@@ -46,6 +53,9 @@ export interface UnmatchedRow {
   total_qty: number;
   overdue_qty: number;
   due24_qty: number;
+  due48_qty: number;
+  due72_qty: number;
+  later_qty: number;
   order_count: number;
   shop_names: string[] | null;
   earliest_ship_time: string | null;
@@ -67,14 +77,26 @@ const FAINT = "#9AA1AA";
 const HAIRLINE = "rgba(17,24,32,0.08)";
 const RED = "#A82F2F";
 const AMBER = "#8A5310";
+const YELLOW = "#7A6308";
 
 const TONES = {
   red: { bg: "#FBEDEC", deep: "#7A2222" },
+  orange: { bg: "#FAE8D9", deep: "#8A4310" },
   purple: { bg: "#EEEDFA", deep: "#2A2566" },
   amber: { bg: "#FAF0DC", deep: "#6A4106" },
   teal: { bg: "#E4F4EE", deep: "#0A4A3A" },
 } as const;
 type ToneKey = keyof typeof TONES;
+
+// 五档定义：已逾期红 > 24h橙 > 48h黄(amber)，72h/7天内常规色
+const TIER_DEFS: { key: Urgency; label: string; tone: ToneKey }[] = [
+  { key: "overdue", label: "已逾期", tone: "red" },
+  { key: "due24", label: "24小时内", tone: "orange" },
+  { key: "due48", label: "48小时内", tone: "amber" },
+  { key: "due72", label: "72小时内", tone: "teal" },
+  { key: "later", label: "7天内", tone: "teal" },
+];
+const ALL_TIERS: Urgency[] = TIER_DEFS.map((t) => t.key);
 
 const CHEVRON =
   "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%, 10px 50%)";
@@ -83,11 +105,6 @@ const NUMERIC_ID = /^\d{12,}$/;
 
 function todayCN(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
-}
-function addDays(iso: string, n: number): string {
-  const d = new Date(iso + "T00:00:00Z");
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
 }
 function md(iso: string): string {
   return `${+iso.slice(5, 7)}/${+iso.slice(8, 10)}`;
@@ -103,37 +120,27 @@ function skuTail(sku: string, styleNo: string): string {
   return sku.startsWith(styleNo) ? sku.slice(styleNo.length) || sku : sku;
 }
 
-/* ---------- 时间轴分桶 ---------- */
+/* ---------- 紧急度五档分桶（横幅，兼任顶部汇总与筛选器） ---------- */
 
 interface DayStyle { key: string; code: string; name: string; img: string | null; qty: number; }
-interface DayBucket {
-  key: string; label: string; qty: number; tone: ToneKey;
-  styles: DayStyle[]; restCount: number; styleNos: Set<string>;
+interface TierBucket {
+  key: Urgency; label: string; qty: number; tone: ToneKey;
+  styles: DayStyle[]; restCount: number;
 }
 
-function buildDays(rows: TimelineRow[], today: string): DayBucket[] {
-  const defs: { key: string; label: string; tone: ToneKey; match: (d: string) => boolean }[] = [
-    { key: "overdue", label: "逾期", tone: "red", match: (d) => d < today },
-    { key: today, label: `今天 ${md(today)}`, tone: "purple", match: (d) => d === today },
-    { key: addDays(today, 1), label: md(addDays(today, 1)), tone: "amber", match: (d) => d === addDays(today, 1) },
-    { key: addDays(today, 2), label: md(addDays(today, 2)), tone: "teal", match: (d) => d === addDays(today, 2) },
-    { key: addDays(today, 3), label: md(addDays(today, 3)), tone: "teal", match: (d) => d === addDays(today, 3) },
-    { key: addDays(today, 4), label: md(addDays(today, 4)), tone: "teal", match: (d) => d === addDays(today, 4) },
-    { key: "later", label: "更晚", tone: "teal", match: (d) => d > addDays(today, 4) },
-  ];
-  return defs.map((def) => {
-    const hit = rows.filter((r) => def.match(r.deadline_date));
-    const merged = new Map<string, DayStyle & { nos: string[] }>();
+function buildTiers(rows: TimelineRow[]): TierBucket[] {
+  return TIER_DEFS.map((def) => {
+    const hit = rows.filter((r) => r.urgency === def.key);
+    const merged = new Map<string, DayStyle>();
     for (const r of hit) {
       const name = shortName(r.product_name, r.style_no);
       const cur = merged.get(name);
       if (cur) {
         cur.qty += Number(r.qty);
-        cur.nos.push(r.style_no);
         if (!cur.img && r.image_url) cur.img = r.image_url;
         if (NUMERIC_ID.test(cur.code) && !NUMERIC_ID.test(r.style_no)) cur.code = r.style_no;
       } else {
-        merged.set(name, { key: name, code: r.style_no, name, img: r.image_url, qty: Number(r.qty), nos: [r.style_no] });
+        merged.set(name, { key: name, code: r.style_no, name, img: r.image_url, qty: Number(r.qty) });
       }
     }
     const styles = [...merged.values()].sort((a, b) => b.qty - a.qty);
@@ -142,25 +149,36 @@ function buildDays(rows: TimelineRow[], today: string): DayBucket[] {
       qty: styles.reduce((s, x) => s + x.qty, 0),
       styles: styles.slice(0, 3),
       restCount: Math.max(0, styles.length - 3),
-      styleNos: new Set(hit.map((r) => r.style_no)),
     };
   });
 }
 
 /* ---------- 供应商 / 款式聚合 ---------- */
 
-interface SkuItem { tail: string; qty: number; overdue: number; due24: number; }
+// 行级五档件数：sel = 当前选中档位内的件数（筛选与展示主数字都用它）
+type TierQty = { overdue: number; due24: number; due48: number; due72: number; later: number };
+function tierQtyOf(r: { overdue_qty: number; due24_qty: number; due48_qty: number; due72_qty: number; later_qty: number }): TierQty {
+  return {
+    overdue: Number(r.overdue_qty || 0), due24: Number(r.due24_qty || 0),
+    due48: Number(r.due48_qty || 0), due72: Number(r.due72_qty || 0), later: Number(r.later_qty || 0),
+  };
+}
+function selQty(t: TierQty, active: Set<Urgency>): number {
+  return ALL_TIERS.reduce((s, k) => s + (active.has(k) ? t[k] : 0), 0);
+}
+
+interface SkuItem { tail: string; qty: number; sel: number; overdue: number; due24: number; due48: number; }
 interface StyleGroup {
   key: string; code: string; name: string; img: string | null;
-  total: number; overdue: number; due24: number; maxOverdue: number;
+  total: number; sel: number; overdue: number; due24: number; due48: number; maxOverdue: number;
   skus: SkuItem[]; styleNos: string[];
 }
 export interface SupplierGroup {
-  id: string; name: string; total: number; overdue: number; due24: number;
+  id: string; name: string; total: number; sel: number; overdue: number; due24: number; due48: number;
   styles: StyleGroup[];
 }
 
-function buildSuppliers(rows: SupplierRow[]): SupplierGroup[] {
+function buildSuppliers(rows: SupplierRow[], active: Set<Urgency>): SupplierGroup[] {
   const bySupplier = new Map<string, SupplierRow[]>();
   for (const r of rows) {
     const list = bySupplier.get(r.supplier_id) ?? [];
@@ -171,62 +189,75 @@ function buildSuppliers(rows: SupplierRow[]): SupplierGroup[] {
   for (const [id, list] of bySupplier) {
     const byStyle = new Map<string, StyleGroup>();
     for (const r of list) {
+      const t = tierQtyOf(r);
+      const sel = selQty(t, active);
       const name = shortName(r.product_name, r.style_no);
       let g = byStyle.get(name);
       if (!g) {
-        g = { key: name, code: r.style_no, name, img: r.image_url, total: 0, overdue: 0, due24: 0, maxOverdue: 0, skus: [], styleNos: [] };
+        g = { key: name, code: r.style_no, name, img: r.image_url, total: 0, sel: 0, overdue: 0, due24: 0, due48: 0, maxOverdue: 0, skus: [], styleNos: [] };
         byStyle.set(name, g);
       }
       if (NUMERIC_ID.test(g.code) && !NUMERIC_ID.test(r.style_no)) g.code = r.style_no;
       if (!g.img && r.image_url) g.img = r.image_url;
       g.total += Number(r.total_qty);
-      g.overdue += Number(r.overdue_qty);
-      g.due24 += Number(r.due24_qty);
+      g.sel += sel;
+      g.overdue += t.overdue;
+      g.due24 += t.due24;
+      g.due48 += t.due48;
       g.maxOverdue = Math.max(g.maxOverdue, r.max_overdue_days);
       g.styleNos.push(r.style_no);
       const tail = skuTail(r.sku, r.style_no);
       const exist = g.skus.find((k) => k.tail === tail);
-      if (exist) { exist.qty += Number(r.total_qty); exist.overdue += Number(r.overdue_qty); exist.due24 += Number(r.due24_qty); }
-      else g.skus.push({ tail, qty: Number(r.total_qty), overdue: Number(r.overdue_qty), due24: Number(r.due24_qty) });
+      if (exist) { exist.qty += Number(r.total_qty); exist.sel += sel; exist.overdue += t.overdue; exist.due24 += t.due24; exist.due48 += t.due48; }
+      else g.skus.push({ tail, qty: Number(r.total_qty), sel, overdue: t.overdue, due24: t.due24, due48: t.due48 });
     }
+    // 仅显示选中档位内有量的款/SKU；催货消息与导出仍用 7 天全量
     const styles = [...byStyle.values()]
-      .map((g) => ({ ...g, skus: g.skus.sort((a, b) => b.overdue - a.overdue || b.qty - a.qty) }))
-      .sort((a, b) => b.overdue - a.overdue || b.total - a.total);
+      .filter((g) => g.sel > 0)
+      .map((g) => ({ ...g, skus: g.skus.sort((a, b) => b.overdue - a.overdue || b.sel - a.sel || b.qty - a.qty) }))
+      .sort((a, b) => b.overdue - a.overdue || b.sel - a.sel || b.total - a.total);
+    if (styles.length === 0) continue;
     groups.push({
       id, name: list[0].supplier_name,
       total: styles.reduce((s, x) => s + x.total, 0),
+      sel: styles.reduce((s, x) => s + x.sel, 0),
       overdue: styles.reduce((s, x) => s + x.overdue, 0),
       due24: styles.reduce((s, x) => s + x.due24, 0),
+      due48: styles.reduce((s, x) => s + x.due48, 0),
       styles,
     });
   }
-  return groups.sort((a, b) => b.overdue - a.overdue || b.total - a.total);
+  return groups.sort((a, b) => b.overdue - a.overdue || b.sel - a.sel || b.total - a.total);
 }
 
 /* ---------- 供应商未匹配兜底桶 ---------- */
 
 interface UnmatchedGroup {
   key: string; code: string; name: string; img: string | null;
-  total: number; overdue: number; due24: number;
+  total: number; sel: number; overdue: number; due24: number; due48: number;
   shops: string[]; styleNos: string[];
   skus: { tail: string; qty: number; overdue: number }[];
 }
 
 // 复用款号纠正逻辑:按 shortName 归并同款,数字款号(平台副本)借同名正本款号显示
-function buildUnmatched(rows: UnmatchedRow[]): UnmatchedGroup[] {
+function buildUnmatched(rows: UnmatchedRow[], active: Set<Urgency>): UnmatchedGroup[] {
   const byName = new Map<string, UnmatchedGroup>();
   for (const r of rows) {
+    const t = tierQtyOf(r);
+    const sel = selQty(t, active);
     const name = shortName(r.product_name, r.style_no);
     let g = byName.get(name);
     if (!g) {
-      g = { key: name, code: r.style_no, name, img: r.image_url, total: 0, overdue: 0, due24: 0, shops: [], styleNos: [], skus: [] };
+      g = { key: name, code: r.style_no, name, img: r.image_url, total: 0, sel: 0, overdue: 0, due24: 0, due48: 0, shops: [], styleNos: [], skus: [] };
       byName.set(name, g);
     }
     if (NUMERIC_ID.test(g.code) && !NUMERIC_ID.test(r.style_no)) g.code = r.style_no;
     if (!g.img && r.image_url) g.img = r.image_url;
     g.total += Number(r.total_qty);
-    g.overdue += Number(r.overdue_qty);
-    g.due24 += Number(r.due24_qty);
+    g.sel += sel;
+    g.overdue += t.overdue;
+    g.due24 += t.due24;
+    g.due48 += t.due48;
     g.styleNos.push(r.style_no);
     for (const s of r.shop_names ?? []) if (s && !g.shops.includes(s)) g.shops.push(s);
     for (const d of r.sku_details ?? []) {
@@ -237,8 +268,9 @@ function buildUnmatched(rows: UnmatchedRow[]): UnmatchedGroup[] {
     }
   }
   return [...byName.values()]
+    .filter((g) => g.sel > 0)
     .map((g) => ({ ...g, skus: g.skus.sort((a, b) => b.overdue - a.overdue || b.qty - a.qty) }))
-    .sort((a, b) => b.overdue - a.overdue || b.total - a.total);
+    .sort((a, b) => b.overdue - a.overdue || b.sel - a.sel || b.total - a.total);
 }
 
 /* ---------- 复制 / 导出 ---------- */
@@ -289,44 +321,26 @@ function Thumb({ img, qty, dim }: { img: string | null; qty: number; dim: boolea
 
 export default function ChaseListVisual({ timeline, suppliers, unmatched, onExport }: Props) {
   const today = useMemo(todayCN, []);
-  const days = useMemo(() => buildDays(timeline, today), [timeline, today]);
-  const groups = useMemo(() => buildSuppliers(suppliers), [suppliers]);
-  const unmatchedGroups = useMemo(() => buildUnmatched(unmatched ?? []), [unmatched]);
+  const tiers = useMemo(() => buildTiers(timeline), [timeline]);
+  // 默认选中「已逾期+24h」：打开页面第一眼就是最危险的部分；全部取消 = 看 7 天内全部
+  const [selected, setSelected] = useState<Set<Urgency>>(new Set(["overdue", "due24"]));
+  const active = useMemo<Set<Urgency>>(
+    () => (selected.size === 0 ? new Set(ALL_TIERS) : selected),
+    [selected],
+  );
+  const groups = useMemo(() => buildSuppliers(suppliers, active), [suppliers, active]);
+  const unmatchedGroups = useMemo(() => buildUnmatched(unmatched ?? [], active), [unmatched, active]);
   const [unmatchedOpen, setUnmatchedOpen] = useState(true);
   const [unmatchedShowAll, setUnmatchedShowAll] = useState(false);
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [tailOpen, setTailOpen] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
-  const filterSet = useMemo(() => {
-    if (selected.size === 0) return null;
-    const s = new Set<string>();
-    days.filter((d) => selected.has(d.key)).forEach((d) => d.styleNos.forEach((n) => s.add(n)));
-    return s;
-  }, [selected, days]);
-
-  const selectedDays = useMemo(() => days.filter((d) => selected.has(d.key)), [selected, days]);
-  const selectedQty = selectedDays.reduce((s, d) => s + d.qty, 0);
-
-  const styleDayQty = useMemo(() => {
-    if (selected.size === 0) return null;
-    const m = new Map<string, number>();
-    for (const r of timeline) {
-      const inSel =
-        (selected.has("overdue") && r.deadline_date < today) ||
-        selected.has(r.deadline_date) ||
-        (selected.has("later") && r.deadline_date > addDays(today, 4));
-      if (inSel) {
-        const k = shortName(r.product_name, r.style_no);
-        m.set(k, (m.get(k) ?? 0) + Number(r.qty));
-      }
-    }
-    return m;
-  }, [selected, timeline, today]);
+  const selectedTiers = useMemo(() => tiers.filter((d) => selected.has(d.key)), [selected, tiers]);
+  const selectedQty = selectedTiers.reduce((s, d) => s + d.qty, 0);
 
   const copy = async (g: SupplierGroup) => {
     await navigator.clipboard.writeText(chaseMessage(g, today));
@@ -348,22 +362,22 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, onExpo
 
   return (
     <div style={{ color: INK }}>
-      {/* ======== 发货截止时间轴 ======== */}
+      {/* ======== 紧急度五档横幅（顶部汇总 + 筛选器） ======== */}
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14 }}>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>发货截止时间轴</span>
-        <span style={{ fontSize: 11, color: FAINT }}>含可催供应商＋供应商未匹配兜底，非全部待发货</span>
+        <span style={{ fontSize: 14, fontWeight: 600 }}>紧急度五档</span>
+        <span style={{ fontSize: 11, color: FAINT }}>仅含发货截止在【已逾期～未来7天】内的需求（可催供应商＋未匹配兜底）</span>
         {selected.size > 0 ? (
           <button style={{ ...textBtn, color: RED, fontWeight: 500 }} onClick={() => setSelected(new Set())}>
-            已选 {selectedDays.map((d) => d.label).join(" + ")} · 合计 {selectedQty} 件 · 点击清除
+            已选 {selectedTiers.map((d) => d.label).join(" + ")} · 合计 {selectedQty} 件 · 点击清除看 7 天内全部
           </button>
         ) : (
-          <span style={{ fontSize: 11, color: FAINT }}>点选一天或多天，叠加筛选下方款式</span>
+          <span style={{ fontSize: 11, color: FAINT }}>点选一档或多档，叠加筛选下方款式</span>
         )}
       </div>
 
       <div style={{ overflowX: "auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0,1fr))", gap: 4, minWidth: 880 }}>
-          {days.map((d) => {
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0,1fr))", gap: 4, minWidth: 720 }}>
+          {tiers.map((d) => {
             const dim = selected.size > 0 && !selected.has(d.key);
             const tone = TONES[d.tone];
             return (
@@ -394,15 +408,16 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, onExpo
 
       {/* ======== 供应商未匹配兜底桶(有数据才显示) ======== */}
       {(() => {
-        const visibleUm = unmatchedGroups.filter((g) => !filterSet || g.styleNos.some((n) => filterSet.has(n)));
+        const visibleUm = unmatchedGroups;
         if (visibleUm.length === 0) return null;
-        const umTotal = visibleUm.reduce((s, g) => s + g.total, 0);
+        const umSel = visibleUm.reduce((s, g) => s + g.sel, 0);
         const umOverdue = visibleUm.reduce((s, g) => s + g.overdue, 0);
         const umDue24 = visibleUm.reduce((s, g) => s + g.due24, 0);
+        const umDue48 = visibleUm.reduce((s, g) => s + g.due48, 0);
         const TOP_N = 10;
         const list = unmatchedShowAll ? visibleUm : visibleUm.slice(0, TOP_N);
         const restCount = visibleUm.length - list.length;
-        const restQty = visibleUm.slice(TOP_N).reduce((s, g) => s + g.total, 0);
+        const restQty = visibleUm.slice(TOP_N).reduce((s, g) => s + g.sel, 0);
         return (
           <section style={{ marginTop: 28 }}>
             <header style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0" }}>
@@ -411,10 +426,11 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, onExpo
                 {unmatchedOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               </button>
               <span style={{ fontSize: 14.5, fontWeight: 600, color: RED }}>供应商未匹配</span>
-              <span style={{ fontSize: 13, color: SUB }}>{visibleUm.length} 款 · {umTotal} 件无人可催</span>
-              {umOverdue > 0 && <span style={{ fontSize: 12.5, color: RED, fontWeight: 500 }}>已超时 {umOverdue} 件</span>}
+              <span style={{ fontSize: 13, color: SUB }}>{visibleUm.length} 款 · {umSel} 件无人可催</span>
+              {umOverdue > 0 && <span style={{ fontSize: 12.5, color: RED, fontWeight: 500 }}>已逾期 {umOverdue} 件</span>}
               {umDue24 > 0 && <span style={{ fontSize: 12.5, color: AMBER, fontWeight: 500 }}>24h内 {umDue24} 件</span>}
-              <span style={{ fontSize: 11, color: FAINT }}>新链接副本/缺商品档案映射，请尽快补建商品对应关系</span>
+              {umDue48 > 0 && <span style={{ fontSize: 12.5, color: YELLOW, fontWeight: 500 }}>48h内 {umDue48} 件</span>}
+              <span style={{ fontSize: 11, color: FAINT }}>平台副本款/缺归属映射，请尽快补建商品对应关系；无采购单的缺货新款见「采购缺口」</span>
             </header>
             {unmatchedOpen && (
               <div>
@@ -453,7 +469,7 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, onExpo
                       )}
                     </div>
                     <div style={{ width: 72, textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontSize: 22, fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{g.total}</div>
+                      <div style={{ fontSize: 22, fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{g.sel}</div>
                       <div style={{ fontSize: 11, color: FAINT }}>件待催</div>
                     </div>
                   </div>
@@ -479,18 +495,17 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, onExpo
       {/* ======== 供应商款式清单 ======== */}
       {groups.length === 0 && (
         <p style={{ textAlign: "center", color: TONES.teal.deep, fontSize: 14, padding: "48px 0" }}>
-          当前没有需要催货的供应商
+          当前选中档位内没有需要催货的供应商
         </p>
       )}
 
       {groups.map((g, gi) => {
         const isOpen = open[g.id] ?? gi === 0;
-        const visible = g.styles.filter((s) => !filterSet || s.styleNos.some((n) => filterSet.has(n)));
-        const main = visible.filter((s) => s.total > 2);
-        const tail = visible.filter((s) => s.total <= 2);
+        const visible = g.styles;
+        const main = visible.filter((s) => s.sel > 2);
+        const tail = visible.filter((s) => s.sel <= 2);
         const showTail = tailOpen[g.id] ?? false;
         const list = showTail ? [...main, ...tail] : main;
-        if (filterSet && visible.length === 0) return null;
         return (
           <section key={g.id} style={{ marginTop: gi === 0 ? 28 : 8 }}>
             <header style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0", borderTop: gi > 0 ? `1px solid ${HAIRLINE}` : "none" }}>
@@ -499,9 +514,10 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, onExpo
                 {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               </button>
               <span style={{ fontSize: 14.5, fontWeight: 600 }}>{g.name}</span>
-              <span style={{ fontSize: 13, color: SUB }}>催货 {g.total} 件 · {g.styles.length} 款</span>
-              {g.overdue > 0 && <span style={{ fontSize: 12.5, color: RED, fontWeight: 500 }}>已超时 {g.overdue} 件</span>}
+              <span style={{ fontSize: 13, color: SUB }}>催货 {g.sel} 件 · {g.styles.length} 款</span>
+              {g.overdue > 0 && <span style={{ fontSize: 12.5, color: RED, fontWeight: 500 }}>已逾期 {g.overdue} 件</span>}
               {g.due24 > 0 && <span style={{ fontSize: 12.5, color: AMBER, fontWeight: 500 }}>24h内 {g.due24} 件</span>}
+              {g.due48 > 0 && <span style={{ fontSize: 12.5, color: YELLOW, fontWeight: 500 }}>48h内 {g.due48} 件</span>}
               <span style={{ flex: 1 }} />
               <button style={{ ...textBtn, color: copiedId === g.id ? TONES.teal.deep : SUB }} onClick={() => copy(g)}>
                 {copiedId === g.id ? <Check size={14} /> : <Copy size={14} />}
@@ -530,25 +546,23 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, onExpo
                         <span style={{ fontFamily: MONO, fontSize: 12, color: FAINT, letterSpacing: "0.02em" }}>{st.code}</span>
                         <span style={{ fontSize: 14, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{st.name}</span>
                         <span style={{ flex: 1 }} />
-                        {styleDayQty && (styleDayQty.get(st.key) ?? 0) > 0 && (
-                          <span style={{ fontSize: 12, color: SUB, whiteSpace: "nowrap" }}>选中日 {styleDayQty.get(st.key)} 件</span>
-                        )}
-                        {st.overdue > 0 && <span style={{ fontSize: 12, color: RED, whiteSpace: "nowrap" }}>已超时 {st.overdue} 件 · 最长 {st.maxOverdue} 天</span>}
+                        {st.overdue > 0 && <span style={{ fontSize: 12, color: RED, whiteSpace: "nowrap" }}>已逾期 {st.overdue} 件 · 最长 {st.maxOverdue} 天</span>}
                         {st.overdue === 0 && st.due24 > 0 && <span style={{ fontSize: 12, color: AMBER, whiteSpace: "nowrap" }}>24h内 {st.due24} 件</span>}
+                        {st.overdue === 0 && st.due24 === 0 && st.due48 > 0 && <span style={{ fontSize: 12, color: YELLOW, whiteSpace: "nowrap" }}>48h内 {st.due48} 件</span>}
                       </div>
                       <div style={{ marginTop: 5, fontFamily: MONO, fontSize: 12.5, color: SUB, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {st.skus.map((k, ki) => (
+                        {st.skus.filter((k) => k.sel > 0).map((k, ki) => (
                           <span key={k.tail}>
                             {ki > 0 && <span style={{ color: "#C9CDD2" }}>{"  ·  "}</span>}
                             <span style={k.overdue > 0 ? { color: RED, fontWeight: 500 } : undefined}>
-                              {k.tail}×{k.qty}
+                              {k.tail}×{k.sel}
                             </span>
                           </span>
                         ))}
                       </div>
                     </div>
                     <div style={{ width: 72, textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontSize: 22, fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{st.total}</div>
+                      <div style={{ fontSize: 22, fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{st.sel}</div>
                       <div style={{ fontSize: 11, color: FAINT }}>件待催</div>
                     </div>
                   </div>
@@ -556,7 +570,7 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, onExpo
                 {tail.length > 0 && (
                   <button style={{ ...textBtn, padding: "10px 0 14px 26px" }}
                     onClick={() => setTailOpen({ ...tailOpen, [g.id]: !showTail })}>
-                    {showTail ? "收起零头" : `另有零头 ${tail.length} 款 · 共 ${tail.reduce((s, x) => s + x.total, 0)} 件`}
+                    {showTail ? "收起零头" : `另有零头 ${tail.length} 款 · 共 ${tail.reduce((s, x) => s + x.sel, 0)} 件`}
                   </button>
                 )}
               </div>
