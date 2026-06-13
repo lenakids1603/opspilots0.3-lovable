@@ -73,6 +73,9 @@ interface Props {
   onExport?: (supplier: SupplierGroup) => void | Promise<void>;
   /** 「供应商未匹配」每款的「标记劝退」回调（按 style_no 标记整款）；未提供则不显示按钮 */
   onMarkUnmatched?: (input: { styleNo: string; name: string }) => void;
+  /** 五档筛选受控值；与 onSelectedChange 配对由父级提升管理（页头红色「已过发货截止」点击可强制为「已逾期」）。未提供时组件用内部状态 */
+  selected?: Set<Urgency>;
+  onSelectedChange?: (next: Set<Urgency>) => void;
 }
 
 const INK = "#1F2329";
@@ -331,12 +334,18 @@ function snapshotAgeLabel(snapshotAt: string | null | undefined): string | null 
   return mins <= 1 ? "数据截至 1 分钟内" : `数据截至 ${mins} 分钟前`;
 }
 
-export default function ChaseListVisual({ timeline, suppliers, unmatched, snapshotAt, onExport, onMarkUnmatched }: Props) {
+export default function ChaseListVisual({ timeline, suppliers, unmatched, snapshotAt, onExport, onMarkUnmatched, selected: selectedProp, onSelectedChange }: Props) {
   const today = useMemo(todayCN, []);
   const tiers = useMemo(() => buildTiers(timeline), [timeline]);
   const snapshotLabel = snapshotAgeLabel(snapshotAt);
-  // 默认选中「已逾期+24h」：打开页面第一眼就是最危险的部分；全部取消 = 看 7 天内全部
-  const [selected, setSelected] = useState<Set<Urgency>>(new Set(["overdue", "due24"]));
+  // 默认选中「已逾期+24h」：打开页面第一眼就是最危险的部分；全部取消 = 看 7 天内全部。
+  // 五档筛选可由父级受控（页头红色「已过发货截止」点击强制「已逾期」）；未受控时用内部状态。
+  const [internalSelected, setInternalSelected] = useState<Set<Urgency>>(new Set(["overdue", "due24"]));
+  const selected = selectedProp ?? internalSelected;
+  const setSelected = (next: Set<Urgency>) => {
+    if (onSelectedChange) onSelectedChange(next);
+    else setInternalSelected(next);
+  };
   const active = useMemo<Set<Urgency>>(
     () => (selected.size === 0 ? new Set(ALL_TIERS) : selected),
     [selected],
@@ -377,8 +386,8 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, snapsh
     <div style={{ color: INK }}>
       {/* ======== 紧急度五档横幅（顶部汇总 + 筛选器） ======== */}
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14 }}>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>紧急度五档</span>
-        <span style={{ fontSize: 11, color: FAINT }}>仅含发货截止在【已逾期～未来7天】内的需求（可催供应商＋未匹配兜底）</span>
+        <span style={{ fontSize: 14, fontWeight: 600 }}>立即催供应商（供应商已逾期 + 供应商未匹配兜底）</span>
+        <span style={{ fontSize: 11, color: FAINT }}>完整 7 天待发货盘子见上方头部</span>
         {snapshotLabel && <span style={{ fontSize: 11, color: FAINT }}>· {snapshotLabel}</span>}
         {selected.size > 0 ? (
           <button style={{ ...textBtn, color: RED, fontWeight: 500 }} onClick={() => setSelected(new Set())}>

@@ -4283,6 +4283,16 @@ export type Database = {
           urgency: string
         }[]
       }
+      ops_chase_demand_overview: {
+        Args: never
+        Returns: {
+          category: string
+          orders_7d: number
+          orders_overdue: number
+          qty_7d: number
+          qty_overdue: number
+        }[]
+      }
       ops_chase_match_core: {
         Args: never
         Returns: {

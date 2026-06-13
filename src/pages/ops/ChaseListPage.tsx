@@ -72,6 +72,23 @@ type TimelineRow = {
   urgency: Urgency;
   snapshot_at: string | null;
 };
+// 7 天待发货全景（ops_chase_demand_overview）：每个供应状态一行
+type OverviewCategory = "in_transit" | "gap" | "late_order" | "closed_short" | "urge_supplier";
+type OverviewRow = {
+  category: string;
+  qty_7d: number;
+  orders_7d: number;
+  qty_overdue: number;
+  orders_overdue: number;
+};
+// 五状态分解：category → 中文标签 + 点击跳转的页签（「无采购单」按需求跳「采购缺口」）
+const OVERVIEW_CATEGORIES: { key: OverviewCategory; label: string; tab: string }[] = [
+  { key: "in_transit", label: "货在路上", tab: "purchase" },
+  { key: "gap", label: "无采购单", tab: "purchase" },
+  { key: "late_order", label: "会迟到", tab: "purchase" },
+  { key: "closed_short", label: "厂家少交", tab: "closed" },
+  { key: "urge_supplier", label: "催供应商", tab: "supplier" },
+];
 
 const fmtNum = (n: number | null | undefined) =>
   n == null ? "-" : Number(n).toLocaleString("zh-CN");
@@ -170,6 +187,8 @@ function SkuThumb({ sku, imageUrl, onPreview, size = 40 }: {
 export default function ChaseListPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState("supplier");
+  // 五档筛选提升到页面：页头红色「已过发货截止」点击可强制为「已逾期」，且切页签不丢筛选
+  const [tierFilter, setTierFilter] = useState<Set<Urgency>>(() => new Set<Urgency>(["overdue", "due24"]));
   const [showSC, setShowSC] = useState(false);
   const [openClosed, setOpenClosed] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<{ url: string; sku: string } | null>(null);
@@ -263,9 +282,16 @@ export default function ChaseListPage() {
           if (error) throw error;
           return (data ?? []) as UnmatchedRow[];
         } },
+      // 7 天待发货全景：头部主数字 / 红色逾期数 / 五状态分解的唯一数据源（实时求和，不写死）
+      { queryKey: ["chase", "demand_overview"], staleTime: 60_000,
+        queryFn: async () => {
+          const { data, error } = await supabase.rpc("ops_chase_demand_overview" as never);
+          if (error) throw error;
+          return (data ?? []) as OverviewRow[];
+        } },
     ],
   });
-  const [supplierQ, questionQ, purchaseQ, closedQ, timelineQ, unmatchedQ] = queries;
+  const [supplierQ, questionQ, purchaseQ, closedQ, timelineQ, unmatchedQ, overviewQ] = queries;
   const loading = queries.some(q => q.isLoading);
   // 硬失败 = 出错且没有任何可展示数据;刷新失败但留有上次成功数据的算软失败,
   // 继续展示旧数据并提示,不让整页/整条时间轴开天窗
@@ -279,6 +305,16 @@ export default function ChaseListPage() {
   const closedRows = (closedQ.data ?? []) as ClosedShortRow[];
   const timelineRowsRaw = (timelineQ.data ?? []) as TimelineRow[];
   const unmatchedRows = (unmatchedQ.data ?? []) as UnmatchedRow[];
+  const overviewRows = (overviewQ.data ?? []) as OverviewRow[];
+
+  // 头部全景：7 天内待发货 = Σqty_7d；已过发货截止 = Σqty_overdue（均实时求和，不写死）
+  const overview = useMemo(() => {
+    const byCat = new Map<string, OverviewRow>();
+    for (const r of overviewRows) byCat.set(r.category, r);
+    const totalQty7d = overviewRows.reduce((s, r) => s + Number(r.qty_7d || 0), 0);
+    const totalOverdue = overviewRows.reduce((s, r) => s + Number(r.qty_overdue || 0), 0);
+    return { byCat, totalQty7d, totalOverdue };
+  }, [overviewRows]);
 
   const summary = useMemo(() => {
     const totalQty = supplierRows.reduce((s, r) => s + Number(r.total_qty || 0), 0);
@@ -376,6 +412,60 @@ export default function ChaseListPage() {
         </Card>
       )}
 
+      {/* ======== 7 天待发货全景（头部主数字 + 逾期红线 + 五状态分解） ======== */}
+      {!isForbidden && !hardError && (
+        <Card className="mb-4">
+          <CardContent className="py-4">
+            {overviewQ.isLoading ? (
+              <Skeleton className="h-20 w-full" />
+            ) : (
+              <>
+                <div className="flex flex-wrap items-end gap-x-10 gap-y-3">
+                  <div>
+                    <div className="text-xs text-muted-foreground mb-1">7 天内待发货</div>
+                    <div className="text-3xl font-semibold tabular-nums leading-none">
+                      {fmtNum(overview.totalQty7d)}
+                      <span className="ml-1 text-base font-normal text-muted-foreground">件</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setTab("supplier"); setTierFilter(new Set<Urgency>(["overdue"])); }}
+                    className="text-left group"
+                    title="切到「立即催供应商」并筛出已逾期项"
+                  >
+                    <div className="text-xs text-destructive/80 mb-1">已过发货截止</div>
+                    <div className="text-3xl font-semibold tabular-nums leading-none text-destructive group-hover:underline underline-offset-4">
+                      {fmtNum(overview.totalOverdue)}
+                      <span className="ml-1 text-base font-normal">件</span>
+                    </div>
+                  </button>
+                </div>
+                <div className="mt-3 pt-3 border-t flex flex-wrap items-center gap-y-1 text-sm text-muted-foreground">
+                  {OVERVIEW_CATEGORIES.map((c, i) => {
+                    const row = overview.byCat.get(c.key);
+                    const qty = Number(row?.qty_7d || 0);
+                    const overdue = Number(row?.qty_overdue || 0);
+                    return (
+                      <span key={c.key} className="inline-flex items-baseline">
+                        {i > 0 && <span className="mx-1.5 text-muted-foreground/40">·</span>}
+                        <button type="button" className="hover:text-foreground"
+                          onClick={() => setTab(c.tab)} title={`查看${c.label}`}>
+                          {c.label} <span className="tabular-nums text-foreground">{fmtNum(qty)}</span>
+                        </button>
+                        {overdue > 0 && (
+                          <span className="ml-1 text-xs text-destructive">逾期{fmtNum(overdue)}</span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="supplier">按供应商催货</TabsTrigger>
@@ -390,7 +480,7 @@ export default function ChaseListPage() {
               无采购单的缺货新款、下单过迟与已结单少交分别见「采购缺口」「厂家已结单」
             </span>
             <span className="shrink-0">
-              7 天内共 {fmtNum(summary.totalQty)} 件 · {fmtNum(summary.supplierCount)} 家供应商
+              立即催供应商 {fmtNum(summary.totalQty)} 件 · {fmtNum(summary.supplierCount)} 家供应商
               {" · "}
               <button type="button" className="underline underline-offset-2 hover:text-foreground"
                 onClick={() => navigate("/operations/sales-orders?order_status=Question")}>
@@ -406,6 +496,7 @@ export default function ChaseListPage() {
           ) : (
             <ChaseListVisual timeline={timelineRowsRaw} suppliers={supplierRows} unmatched={unmatchedRows}
               snapshotAt={timelineRowsRaw[0]?.snapshot_at ?? null} onExport={exportSupplier}
+              selected={tierFilter} onSelectedChange={setTierFilter}
               onMarkUnmatched={(input) => { setMarkRemark(""); setMarkTarget(input); }} />
           )}
         </TabsContent>
