@@ -455,8 +455,7 @@ export default function ChaseListPage() {
         <TabsContent value="supplier" className="mt-4">
           <div className="text-xs text-muted-foreground mb-2 flex items-center gap-3 flex-wrap">
             <span>
-              口径：发货截止在【已逾期～未来 7 天】内、已匹配到在产采购单的需求（可催）＋「供应商未匹配」兜底桶（平台副本款）；
-              无采购单的缺货新款、下单过迟与已结单少交分别见「采购缺口」「厂家已结单」
+              口径：发货截止在【已逾期～未来 7 天】内、需要催供应商的货（供应商已逾期 + 交期会迟到 + 在路上但缓冲≤3天）+「供应商未匹配」兜底桶（平台副本款）；交期宽裕（≥4天）的在路上货不在此，无采购单的缺货新款、已结单少交分别见「采购缺口」「厂家已结单」。
             </span>
             <span className="shrink-0">
               立即催供应商 {fmtNum(summary.totalQty)} 件 · {fmtNum(summary.supplierCount)} 家供应商
