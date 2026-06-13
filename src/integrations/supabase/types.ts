@@ -2192,6 +2192,42 @@ export type Database = {
           },
         ]
       }
+      ops_chase_style_flags: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          flag: string
+          id: string
+          original_supplier_name: string | null
+          remark: string | null
+          sku: string | null
+          style_no: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          flag?: string
+          id?: string
+          original_supplier_name?: string | null
+          remark?: string | null
+          sku?: string | null
+          style_no?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          flag?: string
+          id?: string
+          original_supplier_name?: string | null
+          remark?: string | null
+          sku?: string | null
+          style_no?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ops_params: {
         Row: {
           description: string | null
@@ -4274,9 +4310,12 @@ export type Database = {
           earliest_pay_time: string
           final_gap: number
           intransit_qty: number
+          is_quantui: boolean
           late_order_qty: number
           missing_date_qty: number
           pending_qty: number
+          quantui_remark: string
+          quantui_supplier: string
           raw_gap: number
           resale_rate: number
           return_in_transit: number
@@ -4285,6 +4324,14 @@ export type Database = {
           style_no: string
           supplier_name: string
           urge_supplier_qty: number
+        }[]
+      }
+      ops_chase_quantui_skus: {
+        Args: never
+        Returns: {
+          original_supplier_name: string
+          remark: string
+          sku: string
         }[]
       }
       ops_chase_question_count: {

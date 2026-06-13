@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle, RefreshCw, Download, ChevronDown, ChevronRight,
-  PartyPopper, ImageIcon,
+  PartyPopper, ImageIcon, Ban, Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,7 +15,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter,
+  AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { formatDateTimeCN, todayCN } from "@/lib/datetime";
 
@@ -49,6 +54,7 @@ type PurchaseRow = {
   late_order_qty: number; urge_supplier_qty: number; closed_short_qty: number;
   raw_gap: number; return_in_transit: number; resale_rate: number;
   return_offset: number; final_gap: number; earliest_pay_time: string | null;
+  is_quantui: boolean; quantui_supplier: string | null; quantui_remark: string | null;
 };
 type ClosedShortPoDetail = { po_id: string; delivery_date: string | null; short_qty: number };
 type ClosedShortRow = {
@@ -169,6 +175,52 @@ export default function ChaseListPage() {
   const [preview, setPreview] = useState<{ url: string; sku: string } | null>(null);
   const onPreview = (url: string, sku: string) => setPreview({ url, sku });
 
+  const qc = useQueryClient();
+  const [markTarget, setMarkTarget] = useState<PurchaseRow | null>(null);
+  const [markRemark, setMarkRemark] = useState("");
+  const [unmarkTarget, setUnmarkTarget] = useState<PurchaseRow | null>(null);
+
+  // 标记/取消劝退：写 ops_chase_style_flags（admin/ops 经 RLS 放行；能看到采购缺口即为
+  // admin/ops，故按钮无需另判角色）。优先按款号(style_no)标记——同款全部 SKU 一并劝退；
+  // 无款号才按 SKU。original_supplier_name 留空交 BEFORE INSERT 触发器从主档回填。
+  // 写后只失效 chase 系列查询重拉，无需调 refresh_risk_meta（催货/未匹配清单已自动排除劝退款）。
+  const markMutation = useMutation({
+    mutationFn: async ({ row, remark }: { row: PurchaseRow; remark: string }) => {
+      const payload: { flag: string; style_no?: string; sku?: string; remark: string | null } = {
+        flag: "quantui",
+        remark: remark.trim() || null,
+      };
+      if (row.style_no?.trim()) payload.style_no = row.style_no.trim();
+      else payload.sku = row.sku;
+      const { error } = await supabase.from("ops_chase_style_flags").insert(payload);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("已标记为劝退款");
+      setMarkTarget(null);
+      setMarkRemark("");
+      qc.invalidateQueries({ queryKey: ["chase"] });
+    },
+    onError: (e) => toast.error(`标记劝退失败：${(e as Error).message}`),
+  });
+
+  const unmarkMutation = useMutation({
+    mutationFn: async (row: PurchaseRow) => {
+      // 与标记对称：按款号标记的按款号删，按 SKU 标记的按 SKU 删
+      let q = supabase.from("ops_chase_style_flags").delete().eq("flag", "quantui");
+      if (row.style_no?.trim()) q = q.eq("style_no", row.style_no.trim()).is("sku", null);
+      else q = q.eq("sku", row.sku).is("style_no", null);
+      const { error } = await q;
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("已取消劝退");
+      setUnmarkTarget(null);
+      qc.invalidateQueries({ queryKey: ["chase"] });
+    },
+    onError: (e) => toast.error(`取消劝退失败：${(e as Error).message}`),
+  });
+
   const queries = useQueries({
     queries: [
       { queryKey: ["chase", "supplier_list"], staleTime: 60_000,
@@ -239,6 +291,10 @@ export default function ChaseListPage() {
     () => showSC ? purchaseRows : purchaseRows.filter(r => (r.sku || "").toUpperCase() !== "SC"),
     [purchaseRows, showSC],
   );
+
+  // 劝退款单独分组：真实缺口仅 is_quantui=false，不与劝退款混算
+  const realPurchase = useMemo(() => visiblePurchase.filter(r => !r.is_quantui), [visiblePurchase]);
+  const quantuiPurchase = useMemo(() => visiblePurchase.filter(r => r.is_quantui), [visiblePurchase]);
 
   const purchaseTabSkus = useMemo(() => visiblePurchase.map(r => r.sku), [visiblePurchase]);
   const closedTabSkus = useMemo(() => closedRows.map(r => r.sku), [closedRows]);
@@ -365,48 +421,101 @@ export default function ChaseListPage() {
             </div>
           </div>
           {loading ? <Skeleton className="h-64 w-full" /> : (
-            <Card>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm min-w-[960px]">
-                  <thead className="bg-muted/40 text-muted-foreground">
-                    <tr>
-                      <th className="text-left px-4 py-2 font-medium w-14">图</th>
-                      <th className="text-left px-4 py-2 font-medium">SKU</th>
-                      <th className="text-left px-4 py-2 font-medium">款号</th>
-                      <th className="text-left px-4 py-2 font-medium">供应商</th>
-                      <th className="text-right px-4 py-2 font-medium">待发</th>
-                      <th className="text-right px-4 py-2 font-medium">在途</th>
-                      <th className="text-right px-4 py-2 font-medium">已结单少交</th>
-                      <th className="text-right px-4 py-2 font-medium">销退冲抵</th>
-                      <th className="text-right px-4 py-2 font-medium">最终缺口</th>
-                      <th className="text-left px-4 py-2 font-medium">最早付款</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visiblePurchase.length === 0 ? (
-                      <tr><td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">暂无数据</td></tr>
-                    ) : visiblePurchase.map((r, i) => (
-                      <tr key={i} className={cn("border-t", Number(r.final_gap) > 0 && "bg-red-50/60")}>
-                        <td className="px-4 py-2">
-                          <SkuThumb sku={r.sku} imageUrl={purchaseImgQ.data?.[r.sku]} onPreview={onPreview} />
-                        </td>
-                        <td className="px-4 py-2 font-mono">{r.sku}</td>
-                        <td className="px-4 py-2">{r.style_no || "-"}</td>
-                        <td className="px-4 py-2">{r.supplier_name || "-"}</td>
-                        <td className="px-4 py-2 text-right">{fmtNum(r.pending_qty)}</td>
-                        <td className="px-4 py-2 text-right">{fmtNum(r.intransit_qty)}</td>
-                        <td className={cn("px-4 py-2 text-right", Number(r.closed_short_qty) > 0 && "text-amber-700")}>{fmtNum(r.closed_short_qty)}</td>
-                        <td className="px-4 py-2 text-right">{fmtNum(r.return_offset)}</td>
-                        <td className={cn("px-4 py-2 text-right font-semibold", Number(r.final_gap) > 0 && "text-destructive")}>
-                          {fmtNum(r.final_gap)}
-                        </td>
-                        <td className="px-4 py-2">{fmtMMDDHM(r.earliest_pay_time)}</td>
+            <>
+              <Card>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[1040px]">
+                    <thead className="bg-muted/40 text-muted-foreground">
+                      <tr>
+                        <th className="text-left px-4 py-2 font-medium w-14">图</th>
+                        <th className="text-left px-4 py-2 font-medium">SKU</th>
+                        <th className="text-left px-4 py-2 font-medium">款号</th>
+                        <th className="text-left px-4 py-2 font-medium">供应商</th>
+                        <th className="text-right px-4 py-2 font-medium">待发</th>
+                        <th className="text-right px-4 py-2 font-medium">在途</th>
+                        <th className="text-right px-4 py-2 font-medium">已结单少交</th>
+                        <th className="text-right px-4 py-2 font-medium">销退冲抵</th>
+                        <th className="text-right px-4 py-2 font-medium">最终缺口</th>
+                        <th className="text-left px-4 py-2 font-medium">最早付款</th>
+                        <th className="text-right px-4 py-2 font-medium w-20">操作</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+                    </thead>
+                    <tbody>
+                      {realPurchase.length === 0 ? (
+                        <tr><td colSpan={11} className="px-4 py-8 text-center text-muted-foreground">暂无数据</td></tr>
+                      ) : realPurchase.map((r, i) => (
+                        <tr key={i} className={cn("border-t", Number(r.final_gap) > 0 && "bg-red-50/60")}>
+                          <td className="px-4 py-2">
+                            <SkuThumb sku={r.sku} imageUrl={purchaseImgQ.data?.[r.sku]} onPreview={onPreview} />
+                          </td>
+                          <td className="px-4 py-2 font-mono">{r.sku}</td>
+                          <td className="px-4 py-2">{r.style_no || "-"}</td>
+                          <td className="px-4 py-2">{r.supplier_name || "-"}</td>
+                          <td className="px-4 py-2 text-right">{fmtNum(r.pending_qty)}</td>
+                          <td className="px-4 py-2 text-right">{fmtNum(r.intransit_qty)}</td>
+                          <td className={cn("px-4 py-2 text-right", Number(r.closed_short_qty) > 0 && "text-amber-700")}>{fmtNum(r.closed_short_qty)}</td>
+                          <td className="px-4 py-2 text-right">{fmtNum(r.return_offset)}</td>
+                          <td className={cn("px-4 py-2 text-right font-semibold", Number(r.final_gap) > 0 && "text-destructive")}>
+                            {fmtNum(r.final_gap)}
+                          </td>
+                          <td className="px-4 py-2">{fmtMMDDHM(r.earliest_pay_time)}</td>
+                          <td className="px-4 py-2 text-right">
+                            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground"
+                              onClick={() => { setMarkRemark(""); setMarkTarget(r); }}>
+                              <Ban className="mr-1 size-3.5" /> 劝退
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+
+              {quantuiPurchase.length > 0 && (
+                <Card className="mt-4">
+                  <div className="px-4 py-2 border-b bg-muted/30 text-xs text-muted-foreground flex items-center gap-2">
+                    <Ban className="size-3.5 shrink-0" />
+                    <span>
+                      劝退款（共 {fmtNum(quantuiPurchase.length)} 个 SKU）：已停止向供应商催货、不计入上方缺口；展示标记时记录的原供应商与备注
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm min-w-[860px]">
+                      <thead className="bg-muted/40 text-muted-foreground">
+                        <tr>
+                          <th className="text-left px-4 py-2 font-medium w-14">图</th>
+                          <th className="text-left px-4 py-2 font-medium">SKU</th>
+                          <th className="text-left px-4 py-2 font-medium">款号</th>
+                          <th className="text-left px-4 py-2 font-medium">原供应商</th>
+                          <th className="text-left px-4 py-2 font-medium">备注</th>
+                          <th className="text-right px-4 py-2 font-medium w-24">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {quantuiPurchase.map((r, i) => (
+                          <tr key={i} className="border-t text-muted-foreground">
+                            <td className="px-4 py-2">
+                              <SkuThumb sku={r.sku} imageUrl={purchaseImgQ.data?.[r.sku]} onPreview={onPreview} />
+                            </td>
+                            <td className="px-4 py-2 font-mono">{r.sku}</td>
+                            <td className="px-4 py-2">{r.style_no || "-"}</td>
+                            <td className="px-4 py-2">{r.quantui_supplier || "-"}</td>
+                            <td className="px-4 py-2 max-w-[280px] truncate" title={r.quantui_remark || undefined}>{r.quantui_remark || "-"}</td>
+                            <td className="px-4 py-2 text-right">
+                              <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground"
+                                onClick={() => setUnmarkTarget(r)}>
+                                <Undo2 className="mr-1 size-3.5" /> 取消劝退
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
+            </>
           )}
         </TabsContent>
 
@@ -517,6 +626,65 @@ export default function ChaseListPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* 标记劝退：可填可选备注；original_supplier_name 交 BEFORE INSERT 触发器回填 */}
+      <Dialog open={!!markTarget} onOpenChange={(o) => { if (!o) { setMarkTarget(null); setMarkRemark(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>标记为劝退款</DialogTitle>
+            <DialogDescription>
+              标记后该款将从「按供应商催货」「供应商未匹配」清单移除，并在本页单独归入「劝退款」、不计入缺口合计。
+            </DialogDescription>
+          </DialogHeader>
+          {markTarget && (
+            <div className="space-y-3 text-sm">
+              <div className="rounded-md bg-muted/40 p-3 space-y-1">
+                <div><span className="text-muted-foreground">SKU：</span><span className="font-mono">{markTarget.sku}</span></div>
+                <div><span className="text-muted-foreground">款号：</span>{markTarget.style_no || "-"}</div>
+                <div><span className="text-muted-foreground">当前供应商：</span>{markTarget.supplier_name || "-"}</div>
+                <div className="text-xs text-muted-foreground pt-1">
+                  {markTarget.style_no?.trim() ? "将按款号标记，同款全部 SKU 一并劝退" : "该行无款号，将按 SKU 单独标记"}
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="quantui-remark">备注（可选）</Label>
+                <Textarea id="quantui-remark" rows={3} value={markRemark}
+                  onChange={(e) => setMarkRemark(e.target.value)}
+                  placeholder="如：长期缺货停产、改版下架…" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setMarkTarget(null); setMarkRemark(""); }}
+              disabled={markMutation.isPending}>取消</Button>
+            <Button onClick={() => markTarget && markMutation.mutate({ row: markTarget, remark: markRemark })}
+              disabled={markMutation.isPending}>
+              {markMutation.isPending ? "标记中…" : "确认劝退"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 取消劝退：删除对应标记行，下次刷新恢复进催货/缺口 */}
+      <AlertDialog open={!!unmarkTarget} onOpenChange={(o) => { if (!o) setUnmarkTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>取消劝退？</AlertDialogTitle>
+            <AlertDialogDescription>
+              SKU {unmarkTarget?.sku} 取消劝退后将恢复进入催货与采购缺口统计。
+              {unmarkTarget?.style_no?.trim() ? "（按款号取消，同款全部 SKU 一并恢复）" : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={unmarkMutation.isPending}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); if (unmarkTarget) unmarkMutation.mutate(unmarkTarget); }}
+              disabled={unmarkMutation.isPending}>
+              {unmarkMutation.isPending ? "处理中…" : "确认取消劝退"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
