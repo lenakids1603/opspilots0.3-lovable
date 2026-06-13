@@ -178,6 +178,9 @@ function SkuThumb({ sku, imageUrl, onPreview, size = 40 }: {
   );
 }
 
+// 劝退标记行（直接来自 ops_chase_style_flags，作为「劝退款」分组的权威数据源）
+type QuantuiFlag = { id: string; style_no: string | null; sku: string | null; original_supplier_name: string | null; remark: string | null };
+
 export default function ChaseListPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState("supplier");
@@ -191,7 +194,7 @@ export default function ChaseListPage() {
   const qc = useQueryClient();
   const [markTarget, setMarkTarget] = useState<{ styleNo: string; name: string } | null>(null);
   const [markRemark, setMarkRemark] = useState("");
-  const [unmarkTarget, setUnmarkTarget] = useState<PurchaseRow | null>(null);
+  const [unmarkTarget, setUnmarkTarget] = useState<QuantuiFlag | null>(null);
 
   // 劝退「标记」入口在【按供应商催货 → 供应商未匹配】(运营在那里对"有急单却无供应商"的款
   // 拿主意)：按 style_no 标记整款。写 ops_chase_style_flags（admin/ops 经 RLS 放行；该页
@@ -217,12 +220,9 @@ export default function ChaseListPage() {
   });
 
   const unmarkMutation = useMutation({
-    mutationFn: async (row: PurchaseRow) => {
-      // 与标记对称：按款号标记的按款号删，按 SKU 标记的按 SKU 删
-      let q = supabase.from("ops_chase_style_flags").delete().eq("flag", "quantui");
-      if (row.style_no?.trim()) q = q.eq("style_no", row.style_no.trim()).is("sku", null);
-      else q = q.eq("sku", row.sku).is("style_no", null);
-      const { error } = await q;
+    mutationFn: async (flag: QuantuiFlag) => {
+      // 劝退款分组直接来自标记表，按行 id 精确删除
+      const { error } = await supabase.from("ops_chase_style_flags").delete().eq("id", flag.id);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -290,9 +290,21 @@ export default function ChaseListPage() {
           if (error) throw error;
           return (data ?? []) as UrgencyRow[];
         } },
+      // 劝退款分组直接读标记表（权威、行数少，不受 purchase_list 的 1000 行上限截断）：
+      // purchase_list 按缺口降序、总行数可超千（实测 2143 行），劝退款多是小缺口，会落在
+      // 第 1000 行之后被 PostgREST 默认上限截掉，故不能再从 purchase_list 取劝退款。
+      { queryKey: ["chase", "quantui_flags"], staleTime: 60_000,
+        queryFn: async () => {
+          const { data, error } = await supabase.from("ops_chase_style_flags")
+            .select("id, style_no, sku, original_supplier_name, remark")
+            .eq("flag", "quantui")
+            .order("updated_at", { ascending: false });
+          if (error) throw error;
+          return (data ?? []) as QuantuiFlag[];
+        } },
     ],
   });
-  const [supplierQ, questionQ, purchaseQ, closedQ, timelineQ, unmatchedQ, overviewQ, urgencyQ] = queries;
+  const [supplierQ, questionQ, purchaseQ, closedQ, timelineQ, unmatchedQ, overviewQ, urgencyQ, quantuiFlagsQ] = queries;
   const loading = queries.some(q => q.isLoading);
   // 硬失败 = 出错且没有任何可展示数据;刷新失败但留有上次成功数据的算软失败,
   // 继续展示旧数据并提示,不让整页/整条时间轴开天窗
@@ -308,6 +320,7 @@ export default function ChaseListPage() {
   const unmatchedRows = (unmatchedQ.data ?? []) as UnmatchedRow[];
   const overviewRows = (overviewQ.data ?? []) as OverviewRow[];
   const urgencyRows = (urgencyQ.data ?? []) as UrgencyRow[];
+  const quantuiFlags = (quantuiFlagsQ.data ?? []) as QuantuiFlag[];
 
   // 头部全景：7 天内待发货 = Σqty_7d；已过发货截止 = Σqty_overdue（均实时求和，不写死）
   const overview = useMemo(() => {
@@ -329,7 +342,6 @@ export default function ChaseListPage() {
 
   // 劝退款单独分组：真实缺口仅 is_quantui=false，不与劝退款混算
   const realPurchase = useMemo(() => visiblePurchase.filter(r => !r.is_quantui), [visiblePurchase]);
-  const quantuiPurchase = useMemo(() => visiblePurchase.filter(r => r.is_quantui), [visiblePurchase]);
 
   const purchaseTabSkus = useMemo(() => visiblePurchase.map(r => r.sku), [visiblePurchase]);
   const closedTabSkus = useMemo(() => closedRows.map(r => r.sku), [closedRows]);
@@ -535,39 +547,33 @@ export default function ChaseListPage() {
                 </div>
               </Card>
 
-              {quantuiPurchase.length > 0 && (
+              {quantuiFlags.length > 0 && (
                 <Card className="mt-4">
                   <div className="px-4 py-2 border-b bg-muted/30 text-xs text-muted-foreground flex items-center gap-2">
                     <Ban className="size-3.5 shrink-0" />
                     <span>
-                      劝退款（共 {fmtNum(quantuiPurchase.length)} 个 SKU）：已停止向供应商催货、不计入上方缺口；展示标记时记录的原供应商与备注
+                      劝退款（共 {fmtNum(quantuiFlags.length)} 款）：已停止向供应商催货、已从催货/未匹配清单移除、不计入缺口；此处仅作记录与撤销
                     </span>
                   </div>
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm min-w-[860px]">
+                    <table className="w-full text-sm min-w-[640px]">
                       <thead className="bg-muted/40 text-muted-foreground">
                         <tr>
-                          <th className="text-left px-4 py-2 font-medium w-14">图</th>
-                          <th className="text-left px-4 py-2 font-medium">SKU</th>
-                          <th className="text-left px-4 py-2 font-medium">款号</th>
+                          <th className="text-left px-4 py-2 font-medium">款号 / SKU</th>
                           <th className="text-left px-4 py-2 font-medium">原供应商</th>
                           <th className="text-left px-4 py-2 font-medium">备注</th>
                           <th className="text-right px-4 py-2 font-medium w-24">操作</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {quantuiPurchase.map((r, i) => (
-                          <tr key={i} className="border-t text-muted-foreground">
-                            <td className="px-4 py-2">
-                              <SkuThumb sku={r.sku} imageUrl={purchaseImgQ.data?.[r.sku]} onPreview={onPreview} />
-                            </td>
-                            <td className="px-4 py-2 font-mono">{r.sku}</td>
-                            <td className="px-4 py-2">{r.style_no || "-"}</td>
-                            <td className="px-4 py-2">{r.quantui_supplier || "-"}</td>
-                            <td className="px-4 py-2 max-w-[280px] truncate" title={r.quantui_remark || undefined}>{r.quantui_remark || "-"}</td>
+                        {quantuiFlags.map((f) => (
+                          <tr key={f.id} className="border-t text-muted-foreground">
+                            <td className="px-4 py-2 font-mono">{f.style_no || f.sku || "-"}</td>
+                            <td className="px-4 py-2">{f.original_supplier_name || "-"}</td>
+                            <td className="px-4 py-2 max-w-[280px] truncate" title={f.remark || undefined}>{f.remark || "-"}</td>
                             <td className="px-4 py-2 text-right">
                               <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground"
-                                onClick={() => setUnmarkTarget(r)}>
+                                onClick={() => setUnmarkTarget(f)}>
                                 <Undo2 className="mr-1 size-3.5" /> 取消劝退
                               </Button>
                             </td>
@@ -736,8 +742,7 @@ export default function ChaseListPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>取消劝退？</AlertDialogTitle>
             <AlertDialogDescription>
-              SKU {unmarkTarget?.sku} 取消劝退后将恢复进入催货与采购缺口统计。
-              {unmarkTarget?.style_no?.trim() ? "（按款号取消，同款全部 SKU 一并恢复）" : ""}
+              {unmarkTarget?.style_no || unmarkTarget?.sku} 取消劝退后将恢复进入催货与采购缺口统计（同款全部 SKU 一并恢复）。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
