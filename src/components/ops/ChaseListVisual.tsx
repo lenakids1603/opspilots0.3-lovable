@@ -41,6 +41,7 @@ export interface SupplierRow {
   later_qty: number;
   po_count: number;
   max_overdue_days: number;
+  min_buffer_days: number | null;
   po_details: unknown;
   product_name: string | null;
   image_url: string | null;
@@ -62,6 +63,13 @@ export interface UnmatchedRow {
   sku_details: { sku: string; sku_name: string | null; qty: number; overdue_qty: number }[] | null;
 }
 
+export interface UrgencyRow {
+  urgency: string;
+  qty: number;
+  order_count: number;
+  supplier_count: number;
+}
+
 interface Props {
   timeline: TimelineRow[];
   suppliers: SupplierRow[];
@@ -76,6 +84,8 @@ interface Props {
   /** 五档筛选受控值；与 onSelectedChange 配对由父级提升管理（页头红色「已过发货截止」点击可强制为「已逾期」）。未提供时组件用内部状态 */
   selected?: Set<Urgency>;
   onSelectedChange?: (next: Set<Urgency>) => void;
+  /** 时间轴五档汇总（ops_chase_urgency_summary，真实要催的盘子）；提供时五档徽标数字以它为准，缩略图仍取自 timeline */
+  urgencySummary?: UrgencyRow[];
 }
 
 const INK = "#1F2329";
@@ -85,6 +95,7 @@ const HAIRLINE = "rgba(17,24,32,0.08)";
 const RED = "#A82F2F";
 const AMBER = "#8A5310";
 const YELLOW = "#7A6308";
+const ORANGE = "#C2410C";
 
 const TONES = {
   red: { bg: "#FBEDEC", deep: "#7A2222" },
@@ -178,11 +189,27 @@ interface SkuItem { tail: string; qty: number; sel: number; overdue: number; due
 interface StyleGroup {
   key: string; code: string; name: string; img: string | null;
   total: number; sel: number; overdue: number; due24: number; due48: number; maxOverdue: number;
+  minBuffer: number | null; bufNull: boolean;
   skus: SkuItem[]; styleNos: string[];
 }
 export interface SupplierGroup {
   id: string; name: string; total: number; sel: number; overdue: number; due24: number; due48: number;
+  maxOverdue: number; minBuffer: number | null; bufNull: boolean;
   styles: StyleGroup[];
+}
+
+// 缓冲排序键：无交期(null)最紧→-∞ 最前；否则按剩余缓冲升序；无缓冲信息→+∞ 最后
+function bufKey(g: { minBuffer: number | null; bufNull: boolean }): number {
+  return g.bufNull ? -Infinity : (g.minBuffer ?? Infinity);
+}
+// 剩余缓冲(min_buffer_days)展示：无交期橙 / <0 晚到红 / 0–1 红 / 2–3 橙 / ≥4 灰
+function bufferChip(minBuffer: number | null, bufNull: boolean): { text: string; color: string } | null {
+  if (bufNull) return { text: "无交期", color: ORANGE };
+  if (minBuffer == null) return null;
+  if (minBuffer < 0) return { text: `晚${-minBuffer}天到`, color: RED };
+  if (minBuffer <= 1) return { text: `缓冲${minBuffer}天`, color: RED };
+  if (minBuffer <= 3) return { text: `缓冲${minBuffer}天`, color: ORANGE };
+  return { text: `缓冲${minBuffer}天`, color: SUB };
 }
 
 function buildSuppliers(rows: SupplierRow[], active: Set<Urgency>): SupplierGroup[] {
@@ -201,7 +228,7 @@ function buildSuppliers(rows: SupplierRow[], active: Set<Urgency>): SupplierGrou
       const name = shortName(r.product_name, r.style_no);
       let g = byStyle.get(name);
       if (!g) {
-        g = { key: name, code: r.style_no, name, img: r.image_url, total: 0, sel: 0, overdue: 0, due24: 0, due48: 0, maxOverdue: 0, skus: [], styleNos: [] };
+        g = { key: name, code: r.style_no, name, img: r.image_url, total: 0, sel: 0, overdue: 0, due24: 0, due48: 0, maxOverdue: 0, minBuffer: null, bufNull: false, skus: [], styleNos: [] };
         byStyle.set(name, g);
       }
       if (NUMERIC_ID.test(g.code) && !NUMERIC_ID.test(r.style_no)) g.code = r.style_no;
@@ -212,17 +239,20 @@ function buildSuppliers(rows: SupplierRow[], active: Set<Urgency>): SupplierGrou
       g.due24 += t.due24;
       g.due48 += t.due48;
       g.maxOverdue = Math.max(g.maxOverdue, r.max_overdue_days);
+      if (r.min_buffer_days == null) g.bufNull = true;
+      else g.minBuffer = g.minBuffer == null ? r.min_buffer_days : Math.min(g.minBuffer, r.min_buffer_days);
       g.styleNos.push(r.style_no);
       const tail = skuTail(r.sku, r.style_no);
       const exist = g.skus.find((k) => k.tail === tail);
       if (exist) { exist.qty += Number(r.total_qty); exist.sel += sel; exist.overdue += t.overdue; exist.due24 += t.due24; exist.due48 += t.due48; }
       else g.skus.push({ tail, qty: Number(r.total_qty), sel, overdue: t.overdue, due24: t.due24, due48: t.due48 });
     }
-    // 仅显示选中档位内有量的款/SKU；催货消息与导出仍用 7 天全量
+    // 仅显示选中档位内有量的款/SKU；催货消息与导出仍用 7 天全量。
+    // 排序对齐后端：已逾期优先(最长逾期天数降序)、其次缓冲最紧(无交期最前)、再按件数降序
     const styles = [...byStyle.values()]
       .filter((g) => g.sel > 0)
       .map((g) => ({ ...g, skus: g.skus.sort((a, b) => b.overdue - a.overdue || b.sel - a.sel || b.qty - a.qty) }))
-      .sort((a, b) => b.overdue - a.overdue || b.sel - a.sel || b.total - a.total);
+      .sort((a, b) => b.maxOverdue - a.maxOverdue || bufKey(a) - bufKey(b) || b.total - a.total);
     if (styles.length === 0) continue;
     groups.push({
       id, name: list[0].supplier_name,
@@ -231,10 +261,13 @@ function buildSuppliers(rows: SupplierRow[], active: Set<Urgency>): SupplierGrou
       overdue: styles.reduce((s, x) => s + x.overdue, 0),
       due24: styles.reduce((s, x) => s + x.due24, 0),
       due48: styles.reduce((s, x) => s + x.due48, 0),
+      maxOverdue: styles.reduce((s, x) => Math.max(s, x.maxOverdue), 0),
+      minBuffer: styles.reduce<number | null>((m, x) => x.minBuffer == null ? m : (m == null ? x.minBuffer : Math.min(m, x.minBuffer)), null),
+      bufNull: styles.some((x) => x.bufNull),
       styles,
     });
   }
-  return groups.sort((a, b) => b.overdue - a.overdue || b.sel - a.sel || b.total - a.total);
+  return groups.sort((a, b) => b.maxOverdue - a.maxOverdue || bufKey(a) - bufKey(b) || b.total - a.total);
 }
 
 /* ---------- 供应商未匹配兜底桶 ---------- */
@@ -334,9 +367,15 @@ function snapshotAgeLabel(snapshotAt: string | null | undefined): string | null 
   return mins <= 1 ? "数据截至 1 分钟内" : `数据截至 ${mins} 分钟前`;
 }
 
-export default function ChaseListVisual({ timeline, suppliers, unmatched, snapshotAt, onExport, onMarkUnmatched, selected: selectedProp, onSelectedChange }: Props) {
+export default function ChaseListVisual({ timeline, suppliers, unmatched, snapshotAt, onExport, onMarkUnmatched, selected: selectedProp, onSelectedChange, urgencySummary }: Props) {
   const today = useMemo(todayCN, []);
-  const tiers = useMemo(() => buildTiers(timeline), [timeline]);
+  // 缩略图取自 timeline；五档徽标数字优先用 urgencySummary（真实要催的盘子），无则回退 timeline 求和
+  const tiers = useMemo(() => {
+    const base = buildTiers(timeline);
+    if (!urgencySummary?.length) return base;
+    const byU = new Map(urgencySummary.map((r) => [r.urgency, Number(r.qty) || 0]));
+    return base.map((t) => (byU.has(t.key) ? { ...t, qty: byU.get(t.key)! } : t));
+  }, [timeline, urgencySummary]);
   const snapshotLabel = snapshotAgeLabel(snapshotAt);
   // 默认选中「已逾期+24h」：打开页面第一眼就是最危险的部分；全部取消 = 看 7 天内全部。
   // 五档筛选可由父级受控（页头红色「已过发货截止」点击强制「已逾期」）；未受控时用内部状态。
@@ -391,7 +430,7 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, snapsh
         {snapshotLabel && <span style={{ fontSize: 11, color: FAINT }}>· {snapshotLabel}</span>}
         {selected.size > 0 ? (
           <button style={{ ...textBtn, color: RED, fontWeight: 500 }} onClick={() => setSelected(new Set())}>
-            已选 {selectedTiers.map((d) => d.label).join(" + ")} · 合计 {selectedQty} 件 · 点击清除看 7 天内全部
+            已选 {selectedTiers.map((d) => d.label).join(" + ")} · 合计 {selectedQty.toLocaleString("zh-CN")} 件 · 点击清除看 7 天内全部
           </button>
         ) : (
           <span style={{ fontSize: 11, color: FAINT }}>点选一档或多档，叠加筛选下方款式</span>
@@ -421,7 +460,7 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, snapsh
                 </div>
                 <div style={{ height: 42, clipPath: CHEVRON, background: tone.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", opacity: dim ? 0.35 : 1 }}>
                   <span style={{ fontSize: 13, fontWeight: 500, color: tone.deep }}>{d.label}</span>
-                  <span style={{ fontSize: 11, color: tone.deep, opacity: 0.75 }}>{d.qty ? `${d.qty} 件` : "—"}</span>
+                  <span style={{ fontSize: 11, color: tone.deep, opacity: 0.75 }}>{d.qty ? `${d.qty.toLocaleString("zh-CN")} 件` : "—"}</span>
                 </div>
               </div>
             );
@@ -577,6 +616,7 @@ export default function ChaseListVisual({ timeline, suppliers, unmatched, snapsh
                         <span style={{ fontFamily: MONO, fontSize: 12, color: FAINT, letterSpacing: "0.02em" }}>{st.code}</span>
                         <span style={{ fontSize: 14, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{st.name}</span>
                         <span style={{ flex: 1 }} />
+                        {(() => { const bc = bufferChip(st.minBuffer, st.bufNull); return bc ? <span style={{ fontSize: 12, color: bc.color, whiteSpace: "nowrap" }}>{bc.text}</span> : null; })()}
                         {st.overdue > 0 && <span style={{ fontSize: 12, color: RED, whiteSpace: "nowrap" }}>已逾期 {st.overdue} 件 · 最长 {st.maxOverdue} 天</span>}
                         {st.overdue === 0 && st.due24 > 0 && <span style={{ fontSize: 12, color: AMBER, whiteSpace: "nowrap" }}>24h内 {st.due24} 件</span>}
                         {st.overdue === 0 && st.due24 === 0 && st.due48 > 0 && <span style={{ fontSize: 12, color: YELLOW, whiteSpace: "nowrap" }}>48h内 {st.due48} 件</span>}

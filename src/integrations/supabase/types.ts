@@ -4357,7 +4357,7 @@ export type Database = {
         Returns: Json
       }
       ops_chase_supplier_list: {
-        Args: never
+        Args: { p_buffer_days?: number }
         Returns: {
           due24_qty: number
           due48_qty: number
@@ -4365,6 +4365,7 @@ export type Database = {
           image_url: string
           later_qty: number
           max_overdue_days: number
+          min_buffer_days: number
           overdue_qty: number
           po_count: number
           po_details: Json
@@ -4377,7 +4378,7 @@ export type Database = {
         }[]
       }
       ops_chase_urgency_summary: {
-        Args: never
+        Args: { p_buffer_days?: number }
         Returns: {
           order_count: number
           qty: number

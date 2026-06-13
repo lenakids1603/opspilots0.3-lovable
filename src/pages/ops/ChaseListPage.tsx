@@ -24,7 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatDateTimeCN, todayCN } from "@/lib/datetime";
 
-type PoDetail = { po_id: string; delivery_date: string | null; overdue_days: number; qty: number };
+type PoDetail = { po_id: string; delivery_date: string | null; overdue_days: number; buffer_days: number | null; qty: number };
 type Urgency = "overdue" | "due24" | "due48" | "due72" | "later";
 type SupplierRow = {
   supplier_id: string;
@@ -39,6 +39,7 @@ type SupplierRow = {
   later_qty: number;
   po_count: number;
   max_overdue_days: number;
+  min_buffer_days: number | null;
   po_details: PoDetail[];
   product_name: string | null;
   image_url: string | null;
@@ -72,11 +73,7 @@ type TimelineRow = {
   urgency: Urgency;
   snapshot_at: string | null;
 };
-// 7 天待发货全景（ops_chase_demand_overview）：每个供应状态一行。
-// in_transit 已按安全缓冲（p_buffer_days，默认 3 天）拆为 in_transit_tight/in_transit_safe
-type OverviewCategory =
-  | "in_transit_safe" | "in_transit_tight"
-  | "gap" | "late_order" | "closed_short" | "urge_supplier";
+// 头部全景（ops_chase_demand_overview）：仅用于头部两个大数字（7 天内待发货 / 已过发货截止）
 type OverviewRow = {
   category: string;
   qty_7d: number;
@@ -84,17 +81,8 @@ type OverviewRow = {
   qty_overdue: number;
   orders_overdue: number;
 };
-// 六状态分解：category → 中文标签 + 点击跳转页签（「无采购单」按需求跳「采购缺口」）；
-// warn=橙色告警强调（「在路上·吃紧」是会伪装成安全的隐藏风险），tip=悬停说明
-const OVERVIEW_CATEGORIES: { key: OverviewCategory; label: string; tab: string; warn?: boolean; tip?: string }[] = [
-  { key: "in_transit_safe", label: "在路上·宽裕", tab: "purchase" },
-  { key: "in_transit_tight", label: "在路上·吃紧", tab: "purchase", warn: true,
-    tip: "交期距发货截止≤3天，供应商稍有延误就会错过平台发货，需提前盯" },
-  { key: "gap", label: "无采购单", tab: "purchase" },
-  { key: "late_order", label: "会迟到", tab: "purchase" },
-  { key: "closed_short", label: "厂家少交", tab: "closed" },
-  { key: "urge_supplier", label: "催供应商", tab: "supplier" },
-];
+// 时间轴五档（ops_chase_urgency_summary）：已是「真实要催的盘子」(在路上吃紧+会迟到+供应商已逾期)
+type UrgencyRow = { urgency: string; qty: number; order_count: number; supplier_count: number };
 
 const fmtNum = (n: number | null | undefined) =>
   n == null ? "-" : Number(n).toLocaleString("zh-CN");
@@ -288,16 +276,23 @@ export default function ChaseListPage() {
           if (error) throw error;
           return (data ?? []) as UnmatchedRow[];
         } },
-      // 7 天待发货全景：头部主数字 / 红色逾期数 / 五状态分解的唯一数据源（实时求和，不写死）
+      // 头部两个大数字（7 天内待发货 / 已过发货截止）的数据源（实时求和，不写死）
       { queryKey: ["chase", "demand_overview"], staleTime: 60_000,
         queryFn: async () => {
           const { data, error } = await supabase.rpc("ops_chase_demand_overview" as never);
           if (error) throw error;
           return (data ?? []) as OverviewRow[];
         } },
+      // 时间轴五档：真实要催的盘子（在路上吃紧 + 会迟到 + 供应商已逾期，排除宽裕/无采购单/劝退）
+      { queryKey: ["chase", "urgency_summary"], staleTime: 60_000,
+        queryFn: async () => {
+          const { data, error } = await supabase.rpc("ops_chase_urgency_summary" as never);
+          if (error) throw error;
+          return (data ?? []) as UrgencyRow[];
+        } },
     ],
   });
-  const [supplierQ, questionQ, purchaseQ, closedQ, timelineQ, unmatchedQ, overviewQ] = queries;
+  const [supplierQ, questionQ, purchaseQ, closedQ, timelineQ, unmatchedQ, overviewQ, urgencyQ] = queries;
   const loading = queries.some(q => q.isLoading);
   // 硬失败 = 出错且没有任何可展示数据;刷新失败但留有上次成功数据的算软失败,
   // 继续展示旧数据并提示,不让整页/整条时间轴开天窗
@@ -312,14 +307,13 @@ export default function ChaseListPage() {
   const timelineRowsRaw = (timelineQ.data ?? []) as TimelineRow[];
   const unmatchedRows = (unmatchedQ.data ?? []) as UnmatchedRow[];
   const overviewRows = (overviewQ.data ?? []) as OverviewRow[];
+  const urgencyRows = (urgencyQ.data ?? []) as UrgencyRow[];
 
   // 头部全景：7 天内待发货 = Σqty_7d；已过发货截止 = Σqty_overdue（均实时求和，不写死）
   const overview = useMemo(() => {
-    const byCat = new Map<string, OverviewRow>();
-    for (const r of overviewRows) byCat.set(r.category, r);
     const totalQty7d = overviewRows.reduce((s, r) => s + Number(r.qty_7d || 0), 0);
     const totalOverdue = overviewRows.reduce((s, r) => s + Number(r.qty_overdue || 0), 0);
-    return { byCat, totalQty7d, totalOverdue };
+    return { totalQty7d, totalOverdue };
   }, [overviewRows]);
 
   const summary = useMemo(() => {
@@ -418,56 +412,34 @@ export default function ChaseListPage() {
         </Card>
       )}
 
-      {/* ======== 7 天待发货全景（头部主数字 + 逾期红线 + 五状态分解） ======== */}
+      {/* ======== 头部全景：7 天内待发货 + 已过发货截止（两个大数字） ======== */}
       {!isForbidden && !hardError && (
         <Card className="mb-4">
           <CardContent className="py-4">
             {overviewQ.isLoading ? (
-              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-16 w-full" />
             ) : (
-              <>
-                <div className="flex flex-wrap items-end gap-x-10 gap-y-3">
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">7 天内待发货</div>
-                    <div className="text-3xl font-semibold tabular-nums leading-none">
-                      {fmtNum(overview.totalQty7d)}
-                      <span className="ml-1 text-base font-normal text-muted-foreground">件</span>
-                    </div>
+              <div className="flex flex-wrap items-end gap-x-10 gap-y-3">
+                <div>
+                  <div className="text-xs text-muted-foreground mb-1">7 天内待发货</div>
+                  <div className="text-3xl font-semibold tabular-nums leading-none">
+                    {fmtNum(overview.totalQty7d)}
+                    <span className="ml-1 text-base font-normal text-muted-foreground">件</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => { setTab("supplier"); setTierFilter(new Set<Urgency>(["overdue"])); }}
-                    className="text-left group"
-                    title="切到「立即催供应商」并筛出已逾期项"
-                  >
-                    <div className="text-xs text-destructive/80 mb-1">已过发货截止</div>
-                    <div className="text-3xl font-semibold tabular-nums leading-none text-destructive group-hover:underline underline-offset-4">
-                      {fmtNum(overview.totalOverdue)}
-                      <span className="ml-1 text-base font-normal">件</span>
-                    </div>
-                  </button>
                 </div>
-                <div className="mt-3 pt-3 border-t flex flex-wrap items-center gap-y-1 text-sm text-muted-foreground">
-                  {OVERVIEW_CATEGORIES.map((c, i) => {
-                    const row = overview.byCat.get(c.key);
-                    const qty = Number(row?.qty_7d || 0);
-                    const overdue = Number(row?.qty_overdue || 0);
-                    return (
-                      <span key={c.key} className="inline-flex items-baseline">
-                        {i > 0 && <span className="mx-1.5 text-muted-foreground/40">·</span>}
-                        <button type="button"
-                          className={cn("hover:text-foreground", c.warn && "text-orange-600 hover:text-orange-700 font-medium")}
-                          onClick={() => setTab(c.tab)} title={c.tip ?? `查看${c.label}`}>
-                          {c.label} <span className={cn("tabular-nums", !c.warn && "text-foreground")}>{fmtNum(qty)}</span>
-                        </button>
-                        {overdue > 0 && (
-                          <span className="ml-1 text-xs text-destructive">逾期{fmtNum(overdue)}</span>
-                        )}
-                      </span>
-                    );
-                  })}
-                </div>
-              </>
+                <button
+                  type="button"
+                  onClick={() => { setTab("supplier"); setTierFilter(new Set<Urgency>(["overdue"])); }}
+                  className="text-left group"
+                  title="切到「立即催供应商」并筛出已逾期项"
+                >
+                  <div className="text-xs text-destructive/80 mb-1">已过发货截止</div>
+                  <div className="text-3xl font-semibold tabular-nums leading-none text-destructive group-hover:underline underline-offset-4">
+                    {fmtNum(overview.totalOverdue)}
+                    <span className="ml-1 text-base font-normal">件</span>
+                  </div>
+                </button>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -502,6 +474,7 @@ export default function ChaseListPage() {
             </div>
           ) : (
             <ChaseListVisual timeline={timelineRowsRaw} suppliers={supplierRows} unmatched={unmatchedRows}
+              urgencySummary={urgencyRows}
               snapshotAt={timelineRowsRaw[0]?.snapshot_at ?? null} onExport={exportSupplier}
               selected={tierFilter} onSelectedChange={setTierFilter}
               onMarkUnmatched={(input) => { setMarkRemark(""); setMarkTarget(input); }} />
