@@ -13,6 +13,12 @@ import { loadSkippedShops, shopIdOf, shouldSkipShop, formatSkipNote } from "../_
 const SYNC_TYPE = "aftersale_received";
 const METHOD_PATH = "aftersale/received/query";
 const PAGE_SIZE = 50;
+// JST aftersale/received/query 首页偶发慢响应:30s 超时常在 page=1 间歇性中断,
+// 把整窗判为 failed。放宽单次调用超时到 60s(共享 callOpenweb 上限 90s),给慢响应更多完成时间。
+const CALL_TIMEOUT_MS = 60_000;
+// legacy 一次性路径(cron 走此路)的页级瞬时错误重试:共 1 + N 次尝试,指数退避。
+const LEGACY_PAGE_MAX_RETRY = 2;
+const LEGACY_RETRY_BACKOFF_MS = [3_000, 8_000];
 
 function buildItemUniqueKey(uniqueKey: string, it: any, _rModified: any) {
   const lineKey =
@@ -119,7 +125,7 @@ async function callAftersale(windowFrom: Date, windowTo: Date, pageIndex: number
   let reqBody = buildRequestBody(windowFrom, windowTo, pageIndex, pageSize, true);
   const t0 = Date.now();
   try {
-    const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
+    const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: CALL_TIMEOUT_MS });
     return { data, reqBody, durationMs: Date.now() - t0 };
   } catch (e: any) {
     // code=130: 参数错误 → 去掉 date_type 重试一次
@@ -127,7 +133,7 @@ async function callAftersale(windowFrom: Date, windowTo: Date, pageIndex: number
       reqBody = buildRequestBody(windowFrom, windowTo, pageIndex, pageSize, false);
       const t1 = Date.now();
       try {
-        const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
+        const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: CALL_TIMEOUT_MS });
         return { data, reqBody, durationMs: Date.now() - t1 };
       } catch (e2: any) {
         e2.requestBody = reqBody;
@@ -197,13 +203,36 @@ async function processAftersalePage(args: ProcessPageArgs): Promise<PageResult> 
   };
 }
 
+// callOpenweb 对超时/中断、网络错误、429/5xx、限流均会打 transient/aborted 标记。
+function isTransientCallError(e: any): boolean {
+  return e?.transient === true || e?.aborted === true;
+}
+
+// legacy 一次性路径专用:对单页瞬时错误(超时/网络/5xx/限流)做有限次重试 + 指数退避。
+// cron 走 legacy,没有作业引擎 waiting_next_tick 的兜底重试,故在此就地重试,
+// 避免一次 60s 超时把整窗直接判为 failed。瞬时超时发生在 callAftersale(写库之前),
+// 因此重试整页不会造成重复写入。
+async function processAftersalePageWithRetry(args: ProcessPageArgs): Promise<PageResult> {
+  let lastErr: any;
+  for (let attempt = 0; attempt <= LEGACY_PAGE_MAX_RETRY; attempt++) {
+    try {
+      return await processAftersalePage(args);
+    } catch (e) {
+      lastErr = e;
+      if (!isTransientCallError(e) || attempt === LEGACY_PAGE_MAX_RETRY) throw e;
+      await sleep(LEGACY_RETRY_BACKOFF_MS[Math.min(attempt, LEGACY_RETRY_BACKOFF_MS.length - 1)]);
+    }
+  }
+  throw lastErr;
+}
+
 async function runLegacySync(fromIso: string, toIso: string, logId: string) {
   const winFrom = new Date(fromIso);
   const winTo = new Date(toIso);
   let page = 1, orders = 0, items = 0, failed = 0;
   try {
     while (true) {
-      const res = await processAftersalePage({
+      const res = await processAftersalePageWithRetry({
         job: {} as any, windowIndex: 0, windowFrom: winFrom, windowTo: winTo,
         pageIndex: page, pageSize: PAGE_SIZE,
       });
@@ -235,7 +264,7 @@ async function runLegacySync(fromIso: string, toIso: string, logId: string) {
 async function tryCall(reqBody: any) {
   const t0 = Date.now();
   try {
-    const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
+    const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: CALL_TIMEOUT_MS });
     const list = pickList(data, ["receiveds", "after_sales", "aftersales"]);
     const first = list[0] ?? null;
     const subItems = first ? pickItemsArray(first, ["received_items"]) : [];
@@ -338,7 +367,10 @@ Deno.serve(async (req) => {
       tickActionName: "tick_aftersale_job",
       cancelActionName: "cancel_aftersale_job",
       functionName: "jst-sync-aftersale-received",
-      config: { pageSize: PAGE_SIZE, maxWindowDays: 1, maxPagesPerRun: 2, timeBudgetSeconds: 35, proactiveSplitAfterPage: 10 },
+      // 单页调用超时放宽到 60s 后,maxPagesPerRun 降为 1、timeBudgetSeconds 提到 45,
+      // 保证单次 tick(1 次调用 ≤60s + 写库)< 锁 TTL(max(60, timeBudgetSeconds+30)=75s),
+      // 避免锁过期被并发 tick 抢占。job 路径还有引擎级瞬时错误重试兜底,不再额外重试。
+      config: { pageSize: PAGE_SIZE, maxWindowDays: 1, maxPagesPerRun: 1, timeBudgetSeconds: 45, proactiveSplitAfterPage: 10 },
       resolveWindowFromBody: (b) => resolveWindow(b),
     });
     if (jobResp) {
