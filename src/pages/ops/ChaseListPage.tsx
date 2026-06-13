@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQueries, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -181,6 +181,18 @@ function SkuThumb({ sku, imageUrl, onPreview, size = 40 }: {
 // 劝退标记行（直接来自 ops_chase_style_flags，作为「劝退款」分组的权威数据源）
 type QuantuiFlag = { id: string; style_no: string | null; sku: string | null; original_supplier_name: string | null; remark: string | null };
 
+// 分页页码窗口：count≤7 全列；否则 1 … (当前±1) … 末页
+function pageNumbers(current: number, count: number): (number | "…")[] {
+  if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
+  const out: (number | "…")[] = [1];
+  const start = Math.max(2, current - 1), end = Math.min(count - 1, current + 1);
+  if (start > 2) out.push("…");
+  for (let i = start; i <= end; i++) out.push(i);
+  if (end < count - 1) out.push("…");
+  out.push(count);
+  return out;
+}
+
 export default function ChaseListPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState("supplier");
@@ -249,11 +261,32 @@ export default function ChaseListPage() {
           const row = Array.isArray(arr) ? arr[0] : (arr as unknown as PendingReviewCount);
           return (row ?? { pending_review_orders: 0, pending_review_items: 0, pending_review_qty: 0 }) as PendingReviewCount;
         } },
+      // purchase_list 行数可超 PostgREST 单请求上限(1000)，且该 RPC 不认 Range 头(实测被忽略)，
+      // 故用 offset/limit 查询参数原生 fetch 分块取全量(首块带 count 拿总数，其余并发取)，前端再分页
       { queryKey: ["chase", "purchase_list"], staleTime: 60_000,
         queryFn: async () => {
-          const { data, error } = await supabase.rpc("ops_chase_purchase_list" as never);
-          if (error) throw error;
-          return (data ?? []) as PurchaseRow[];
+          const CHUNK = 1000;
+          const { data: { session } } = await supabase.auth.getSession();
+          const baseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+          const apikey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
+          const auth = `Bearer ${session?.access_token ?? apikey}`;
+          const getChunk = async (offset: number, withCount: boolean): Promise<{ rows: PurchaseRow[]; total: number }> => {
+            const resp = await fetch(
+              `${baseUrl}/rest/v1/rpc/ops_chase_purchase_list?offset=${offset}&limit=${CHUNK}`,
+              { method: "POST", headers: { apikey, Authorization: auth, "Content-Type": "application/json", ...(withCount ? { Prefer: "count=exact" } : {}) }, body: "{}" },
+            );
+            if (!resp.ok) throw new Error(`采购缺口加载失败 (${resp.status})`);
+            const cr = resp.headers.get("content-range");
+            const total = cr && cr.includes("/") ? parseInt(cr.split("/")[1], 10) : NaN;
+            return { rows: (await resp.json()) as PurchaseRow[], total };
+          };
+          const first = await getChunk(0, true);
+          const rows = [...first.rows];
+          const total = Number.isFinite(first.total) ? first.total : first.rows.length;
+          const more: Promise<{ rows: PurchaseRow[]; total: number }>[] = [];
+          for (let offset = CHUNK; offset < total; offset += CHUNK) more.push(getChunk(offset, false));
+          for (const r of await Promise.all(more)) rows.push(...r.rows);
+          return rows;
         } },
       { queryKey: ["chase", "closed_short_list"], staleTime: 60_000,
         queryFn: async () => {
@@ -343,7 +376,19 @@ export default function ChaseListPage() {
   // 劝退款单独分组：真实缺口仅 is_quantui=false，不与劝退款混算
   const realPurchase = useMemo(() => visiblePurchase.filter(r => !r.is_quantui), [visiblePurchase]);
 
-  const purchaseTabSkus = useMemo(() => visiblePurchase.map(r => r.sku), [visiblePurchase]);
+  // 采购缺口前端分页：一页 200 条（全量已在 queryFn 分块取回，不受 1000 行上限影响）
+  const PURCHASE_PAGE_SIZE = 200;
+  const [purchasePage, setPurchasePage] = useState(1);
+  const purchasePageCount = Math.max(1, Math.ceil(realPurchase.length / PURCHASE_PAGE_SIZE));
+  const purchaseSafePage = Math.min(purchasePage, purchasePageCount);
+  const pagedPurchase = useMemo(
+    () => realPurchase.slice((purchaseSafePage - 1) * PURCHASE_PAGE_SIZE, purchaseSafePage * PURCHASE_PAGE_SIZE),
+    [realPurchase, purchaseSafePage],
+  );
+  // 切换赠品SC过滤后回到第 1 页（避免停在越界页码）
+  useEffect(() => { setPurchasePage(1); }, [showSC]);
+
+  const purchaseTabSkus = useMemo(() => pagedPurchase.map(r => r.sku), [pagedPurchase]);
   const closedTabSkus = useMemo(() => closedRows.map(r => r.sku), [closedRows]);
 
   const purchaseImgQ = useSkuImages(purchaseTabSkus, tab === "purchase");
@@ -524,7 +569,7 @@ export default function ChaseListPage() {
                     <tbody>
                       {realPurchase.length === 0 ? (
                         <tr><td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">暂无数据</td></tr>
-                      ) : realPurchase.map((r, i) => (
+                      ) : pagedPurchase.map((r, i) => (
                         <tr key={i} className={cn("border-t", Number(r.final_gap) > 0 && "bg-red-50/60")}>
                           <td className="px-4 py-2">
                             <SkuThumb sku={r.sku} imageUrl={purchaseImgQ.data?.[r.sku]} onPreview={onPreview} />
@@ -545,6 +590,27 @@ export default function ChaseListPage() {
                     </tbody>
                   </table>
                 </div>
+                {purchasePageCount > 1 && (
+                  <div className="flex items-center justify-between gap-3 px-4 py-3 border-t text-sm flex-wrap">
+                    <div className="text-xs text-muted-foreground">
+                      共 {fmtNum(realPurchase.length)} 条 · 第 {purchaseSafePage}/{purchasePageCount} 页（每页 {PURCHASE_PAGE_SIZE} 条）
+                    </div>
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <Button variant="outline" size="sm" disabled={purchaseSafePage <= 1}
+                        onClick={() => setPurchasePage(purchaseSafePage - 1)}>上一页</Button>
+                      {pageNumbers(purchaseSafePage, purchasePageCount).map((p, idx) =>
+                        p === "…" ? (
+                          <span key={`gap${idx}`} className="px-1.5 text-muted-foreground">…</span>
+                        ) : (
+                          <Button key={p} variant={p === purchaseSafePage ? "default" : "outline"} size="sm"
+                            className="min-w-9 px-2" onClick={() => setPurchasePage(p)}>{p}</Button>
+                        )
+                      )}
+                      <Button variant="outline" size="sm" disabled={purchaseSafePage >= purchasePageCount}
+                        onClick={() => setPurchasePage(purchaseSafePage + 1)}>下一页</Button>
+                    </div>
+                  </div>
+                )}
               </Card>
 
               {quantuiFlags.length > 0 && (
