@@ -3,7 +3,7 @@
 // 同步线上商品映射到 ops_sku_aliases；遇到无法匹配的线上 SKU 写 ops_product_mapping_exceptions。
 //
 // POST body:
-//   { source?: 'sales'|'outbound'|'refund'|'aftersale'|'all',  // 默认 all
+//   { source?: 'sales'|'refund'|'aftersale'|'purchase'|'receipt'|'all',  // 默认 all
 //     days?: number,                                            // 仅取最近 N 天，默认 30
 //     limit?: number }                                          // 每来源最多扫描 N 行，默认 20000
 
@@ -113,34 +113,9 @@ async function loadRows(source: string, days: number, limit: number): Promise<De
     }
   }
 
-  if (source === "outbound" || source === "all") {
-    const data = await fetchPaged("outbound", limit, (from, to) => admin
-      .from("jst_outbound_order_items")
-      .select("sku_id, i_id, name, properties_value, color, size, pic, synced_at")
-      .gte("synced_at", since)
-      .order("id", { ascending: true })
-      .range(from, to));
-    for (const r of data) {
-      const spec = pickSpec(r.properties_value);
-      out.push({
-        sku_code: null,
-        jst_sku_id: r.sku_id ?? null,
-        product_name: r.name ?? null,
-        sku_name: null,
-        color: r.color ?? spec.color,
-        size: r.size ?? spec.size,
-        pic: r.pic ?? null,
-        supplier_id: null, supplier_name: null,
-        shop_id: null,
-        online_sku_code: null,
-        online_product_id: r.i_id ?? null,
-        ts: r.synced_at ?? null,
-        style_no: null,
-        cost_price: null,
-        source: "outbound",
-      });
-    }
-  }
+  // 出库来源已下线：legacy jst_outbound_order_items 自 2026-06-04 起无写入，
+  // 已归档为 zz_archived_jst_outbound_order_items（见 20260614130000 迁移）。
+  // 现行出库数据在 warehouse_shipping_packages，但缺 color/size/pic，暂不作为主档来源。
 
   if (source === "refund" || source === "all") {
     const data = await fetchPaged("refund", limit, (from, to) => admin
