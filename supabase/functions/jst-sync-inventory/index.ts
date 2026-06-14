@@ -13,7 +13,9 @@
 // Actions:
 //   start_inventory_job / tick_inventory_job / cancel_inventory_job  断点任务（minutes/hours/days 窗口）
 //   sync_recent {days≤7} / sync_range {modified_begin, modified_end}  旧版入口 → 转 start_inventory_job
-//   seed_by_skus {limit?, offset?, batch?}   按 ops_skus.sku_code 批量 sku_ids 种子（绕 170，覆盖慢动销）
+//   seed_by_skus {offset?, chunk?≤1000, batch?}  按 ops_skus.sku_code 批量 sku_ids 种子（绕 170，覆盖慢动销）；
+//       每次只处理一个 ≤1000 的 SKU 块（避开生产 PostgREST max-rows=1000 静默截断 + Edge 时限），
+//       块满则自调用 offset+=chunk 接力直到末块；单批 JST 调用带 transient 重试退避。
 //   refresh_token                            诊断辅助
 import { corsHeaders } from "npm:@supabase/supabase-js@2/cors";
 import {
@@ -36,6 +38,14 @@ const WAREHOUSES: Array<{ wms: string; name: string }> = [
 ];
 const MAIN_WMS = "10843291";
 const WMS_LIST = WAREHOUSES.map((w) => w.wms);
+
+// seed 自续跑：每次 invocation 只处理一个 ≤1000 的 SKU 块（PostgREST max-rows=1000 会静默截断，
+// 故顺势以 1000 为块；约 10 批 JST 调用 ~8s，安全不超 Edge 时限），块满则自调用 offset+=chunk 接力。
+const SEED_CHUNK = 1000;
+const SEED_MAX_OFFSET = 200_000;   // 自续跑死循环护栏（远超 SKU 规模）
+const SEED_BUDGET_MS = 45_000;     // 单次 invocation 处理预算，超则从当前 SKU 位置接力（不丢进度；留足 Edge 墙钟余量）
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 // ---------- 解析 ----------
 type ParsedInv = {
@@ -276,69 +286,158 @@ async function startScopedLog(label: string): Promise<string> {
   return data!.id as string;
 }
 
-async function seedBySkus(opts: { limit: number; offset: number; batch: number; wms: string }, logId: string) {
-  let processed = 0, upserted = 0, unchanged = 0, unmatched = 0, failed = 0;
-  let lastError = "";
+type SeedCum = { processed: number; upserted: number; unchanged: number; unmatched: number; failed: number; lastError: string };
+
+function emptyCum(): SeedCum {
+  return { processed: 0, upserted: 0, unchanged: 0, unmatched: 0, failed: 0, lastError: "" };
+}
+
+// 镜像 jst-sync-job.ts 的 isTransientError：超时/网络/限流/5xx 视为可重试
+function isTransient(e: any): boolean {
+  if (!e) return false;
+  if (e.transient === true || e.aborted === true) return true;
+  const code = String(e.code ?? "");
+  if (code === "ABORTED" || code === "429" || /^5\d\d$/.test(code)) return true;
+  const msg = String(e.message ?? e.apiMsg ?? "");
+  return /请求超时|timeout|timed out|AbortError|aborted|network|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket|connection reset|connection refused|connection closed|broken pipe|error sending request|client error \(Connect\)|os error \d+|限流|频率|频次|超过限制/i.test(msg);
+}
+
+// seed 单批 JST 调用：transient（首笔冷代理超时等）重试退避；wms_co_id 与 sku_ids 不兼容则一次性去 wms 退化（≈主仓）。
+async function seedFetchBatch(skuIds: string, wms: string): Promise<any> {
+  const biz: Record<string, unknown> = { page_index: "1", page_size: String(PAGE_SIZE), sku_ids: skuIds };
+  if (wms) biz.wms_co_id = wms;
+  let wmsDegraded = false;
+  const MAX_ATTEMPTS = 2; // 一次重试即可解单次冷超时；45s 超时下不宜再多（防 Edge 墙钟）
+  let attempt = 0;
+  for (;;) {
+    attempt++;
+    try {
+      // 45s：实测 inventory/query 高负载下常 30-45s，30s 易超时；45s 让慢调用完成而非整批失败
+      return await callOpenweb(METHOD_PATH, biz, { timeoutMs: 45_000 });
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      if (!wmsDegraded && biz.wms_co_id !== undefined && /wms_co_id|分仓|参数/i.test(msg)) {
+        delete biz.wms_co_id; // 响应无 wms_co_id → parseRow 用 fallback=主仓
+        wmsDegraded = true;
+        attempt--; // 退化不消耗重试额度
+        continue;
+      }
+      if (isTransient(e) && attempt < MAX_ATTEMPTS) {
+        await sleep(attempt === 1 ? 3000 : 8000);
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+// 自调用接力下一块（镜像 jst-sync-job.ts scheduleNextTick 的 x-internal-tick 自调用）
+async function selfInvokeSeed(p: { offset: number; chunk: number; batch: number; wms: string; total: number; cum: SeedCum; logId: string }): Promise<boolean> {
+  if (!SUPABASE_URL || !SERVICE_ROLE) return false;
   try {
-    // 取主档 sku_code（按 sku_code 排序稳定分页）
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/jst-sync-inventory`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${SERVICE_ROLE}`,
+        "apikey": SERVICE_ROLE,
+        "x-internal-tick": SERVICE_ROLE,
+      },
+      body: JSON.stringify({
+        action: "seed_by_skus", _self_seed: true, log_id: p.logId,
+        offset: p.offset, chunk: p.chunk, batch: p.batch, wms_co_id: p.wms, total: p.total, _cum: p.cum,
+      }),
+    });
+    return resp.ok;
+  } catch (_e) {
+    return false;
+  }
+}
+
+// 处理一个 ≤chunk 的 SKU 块；块满（或预算用尽）则自续跑，否则收尾。
+async function seedChunk(opts: { offset: number; chunk: number; batch: number; wms: string; total: number; cum: SeedCum }, logId: string) {
+  const cum = opts.cum;
+  const t0 = Date.now();
+  let chunkRead = 0;
+  let nextI = 0;
+  let budgetHit = false;
+  try {
+    // 按 sku_code 稳定排序分页；range 恰好 chunk 行，不触 max-rows 截断
     const { data: skuRows, error: skErr } = await admin
       .from("ops_skus")
       .select("sku_code")
       .not("sku_code", "is", null)
       .order("sku_code", { ascending: true })
-      .range(opts.offset, opts.offset + opts.limit - 1);
+      .range(opts.offset, opts.offset + opts.chunk - 1);
     if (skErr) throw new Error(`读取 ops_skus 失败: ${skErr.message}`);
     const codes = (skuRows ?? []).map((r: any) => r.sku_code).filter(Boolean);
+    chunkRead = codes.length;
 
-    for (let i = 0; i < codes.length; i += opts.batch) {
+    let i = 0;
+    for (; i < codes.length; i += opts.batch) {
+      if (Date.now() - t0 > SEED_BUDGET_MS) { budgetHit = true; break; }
       const slice = codes.slice(i, i + opts.batch);
       await sleep(RATE_DELAY_MS);
-      const reqBody: Record<string, unknown> = {
-        page_index: "1",
-        page_size: String(PAGE_SIZE),
-        sku_ids: slice.join(","),
-        wms_co_id: opts.wms, // 主仓；若接口忽略/报错可去掉走全仓汇总（≈主仓）
-      };
-      let data: any;
       try {
-        data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
+        const data = await seedFetchBatch(slice.join(","), opts.wms);
+        const list = pickList(data, ["inventorys", "datas"]);
+        const parsed = list.map((raw: any) => parseRow(raw, opts.wms)).filter((x): x is ParsedInv => x !== null);
+        const stats = await writeRows(parsed);
+        cum.processed += slice.length;
+        cum.upserted += stats.upserted;
+        cum.unchanged += stats.unchanged;
+        cum.unmatched += stats.unmatched;
+        cum.failed += stats.failed;
+        if (stats.lastError) cum.lastError = stats.lastError;
       } catch (e: any) {
-        // sku_ids 与 wms_co_id 不兼容时退回全仓汇总（响应无 wms_co_id → parseRow 用 fallback=主仓）
-        const msg = String(e?.message ?? e);
-        if (/wms_co_id|分仓|参数/i.test(msg)) {
-          delete reqBody.wms_co_id;
-          data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
-        } else {
-          throw e;
-        }
+        // 单批重试后仍失败：记 failed、继续下一批，不拖垮整块（缺口可重跑 seed 补）
+        cum.failed += slice.length;
+        cum.lastError = String(e?.message ?? e).slice(0, 300);
+        console.error(`[jst-inventory seed] 批失败 offset=${opts.offset}+${i}: ${cum.lastError}`);
       }
-      const list = pickList(data, ["inventorys", "datas"]);
-      const parsed = list.map((raw: any) => parseRow(raw, opts.wms)).filter((x): x is ParsedInv => x !== null);
-      const stats = await writeRows(parsed);
-      processed += slice.length;
-      upserted += stats.upserted;
-      unchanged += stats.unchanged;
-      unmatched += stats.unmatched;
-      failed += stats.failed;
-      if (stats.lastError) lastError = stats.lastError;
+    }
+    nextI = i;
+
+    const nextOffset = budgetHit ? (opts.offset + nextI) : (opts.offset + opts.chunk);
+    const more = nextOffset < SEED_MAX_OFFSET && (budgetHit || chunkRead === opts.chunk);
+
+    // 续跑前检查 log 是否被人工终止（status 改为非 running 即停）
+    let aborted = false;
+    if (more) {
+      const { data: logRow } = await admin.from("jst_sync_logs").select("status").eq("id", logId).maybeSingle();
+      if (logRow && logRow.status !== "running") aborted = true;
+    }
+
+    if (more && !aborted) {
       await admin.from("jst_sync_logs").update({
-        fetched_orders_count: upserted, fetched_items_count: upserted,
+        fetched_orders_count: cum.upserted, fetched_items_count: cum.upserted,
         heartbeat_at: new Date().toISOString(),
-        message: `[库存种子] 已处理 ${processed}/${codes.length} SKU · upsert ${upserted} · 未变更 ${unchanged} · 未命中主档 ${unmatched} · 失败 ${failed}`,
+        message: `[库存种子] 进行中 · 已读 ${nextOffset}${opts.total ? "/" + opts.total : ""} · upsert ${cum.upserted} · 未变更 ${cum.unchanged} · 未命中 ${cum.unmatched} · 失败 ${cum.failed} · 续跑 offset=${nextOffset}${budgetHit ? "(预算接力)" : ""}`,
       }).eq("id", logId);
+      const ok = await selfInvokeSeed({ offset: nextOffset, chunk: opts.chunk, batch: opts.batch, wms: opts.wms, total: opts.total, cum, logId });
+      if (ok) return;
+      await admin.from("jst_sync_logs").update({
+        status: "partial_failed", ended_at: new Date().toISOString(),
+        fetched_orders_count: cum.upserted, fetched_items_count: cum.upserted,
+        message: `[库存种子] 自续跑发起失败,停在 offset=${nextOffset} · 累计 upsert ${cum.upserted}（可从该 offset 手动续跑）`,
+        error_detail: "self-invoke 失败",
+      }).eq("id", logId);
+      return;
     }
 
     await admin.from("jst_sync_logs").update({
-      status: failed === 0 ? "success" : (upserted > 0 ? "partial_failed" : "failed"),
+      status: cum.failed === 0 ? "success" : (cum.upserted > 0 ? "partial_failed" : "failed"),
       ended_at: new Date().toISOString(),
-      fetched_orders_count: upserted, fetched_items_count: upserted,
-      message: `[库存种子] 完成 · SKU ${processed} · upsert ${upserted} · 未变更 ${unchanged} · 未命中主档 ${unmatched} · 失败 ${failed}${lastError ? ` · 末次错误: ${lastError}` : ""}`,
-      error_detail: lastError,
+      fetched_orders_count: cum.upserted, fetched_items_count: cum.upserted,
+      message: `[库存种子] 完成 · 覆盖 ${opts.offset + chunkRead}${opts.total ? "/" + opts.total : ""} SKU · upsert ${cum.upserted} · 未变更 ${cum.unchanged} · 未命中主档 ${cum.unmatched} · 失败 ${cum.failed}`
+        + `${aborted ? " · (人工终止)" : ""}${nextOffset >= SEED_MAX_OFFSET ? " · (触顶护栏)" : ""}${cum.lastError ? ` · 末次错误: ${cum.lastError}` : ""}`,
+      error_detail: cum.lastError,
     }).eq("id", logId);
   } catch (e: any) {
     await admin.from("jst_sync_logs").update({
-      status: "failed", ended_at: new Date().toISOString(),
-      message: `[库存种子] 失败 · 已处理 ${processed}`,
+      status: cum.upserted > 0 ? "partial_failed" : "failed", ended_at: new Date().toISOString(),
+      fetched_orders_count: cum.upserted, fetched_items_count: cum.upserted,
+      message: `[库存种子] 失败 · offset=${opts.offset} · 累计 upsert ${cum.upserted}`,
       error_detail: String(e?.message ?? e).slice(0, 1500),
     }).eq("id", logId);
   }
@@ -370,14 +469,24 @@ Deno.serve(async (req) => {
     }
 
     if (action === "seed_by_skus") {
-      const limit = Math.min(20000, Math.max(1, Number(body.limit ?? 20000)));
       const offset = Math.max(0, Number(body.offset ?? 0));
+      const chunk = Math.min(SEED_CHUNK, Math.max(1, Number(body.chunk ?? SEED_CHUNK)));
       const batch = Math.min(100, Math.max(1, Number(body.batch ?? 100)));
       const wms = String(body.wms_co_id ?? MAIN_WMS);
-      const logId = await startScopedLog(`[库存种子] limit=${limit} offset=${offset} batch=${batch} wms=${wms}`);
+      // 续跑链：自调用带 log_id + 累计；首链创建 log 并计总数
+      const cum: SeedCum = body._cum && typeof body._cum === "object" ? { ...emptyCum(), ...body._cum } : emptyCum();
+      let total = Math.max(0, Number(body.total ?? 0));
+      let logId = String(body.log_id ?? "");
+      if (!logId) {
+        if (!total) {
+          const { count } = await admin.from("ops_skus").select("sku_code", { count: "exact", head: true }).not("sku_code", "is", null);
+          total = count ?? 0;
+        }
+        logId = await startScopedLog(`[库存种子] 起跑 chunk=${chunk} batch=${batch} wms=${wms} total=${total}`);
+      }
       // @ts-ignore EdgeRuntime available in Supabase Edge Runtime
-      EdgeRuntime.waitUntil(seedBySkus({ limit, offset, batch, wms }, logId));
-      return json({ ok: true, background: true, log_id: logId, action });
+      EdgeRuntime.waitUntil(seedChunk({ offset, chunk, batch, wms, total, cum }, logId));
+      return json({ ok: true, background: true, log_id: logId, action, offset, chunk });
     }
 
     // 旧入口 → 断点任务
