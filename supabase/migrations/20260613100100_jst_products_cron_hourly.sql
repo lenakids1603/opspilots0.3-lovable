@@ -8,8 +8,9 @@
 -- 窗口：滚动近 120 分钟（minutes:120），与小时调度刻意重叠留冗余；重叠由
 --   sku_code/jst_sku_id 唯一键 + jst_modified_at 水位幂等去重，物理行不翻倍。
 --   ★ 不写死时间戳——每次触发都按「现在往前 120 分钟」滚动。
--- pg_cron 使用 UTC；每小时一次。分钟错峰取 :50
---   （现有：销售 */15、出库 5-59/15、退款 :20、售后 :35）。
+-- pg_cron 使用 UTC；每小时一次。分钟错峰取 :25（:25 空闲）。
+--   现有占用：销售 */15(:00/:15/:30/:45)、出库 5-59/15(:05/:20/:35/:50)、
+--   退款 :20、售后 :35、采购入库 :50。:50 已被 出库+采购入库 双占，故 products 避开取 :25。
 --
 -- ⚠️ 生产部署顺序：本迁移须在「部署 jst-sync-products 函数(--no-verify-jwt)」之后再应用，
 --   否则首跑会打到未更新/缺鉴权的函数。
@@ -29,6 +30,6 @@ $cleanup$;
 
 select cron.schedule(
   'jst_products_hourly',
-  '50 * * * *',
+  '25 * * * *',
   $job$ select public.invoke_jst_sync('jst-sync-products', '{"action":"start_products_job","minutes":120,"trigger_type":"cron"}'::jsonb) $job$
 );
