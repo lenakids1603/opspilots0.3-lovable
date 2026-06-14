@@ -323,17 +323,28 @@ export default function ChaseListPage() {
           if (error) throw error;
           return (data ?? []) as UrgencyRow[];
         } },
-      // 劝退款分组直接读标记表（权威、行数少，不受 purchase_list 的 1000 行上限截断）：
-      // purchase_list 按缺口降序、总行数可超千（实测 2143 行），劝退款多是小缺口，会落在
-      // 第 1000 行之后被 PostgREST 默认上限截掉，故不能再从 purchase_list 取劝退款。
+      // 劝退款分组直接读标记表（权威数据源，不经 purchase_list；purchase_list 按缺口降序、
+      // 总行数可超千，劝退多是小缺口会落到 1000 行外，故不能从那里取）。
+      // 「关键业务查询不许静默截断」：用 .range 分页循环取全——劝退量小时一次即返回
+      // （<1000 即末页），结构上永不截断、不留理论上限；不用单次 select（吃 1000 默认上限）
+      // 或固定大 .range（那只是更高的静默上限）。updated_at + id 双排序保证翻页确定、不漏不重。
       { queryKey: ["chase", "quantui_flags"], staleTime: 60_000,
         queryFn: async () => {
-          const { data, error } = await supabase.from("ops_chase_style_flags")
-            .select("id, style_no, sku, original_supplier_name, remark")
-            .eq("flag", "quantui")
-            .order("updated_at", { ascending: false });
-          if (error) throw error;
-          return (data ?? []) as QuantuiFlag[];
+          const PAGE = 1000;
+          const all: QuantuiFlag[] = [];
+          for (let from = 0; ; from += PAGE) {
+            const { data, error } = await supabase.from("ops_chase_style_flags")
+              .select("id, style_no, sku, original_supplier_name, remark")
+              .eq("flag", "quantui")
+              .order("updated_at", { ascending: false })
+              .order("id", { ascending: true })
+              .range(from, from + PAGE - 1);
+            if (error) throw error;
+            const rows = (data ?? []) as QuantuiFlag[];
+            all.push(...rows);
+            if (rows.length < PAGE) break; // 末页不足整页 → 已取全
+          }
+          return all;
         } },
     ],
   });
