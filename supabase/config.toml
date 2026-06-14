@@ -26,6 +26,9 @@ verify_jwt = false
 [functions.jst-sync-products]
 verify_jwt = false
 
+[functions.jst-sync-inventory]
+verify_jwt = false
+
 [functions.jst-debug-outbound-fields]
 verify_jwt = false
 
