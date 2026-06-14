@@ -900,7 +900,9 @@ async function runLegacySync(fromIso: string, toIso: string, logId: string) {
 // 库内 status∈(Question,WaitConfirm) 且 synced_at 早于阈值的订单,按 so_id 逐批点查
 // JST orders/single/query,经同一落库路径(upsertSalesOrdersBatch)回写真实状态;
 // 已发货/关闭/取消的单会被 syncShippingRisks 从 shipping_risk_orders 移除,从催货
-// 需求里消失。自驱续跑(keyset 游标)+ 高峰(北京 19:00–24:00)暂停,下次 cron 续跑。
+// 需求里消失。候选按"发货紧急度"优先(shipping_risk_orders.latest_ship_time 升序,
+// 已逾期/可见页面的单最先清;不在风险表的陈旧单排最后),先清催货页可见的逾期单。
+// 自驱续跑(keyset 游标 = (eff_ship, o_id))+ 高峰(北京 19:00–24:00)暂停,下次 cron 续跑。
 const RECHECK_SYNC_TYPE = "pendingship_recheck";
 const RECHECK_DEFAULT_HOURS = 8;
 const RECHECK_BATCH = 20;                 // 每次点查的 so_id 数(JST orders/single/query so_ids 硬上限 20)
@@ -931,7 +933,7 @@ interface RecheckState {
   cutoffIso: string;
   batch: number;
   maxOrders: number | null;   // 单链候选处理上限(null=不限,仅受 MAX_TICKS 约束)
-  curSynced: string | null;
+  curShip: string | null;     // keyset 游标:eff_ship(发货紧急度,latest_ship_time;不在风险表=哨兵 9999-12-31)
   curOid: string | null;
   depth: number;
   triggerType: string;
@@ -967,7 +969,7 @@ async function scheduleRecheckContinue(state: RecheckState) {
 async function runRecheckTick(state: RecheckState) {
   const tickStart = Date.now();
   const t = state.totals;
-  let curSynced = state.curSynced;
+  let curShip = state.curShip;
   let curOid = state.curOid;
   let calls = 0;
   let exhausted = false;
@@ -978,10 +980,10 @@ async function runRecheckTick(state: RecheckState) {
   try {
     while (calls < RECHECK_MAX_CALLS_PER_TICK && Date.now() - tickStart < RECHECK_TIME_BUDGET_MS) {
       const { data: cand, error: candErr } = await admin.rpc("ops_pendingship_recheck_candidates", {
-        _cutoff: state.cutoffIso, _after_synced: curSynced, _after_oid: curOid, _limit: state.batch,
+        _cutoff: state.cutoffIso, _after_ship: curShip, _after_oid: curOid, _limit: state.batch,
       });
       if (candErr) throw candErr;
-      const rows = (cand ?? []) as Array<{ jst_o_id: string; so_id: string | null; synced_at: string }>;
+      const rows = (cand ?? []) as Array<{ jst_o_id: string; so_id: string | null; synced_at: string; eff_ship: string }>;
       if (rows.length === 0) { exhausted = true; break; }
       t.candidates += rows.length;
 
@@ -1017,9 +1019,9 @@ async function runRecheckTick(state: RecheckState) {
         }
       }
 
-      // 推进 keyset 游标到本批最后一行(按候选查询读到的 synced_at/o_id,不受回写影响)
+      // 推进 keyset 游标到本批最后一行(按候选查询读到的 eff_ship/o_id,与排序一致)
       const last = rows[rows.length - 1];
-      curSynced = last.synced_at; curOid = last.jst_o_id;
+      curShip = last.eff_ship; curOid = last.jst_o_id;
 
       await admin.from("jst_sync_logs").update({
         heartbeat_at: new Date().toISOString(),
@@ -1045,13 +1047,13 @@ async function runRecheckTick(state: RecheckState) {
     let more = !exhausted && !transient;
     if (more) {
       const { data: peek } = await admin.rpc("ops_pendingship_recheck_candidates", {
-        _cutoff: state.cutoffIso, _after_synced: curSynced, _after_oid: curOid, _limit: 1,
+        _cutoff: state.cutoffIso, _after_ship: curShip, _after_oid: curOid, _limit: 1,
       });
       more = ((peek ?? []) as any[]).length > 0;
     }
     const peak = isPeakBeijing();
     const next: RecheckState = {
-      ...state, curSynced, curOid, depth: state.depth + 1,
+      ...state, curShip, curOid, depth: state.depth + 1,
       totals: { ...t, ticks: t.ticks + 1 },
     };
 
@@ -1230,11 +1232,11 @@ Deno.serve(async (req) => {
         sync_type: RECHECK_SYNC_TYPE, status: "running",
         cursor_from: cutoffIso, cursor_to: new Date().toISOString(),
         heartbeat_at: new Date().toISOString(),
-        message: `存量待发货复核启动 · 阈值 synced_at < ${fmtBJ(new Date(cutoffIso))}(北京)`,
+        message: `存量待发货复核启动(按发货紧急度优先) · 阈值 synced_at < ${fmtBJ(new Date(cutoffIso))}(北京)`,
       }).select("id").single();
       if (logErr) throw logErr;
       const state: RecheckState = {
-        logId: log.id, cutoffIso, batch, maxOrders, curSynced: null, curOid: null, depth: 0,
+        logId: log.id, cutoffIso, batch, maxOrders, curShip: null, curOid: null, depth: 0,
         triggerType: body.trigger_type ?? "manual",
         totals: { ticks: 0, calls: 0, candidates: 0, fetched: 0, leftPending: 0, notFound: 0, noSoId: 0, failed: 0 },
       };
