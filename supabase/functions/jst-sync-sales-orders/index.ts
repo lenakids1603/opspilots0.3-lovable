@@ -896,6 +896,209 @@ async function runLegacySync(fromIso: string, toIso: string, logId: string) {
   }
 }
 
+// ===== 存量待发货复核 (point-query by so_id, 不走 modified 增量窗) =====
+// 库内 status∈(Question,WaitConfirm) 且 synced_at 早于阈值的订单,按 so_id 逐批点查
+// JST orders/single/query,经同一落库路径(upsertSalesOrdersBatch)回写真实状态;
+// 已发货/关闭/取消的单会被 syncShippingRisks 从 shipping_risk_orders 移除,从催货
+// 需求里消失。自驱续跑(keyset 游标)+ 高峰(北京 19:00–24:00)暂停,下次 cron 续跑。
+const RECHECK_SYNC_TYPE = "pendingship_recheck";
+const RECHECK_DEFAULT_HOURS = 8;
+const RECHECK_BATCH = 20;                 // 每次点查的 so_id 数(JST orders/single/query so_ids 硬上限 20)
+const RECHECK_MAX_CALLS_PER_TICK = 25;    // 每次函数调用最多点查批数
+const RECHECK_TIME_BUDGET_MS = 50_000;    // 每 tick 时间预算
+const RECHECK_MAX_TICKS = 80;             // 单链 tick 硬上限(防自驱失控)
+
+function beijingHour(): number {
+  const s = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Shanghai", hour: "2-digit", hour12: false, hourCycle: "h23",
+  }).format(new Date());
+  return parseInt(s, 10);
+}
+function isPeakBeijing(): boolean {
+  const h = beijingHour();
+  return h >= 19 && h < 24;   // 19:00–23:59 高峰不跑重活
+}
+
+// orders/single/query 按 so_ids 点查(不带 modified 窗口);page_size 覆盖整批
+async function callSalesOrdersByIds(soIds: string[]) {
+  const reqBody = { page_index: 1, page_size: Math.max(50, soIds.length + 5), so_ids: soIds };
+  const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
+  return { data, reqBody };
+}
+
+interface RecheckState {
+  logId: string;
+  cutoffIso: string;
+  batch: number;
+  maxOrders: number | null;   // 单链候选处理上限(null=不限,仅受 MAX_TICKS 约束)
+  curSynced: string | null;
+  curOid: string | null;
+  depth: number;
+  triggerType: string;
+  totals: {
+    ticks: number; calls: number; candidates: number; fetched: number;
+    leftPending: number; notFound: number; noSoId: number; failed: number;
+  };
+}
+
+// 触发下一段自驱续跑。runRecheckTick 自身跑在 EdgeRuntime.waitUntil 里,故此处
+// await 派发请求(确保运行时存活到下一次调用被触发);下一调用会在自己的
+// waitUntil 里继续,本次请求拿到 200 即返回。
+async function scheduleRecheckContinue(state: RecheckState) {
+  const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+  const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (!SUPABASE_URL || !SERVICE_ROLE) return;
+  const url = `${SUPABASE_URL}/functions/v1/jst-sync-sales-orders`;
+  const body = JSON.stringify({ action: "tick_pendingship_recheck", _self_tick: true, state });
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${SERVICE_ROLE}`,
+        "apikey": SERVICE_ROLE,
+        "x-internal-tick": SERVICE_ROLE,
+      },
+      body,
+    });
+  } catch (_e) { /* 下次 cron 会兜底续跑 */ }
+}
+
+async function runRecheckTick(state: RecheckState) {
+  const tickStart = Date.now();
+  const t = state.totals;
+  let curSynced = state.curSynced;
+  let curOid = state.curOid;
+  let calls = 0;
+  let exhausted = false;
+  let transient = false;
+  let capped = false;
+  let lastErr = "";
+
+  try {
+    while (calls < RECHECK_MAX_CALLS_PER_TICK && Date.now() - tickStart < RECHECK_TIME_BUDGET_MS) {
+      const { data: cand, error: candErr } = await admin.rpc("ops_pendingship_recheck_candidates", {
+        _cutoff: state.cutoffIso, _after_synced: curSynced, _after_oid: curOid, _limit: state.batch,
+      });
+      if (candErr) throw candErr;
+      const rows = (cand ?? []) as Array<{ jst_o_id: string; so_id: string | null; synced_at: string }>;
+      if (rows.length === 0) { exhausted = true; break; }
+      t.candidates += rows.length;
+
+      const soIds = uniqueStrings(rows.map((r) => r.so_id));
+      const oIdsWithSo = rows.filter((r) => r.so_id).map((r) => String(r.jst_o_id));
+      t.noSoId += rows.filter((r) => !r.so_id).length;
+
+      if (soIds.length > 0) {
+        await sleep(RATE_DELAY_MS);
+        try {
+          const { data } = await callSalesOrdersByIds(soIds);
+          const list = pickList(data);
+          calls++; t.calls++;
+          t.fetched += list.length;
+          const returned = new Set(list.map((o: any) => String(o.o_id ?? o.oId)));
+          for (const id of oIdsWithSo) if (!returned.has(id)) t.notFound++;
+          for (const o of list) {
+            if (!["Question", "WaitConfirm"].includes(String(o.status ?? ""))) t.leftPending++;
+          }
+          if (list.length > 0) {
+            const res = await upsertSalesOrdersBatch(list);
+            t.failed += res.failed;
+            if (res.errorDetail) lastErr = res.errorDetail;
+          }
+        } catch (e: any) {
+          // JST 限频/超时等临时错误:暂停本 tick,自驱退避续跑
+          if (e?.transient === true || /限流|频率|timeout|超时|aborted|HTTP 5\d\d|HTTP 429/i.test(String(e?.message ?? ""))) {
+            transient = true; lastErr = String(e?.message ?? e).slice(0, 300);
+            break;
+          }
+          // 非临时:记录并跳过该批(仍推进游标,避免卡死)
+          t.failed += soIds.length; lastErr = String(e?.message ?? e).slice(0, 300);
+        }
+      }
+
+      // 推进 keyset 游标到本批最后一行(按候选查询读到的 synced_at/o_id,不受回写影响)
+      const last = rows[rows.length - 1];
+      curSynced = last.synced_at; curOid = last.jst_o_id;
+
+      await admin.from("jst_sync_logs").update({
+        heartbeat_at: new Date().toISOString(),
+        fetched_orders_count: t.fetched,
+        message: `复核中 · 候选累计 ${t.candidates} · 点查 ${t.calls} 批/${t.fetched} 单 · 已离开待发 ${t.leftPending} · 未返回 ${t.notFound} · 失败 ${t.failed}`,
+      }).eq("id", state.logId);
+
+      if (state.maxOrders != null && t.candidates >= state.maxOrders) { capped = true; break; }
+    }
+
+    if (capped) {
+      await admin.from("jst_sync_logs").update({
+        status: t.failed > 0 ? "partial_failed" : "success",
+        ended_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(),
+        fetched_orders_count: t.fetched,
+        message: `存量待发货复核 达处理上限(${state.maxOrders}) · 候选 ${t.candidates} · 点查 ${t.fetched} 单 · 已离开待发 ${t.leftPending} · 未返回 ${t.notFound} · 失败 ${t.failed}`,
+        error_detail: lastErr || null,
+      }).eq("id", state.logId);
+      return;
+    }
+
+    // 还有候选?(用当前游标快速探一行)
+    let more = !exhausted && !transient;
+    if (more) {
+      const { data: peek } = await admin.rpc("ops_pendingship_recheck_candidates", {
+        _cutoff: state.cutoffIso, _after_synced: curSynced, _after_oid: curOid, _limit: 1,
+      });
+      more = ((peek ?? []) as any[]).length > 0;
+    }
+    const peak = isPeakBeijing();
+    const next: RecheckState = {
+      ...state, curSynced, curOid, depth: state.depth + 1,
+      totals: { ...t, ticks: t.ticks + 1 },
+    };
+
+    if (transient) {
+      await admin.from("jst_sync_logs").update({
+        status: "running", heartbeat_at: new Date().toISOString(),
+        message: `临时错误,30s 后续跑 · 已点查 ${t.fetched} 单 · ${lastErr}`,
+        error_detail: lastErr,
+      }).eq("id", state.logId);
+      if (next.depth < RECHECK_MAX_TICKS && !peak) {
+        await sleep(30_000);
+        await scheduleRecheckContinue(next);
+      } else {
+        await admin.from("jst_sync_logs").update({
+          status: "partial_failed", ended_at: new Date().toISOString(),
+          message: `暂停(${peak ? "命中高峰" : "达单链上限"}),下次 cron 续跑 · 已点查 ${t.fetched} 单`,
+        }).eq("id", state.logId);
+      }
+      return;
+    }
+
+    if (more && next.depth < RECHECK_MAX_TICKS && !peak) {
+      await admin.from("jst_sync_logs").update({
+        status: "running", heartbeat_at: new Date().toISOString(),
+        message: `复核进行中(tick ${next.totals.ticks}) · 点查 ${t.fetched} 单 · 已离开待发 ${t.leftPending} · 未返回 ${t.notFound} · 失败 ${t.failed}`,
+      }).eq("id", state.logId);
+      await scheduleRecheckContinue(next);
+    } else {
+      const reason = !more ? "全部完成" : (peak ? `命中高峰(北京 ${beijingHour()} 点)暂停` : `达单链上限(${RECHECK_MAX_TICKS})暂停`);
+      await admin.from("jst_sync_logs").update({
+        status: t.failed > 0 ? "partial_failed" : "success",
+        ended_at: new Date().toISOString(),
+        heartbeat_at: new Date().toISOString(),
+        fetched_orders_count: t.fetched,
+        message: `存量待发货复核 ${reason} · 候选 ${t.candidates} · 点查 ${t.fetched} 单 · 已离开待发 ${t.leftPending} · 未返回 ${t.notFound} · 无so_id ${t.noSoId} · 失败 ${t.failed}`,
+        error_detail: lastErr || null,
+      }).eq("id", state.logId);
+    }
+  } catch (e: any) {
+    await admin.from("jst_sync_logs").update({
+      status: "failed", ended_at: new Date().toISOString(),
+      message: `存量待发货复核失败 · 已点查 ${t.fetched} 单`,
+      error_detail: String(e?.message ?? e).slice(0, 1000),
+    }).eq("id", state.logId);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
@@ -984,6 +1187,71 @@ Deno.serve(async (req) => {
         has_next: computeHasNext(probe.data, list.length, ps, pi),
         sample,
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // 存量待发货复核:点查探针(测 orders/single/query 的 so_ids 形态,不落库)
+    if (action === "recheck_probe") {
+      const ids = Array.isArray(body.so_ids) ? body.so_ids.map(String) : [];
+      const key = body.id_key === "o_ids" ? "o_ids" : "so_ids";
+      const reqBody: any = { page_index: 1, page_size: 50 };
+      reqBody[key] = ids;
+      const data = await callOpenweb(METHOD_PATH, reqBody, { timeoutMs: 30_000 });
+      const list = pickList(data);
+      return new Response(JSON.stringify({
+        ok: true, request: reqBody, api_count: list.length,
+        has_next: computeHasNext(data, list.length, 50, 1),
+        sample: list.slice(0, 8).map((o: any) => ({
+          o_id: o.o_id ?? null, so_id: o.so_id ?? null, status: o.status ?? null,
+          io_id: o.io_id ?? null, modified: o.modified ?? o.modified_time ?? null,
+        })),
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // 存量待发货复核:启动(创建 log + 后台首 tick;复用进行中的任务)
+    if (action === "start_pendingship_recheck") {
+      // cron 触发遇高峰(北京 19:00–24:00)直接跳过;手动触发不限(用户显式意图)
+      if (isPeakBeijing() && (body.trigger_type ?? "") === "cron") {
+        return new Response(JSON.stringify({ ok: true, skipped: "peak", beijing_hour: beijingHour() }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const hours = Number(body.hours ?? RECHECK_DEFAULT_HOURS);
+      const batch = Math.max(1, Math.min(Number(body.batch ?? RECHECK_BATCH), 20));
+      const maxOrders = body.max_orders != null ? Math.max(1, Number(body.max_orders)) : null;
+      const cutoffIso = new Date(Date.now() - Math.max(1, hours) * 3600_000).toISOString();
+      const { data: alive } = await admin.from("jst_sync_logs")
+        .select("id,started_at").eq("sync_type", RECHECK_SYNC_TYPE).eq("status", "running")
+        .gte("heartbeat_at", new Date(Date.now() - 5 * 60_000).toISOString())
+        .order("started_at", { ascending: false }).limit(1);
+      if (alive && alive.length > 0) {
+        return new Response(JSON.stringify({ ok: true, reused: true, log_id: alive[0].id, message: "已有复核任务在跑" }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const { data: log, error: logErr } = await admin.from("jst_sync_logs").insert({
+        sync_type: RECHECK_SYNC_TYPE, status: "running",
+        cursor_from: cutoffIso, cursor_to: new Date().toISOString(),
+        heartbeat_at: new Date().toISOString(),
+        message: `存量待发货复核启动 · 阈值 synced_at < ${fmtBJ(new Date(cutoffIso))}(北京)`,
+      }).select("id").single();
+      if (logErr) throw logErr;
+      const state: RecheckState = {
+        logId: log.id, cutoffIso, batch, maxOrders, curSynced: null, curOid: null, depth: 0,
+        triggerType: body.trigger_type ?? "manual",
+        totals: { ticks: 0, calls: 0, candidates: 0, fetched: 0, leftPending: 0, notFound: 0, noSoId: 0, failed: 0 },
+      };
+      // @ts-ignore EdgeRuntime
+      EdgeRuntime.waitUntil(runRecheckTick(state));
+      return new Response(JSON.stringify({ ok: true, background: true, log_id: log.id, cutoff: cutoffIso }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // 存量待发货复核:自驱续跑 tick(仅内部 x-internal-tick / cron / admin)
+    if (action === "tick_pendingship_recheck") {
+      const state = body.state as RecheckState | undefined;
+      if (!state || !state.logId) throw new Error("缺少 recheck state");
+      // @ts-ignore EdgeRuntime
+      EdgeRuntime.waitUntil(runRecheckTick(state));
+      return new Response(JSON.stringify({ ok: true, status: "ticking", log_id: state.logId }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // 兼容：一次性后台同步
